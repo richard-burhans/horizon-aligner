@@ -913,6 +913,22 @@ pub fn align_contig_pair(seq_x: &[u8], seq_y: &[u8]) -> Result<ContigAlignment, 
     align_contig_pair_indexed(&idx_x, &idx_y)
 }
 
+/// Count shared KP-14 seeds (on either strand) between two pre-indexed contigs.
+#[must_use]
+pub fn shared_seed_count(idx_x: &ContigIndex, idx_y: &ContigIndex) -> usize {
+    let fwd = idx_x
+        .seeds_fwd
+        .keys()
+        .filter(|k| idx_y.seeds_fwd.contains_key(*k))
+        .count();
+    let rc = idx_x
+        .seeds_fwd
+        .keys()
+        .filter(|k| idx_y.seeds_rc.contains_key(*k))
+        .count();
+    fwd.max(rc)
+}
+
 /// Align two pre-indexed contigs without recomputing KP-14 seed maps.
 ///
 /// # Errors
@@ -1314,5 +1330,17 @@ mod tests {
         let iy = prepare_contig_index(sy).expect("valid");
         let indexed = align_contig_pair_indexed(&ix, &iy).expect("valid");
         assert_eq!(unindexed, indexed);
+    }
+
+    #[test]
+    fn shared_seed_count_separates_homologs_from_unrelated() {
+        let sx = b"ATATATATATATATATATATGCGCGCGCGCGCGCGCGCGCATATATATATATATATATAT";
+        let sy_same = b"ATATATATATATCTATATATGCGCGCGCGCGCGCGCGCGCATATATATATATATATATAT";
+        let sy_diff = b"CCCCCCCCCCCCCCCCCCCCGGGGGGGGGGGGGGGGGGGGCCCCCCCCCCCCCCCCCCCC";
+        let ix = prepare_contig_index(sx).expect("valid");
+        let iy_same = prepare_contig_index(sy_same).expect("valid");
+        let iy_diff = prepare_contig_index(sy_diff).expect("valid");
+        assert!(shared_seed_count(&ix, &iy_same) >= 10);
+        assert_eq!(shared_seed_count(&ix, &iy_diff), 0);
     }
 }

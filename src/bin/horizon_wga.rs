@@ -3,6 +3,7 @@
 use anyhow::{Context, Result};
 use horizon_aligner::{
     ContigIndex, align_contig_pair_indexed, format_gfa_summary, prepare_contig_index,
+    shared_seed_count,
 };
 use rayon::prelude::*;
 use std::fs;
@@ -72,6 +73,9 @@ fn main() -> Result<()> {
 
     for (nx, ix) in &idx_x {
         for (ny, iy) in &idx_y {
+            if shared_seed_count(ix, iy) < 8 {
+                continue;
+            }
             let aln = align_contig_pair_indexed(ix, iy)?;
             if !aln.aligned_pairs.is_empty() {
                 total_pairs += aln.aligned_pairs.len();
