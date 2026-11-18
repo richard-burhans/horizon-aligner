@@ -33,6 +33,7 @@ manuscript/
 ├── horizon_companion.md / .pdf      # Mathematical & data-structure companion
 ├── guide_mdl_vs_hoxd70.md / .pdf    # Guide 1: Why ΔL beats HOXD70 in AT/GC extremes
 ├── guide_pure_rust_hal.md / .pdf    # Guide 2: Pure-Rust Seek HDF5/HAL reader & writer
+├── guide_horizon_bubbles.md / .pdf  # Guide 3: What is a Horizon Bubble?
 ├── references.bib                   # BibTeX references
 ├── figures/                         # Publication figures (SVG & PNG)
 └── scripts/generate_figures.py      # Reproducible figure generator
@@ -86,3 +87,4 @@ target/release/horizon_merge <ref_species> <out.maf> <out.gfa> <pair1.maf> [pair
 - [Technical Companion: Data Formats, Derivations & Worked Trace (Markdown)](manuscript/horizon_companion.md) | [PDF](manuscript/horizon_companion.pdf)
 - [Guide 1: Why Bit-Savings (ΔL) Outperforms HOXD70 in Compositionally Extreme Genomes (Markdown)](manuscript/guide_mdl_vs_hoxd70.md) | [PDF](manuscript/guide_mdl_vs_hoxd70.pdf)
 - [Guide 2: Reading and Streaming HAL Alignments in Pure Rust Without libhdf5 (Markdown)](manuscript/guide_pure_rust_hal.md) | [PDF](manuscript/guide_pure_rust_hal.pdf)
+- [Guide 3: What Is a Horizon Bubble? Calibrated Epistemic Abstention (Markdown)](manuscript/guide_horizon_bubbles.md) | [PDF](manuscript/guide_horizon_bubbles.pdf)

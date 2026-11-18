@@ -571,6 +571,78 @@ def make_fig_g2_hal_binary_layouts() -> None:
     save_both(fig, "fig_g2_hal_binary_layouts")
 
 
+def make_fig_g3_horizon_bubble_anatomy() -> None:
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10.6, 5.2), gridspec_kw={"height_ratios": [1.05, 1.0]})
+
+    # Panel A: Two Origins of a Horizon Bubble along a Chromosome Pair
+    ax1.set_xlim(0, 12.0)
+    ax1.set_ylim(0, 3.2)
+    ax1.axis("off")
+    ax1.set_title("A. Two Paths to Abstention: Micro (Conformal) vs. Macro (Structural) Horizon Bubbles", loc="left", fontsize=10.2)
+
+    # Target and Query tracks
+    ax1.text(0.15, 2.35, "Target X", fontsize=8.5, fontweight="bold", color=OI_BLACK, va="center")
+    ax1.text(0.15, 0.85, "Query Y", fontsize=8.5, fontweight="bold", color=OI_BLACK, va="center")
+
+    blocks = [
+        (1.3, 2.4, "Aligned LCB 1\n(ΔL ≥ λ_eff)", "#EDF6FC", OI_BLUE, True),
+        (3.85, 2.1, "Micro Bubble\nΔL < λ_eff or P(M)<0.15", "#FDEEE8", OI_VERMILION, False),
+        (6.1, 2.1, "Aligned LCB 2\n(ΔL ≥ λ_eff)", "#EDF6FC", OI_BLUE, True),
+        (8.35, 3.3, "Macro Bubble (> 2.5 kb gap)\nNo w=9 two-hit support (DP skipped)", "#FFF7E6", OI_ORANGE, False),
+    ]
+    for bx, bw, lbl, fc, ec, aligned in blocks:
+        for yy in (2.05, 0.55):
+            r = mpatches.FancyBboxPatch((bx, yy), bw, 0.58, boxstyle="round,pad=0.04,rounding_size=0.08",
+                                        facecolor=fc, edgecolor=ec, linewidth=1.3, linestyle="-" if aligned else "--")
+            ax1.add_patch(r)
+        if aligned:
+            for dx in np.linspace(0.25, bw - 0.25, 6):
+                ax1.plot([bx + dx, bx + dx], [1.18, 2.00], color=OI_BLUE, lw=1.0, alpha=0.65)
+            ax1.text(bx + bw / 2, 1.59, lbl, ha="center", va="center", fontsize=7.6, fontweight="bold", color=OI_BLUE,
+                     bbox=dict(boxstyle="round,pad=0.18", fc="white", ec=OI_BLUE, lw=0.7))
+        else:
+            ax1.plot([bx + 0.15, bx + bw - 0.15], [1.18, 2.00], color=ec, lw=1.1, ls=":")
+            ax1.plot([bx + 0.15, bx + bw - 0.15], [2.00, 1.18], color=ec, lw=1.1, ls=":")
+            ax1.text(bx + bw / 2, 1.59, lbl, ha="center", va="center", fontsize=7.4, fontweight="bold", color=ec,
+                     bbox=dict(boxstyle="round,pad=0.18", fc="white", ec=ec, lw=0.8))
+
+    # Panel B: GFA v1.1 Graph vs MAF Projection (Bidirectional Lens)
+    ax2.set_xlim(0, 12.0)
+    ax2.set_ylim(0, 3.0)
+    ax2.axis("off")
+    ax2.set_title("B. GFA v1.1 Graph Representation & Bidirectional GFA ↔ MAF Lens Preservation", loc="left", fontsize=10.2)
+
+    nodes = [
+        (0.5, 1.65, 2.1, "S  blk_0\n(aligned, SR:i:0)", "#EDF6FC", OI_BLUE),
+        (3.3, 1.65, 2.3, "S  bub_1  *\nLN:i:85  HB:i:1", "#FDEEE8", OI_VERMILION),
+        (6.3, 1.65, 2.1, "S  blk_2\n(aligned, SR:i:0)", "#EDF6FC", OI_BLUE),
+        (9.1, 1.65, 2.4, "S  bub_3  *\nLN:i:3100  HB:i:1", "#FFF7E6", OI_ORANGE),
+    ]
+    for nx, ny, nw, nlbl, fc, ec in nodes:
+        p = mpatches.FancyBboxPatch((nx, ny), nw, 0.78, boxstyle="round,pad=0.05,rounding_size=0.1",
+                                    facecolor=fc, edgecolor=ec, linewidth=1.3)
+        ax2.add_patch(p)
+        ax2.text(nx + nw / 2, ny + 0.39, nlbl, ha="center", va="center", fontsize=7.6, fontweight="bold", color=OI_BLACK)
+
+    for x1, x2 in [(2.66, 3.24), (5.66, 6.24), (8.46, 9.04)]:
+        ax2.annotate("", xy=(x2, 2.04), xytext=(x1, 2.04), arrowprops=dict(arrowstyle="-|>", color=OI_BLACK, lw=1.3))
+        ax2.text((x1 + x2) / 2, 2.22, "L +/+ 0M", ha="center", va="bottom", fontsize=6.7, color=OI_GRAY)
+
+    maf_box = mpatches.FancyBboxPatch((0.5, 0.25), 11.0, 0.85, boxstyle="round,pad=0.06,rounding_size=0.1",
+                                      facecolor="#EAF7F2", edgecolor=OI_GREEN, linewidth=1.2)
+    ax2.add_patch(maf_box)
+    ax2.text(6.0, 0.68,
+             "MAF View A = get(C): emits blk_0 and blk_2 alignment blocks only\n"
+             "Lens putback(A', C): preserves bub_1 and bub_3 (HB:i:1) unchanged in constant complement (GETPUT / PUTGET)",
+             ha="center", va="center", fontsize=7.8, fontweight="bold", color=OI_GREEN)
+
+    ax2.annotate("", xy=(1.55, 1.15), xytext=(1.55, 1.60), arrowprops=dict(arrowstyle="<->", color=OI_GREEN, lw=1.3))
+    ax2.annotate("", xy=(7.35, 1.15), xytext=(7.35, 1.60), arrowprops=dict(arrowstyle="<->", color=OI_GREEN, lw=1.3))
+
+    plt.tight_layout(h_pad=1.6)
+    save_both(fig, "fig_g3_horizon_bubble_anatomy")
+
+
 if __name__ == "__main__":
     make_fig1_architecture()
     make_fig2_benchmarks()
@@ -581,4 +653,5 @@ if __name__ == "__main__":
     make_fig_c3_hdf5_hal_seek()
     make_fig_g1_hoxd70_vs_mdl_gc()
     make_fig_g2_hal_binary_layouts()
-    print(f"Generated 9 figures (.png + .svg) in {OUT_DIR}")
+    make_fig_g3_horizon_bubble_anatomy()
+    print(f"Generated 10 figures (.png + .svg) in {OUT_DIR}")
