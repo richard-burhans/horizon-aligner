@@ -626,13 +626,15 @@ pub fn align_contig_pair_with_config(
         });
     }
 
-    let large_space = seq_x.len() >= 100_000 && seq_y.len() >= 100_000;
-    let hsp_bonus = if large_space { 90 } else { 0 };
-    let aa_bonus = if large_space { 40 } else { 0 };
     #[allow(clippy::cast_precision_loss)]
     let search_space_bits = ((seq_x.len().max(1) as f64) * (seq_y.len().max(1) as f64))
         .log2()
         .max(10.0);
+    // Continuous Karlin-Altschul / MDL scaling with log2(N * M), avoiding fixed size cutoffs.
+    #[allow(clippy::cast_possible_truncation)]
+    let hsp_bonus = ((search_space_bits - 20.0).max(0.0) * 3.8).round() as i32;
+    #[allow(clippy::cast_possible_truncation)]
+    let aa_bonus = ((search_space_bits - 20.0).max(0.0) * 1.7).round() as i32;
     let effective_min_bits = cfg.min_delta_bits.max(0.55 * search_space_bits);
 
     let mut covered_x = vec![false; seq_x.len()];
@@ -735,8 +737,10 @@ pub fn align_contig_pair_with_config(
     );
     let t_lz1 = t_start.elapsed();
 
-    if cfg.use_multi_shape_seeds && !(primary_cov >= 0.35 && seq_x.len() >= 50_000) {
-        if !large_space {
+    if cfg.use_multi_shape_seeds && primary_cov < 0.35 {
+        // Skip O(N * 264) 2-transition scan once search space exceeds ~10^9 cell lookups
+        // where single-transition + AA5 + BOCPD/MDL already dominate runtime.
+        if (seq_x.len() as u128) * (seq_y.len() as u128) < 1_000_000_000 {
             let (mut double_trans_fwd, mut double_trans_rc) =
                 find_lastz12_2transition_hits(seq_x, &iy_lz_fwd, &iy_lz_rc, cfg.skip_softmasked);
             filter_uncovered(&mut double_trans_fwd);
@@ -790,7 +794,9 @@ pub fn align_contig_pair_with_config(
             210 + hsp_bonus,
         );
 
-        if !large_space {
+        // Apply R/Y (1-bit) and w=10 1-transition only while random-collision density
+        // stays tractable (< 10^9 search space cells).
+        if (seq_x.len() as u128) * (seq_y.len() as u128) < 1_000_000_000 {
             // HSP-gated 1-bit purine/pyrimidine (R/Y) seeding for multi-transition divergent homologs.
             let ix_ry =
                 canonical_spaced_seeds_with_opts(seq_x, MASK_RY20, 2, cfg.skip_softmasked, true)?;
@@ -978,7 +984,9 @@ pub fn align_contig_pair_with_config(
         }
 
         for lcb in lcb_list.iter().chain(&rescued_inter) {
-            if large_space && lcb.len() < 8 {
+            // General MDL gate: any LCB must earn at least `effective_min_bits` from its
+            // anchor base matches minus mismatch penalty (with no size-specific magic branch).
+            if lcb.len() < 8 {
                 let mut matches = 0usize;
                 let mut mismatches = 0usize;
                 let mut last_end_x = 0usize;

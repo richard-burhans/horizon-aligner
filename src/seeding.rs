@@ -935,31 +935,25 @@ pub(crate) fn append_hsp_gated_lastz12_lcbs(
     hits: &[(usize, usize)],
     min_hsp_score: i32,
 ) {
-    let large_space = seq_x.len().saturating_mul(seq_y.len()) >= 100_000_000;
-    let strong_margin = if large_space { 80 } else { 15 };
-    let tight_min_anchors = if large_space { 3 } else { 2 };
-    let tight_min_span = if large_space { 20 } else { 16 };
+    #[allow(clippy::cast_precision_loss)]
+    let space_bits = ((seq_x.len().max(1) as f64) * (seq_y.len().max(1) as f64))
+        .log2()
+        .max(10.0);
+    #[allow(clippy::cast_possible_truncation)]
+    let strong_margin = (1.8 * space_bits).round() as i32;
     let mut filtered_hits: Vec<(usize, usize)> = Vec::new();
     let mut strong_hsps: Vec<Vec<(usize, usize)>> = Vec::new();
     for &(px, py) in hits {
         if let Some((lx, ly, rx, ry, sc)) = extend_ungapped_hsp(seq_x, seq_y, px, py, min_hsp_score)
         {
             filtered_hits.push((px, py));
-            if !large_space && sc >= min_hsp_score + strong_margin && rx >= lx + 18 && ry >= ly + 18
-            {
+            if sc >= min_hsp_score + strong_margin && rx >= lx + 18 && ry >= ly + 18 {
                 strong_hsps.push(vec![(lx, ly), (rx - 12, ry - 12)]);
             }
         }
     }
     let mut candidates = cluster_strand_lcbs(&filtered_hits, 1800, 200, 3, 30, 250.0);
-    candidates.extend(cluster_strand_lcbs(
-        &filtered_hits,
-        150,
-        25,
-        tight_min_anchors,
-        tight_min_span,
-        150.0,
-    ));
+    candidates.extend(cluster_strand_lcbs(&filtered_hits, 150, 25, 2, 16, 150.0));
     candidates.extend(strong_hsps);
     for lcb in candidates {
         let (sx, ex) = (lcb[0].0, lcb[lcb.len() - 1].0);
@@ -975,28 +969,8 @@ pub(crate) fn append_hsp_gated_lastz12_lcbs(
 pub(crate) fn find_w12_raw_lcbs(idx_x: &ContigIndex, idx_y: &ContigIndex) -> (LcbList, LcbList) {
     let (hits_fwd, hits_rc) =
         intersect_seed_maps(&idx_x.seeds_fwd, &idx_y.seeds_fwd, &idx_y.seeds_rc);
-    let large_space = idx_x.seq.len().saturating_mul(idx_y.seq.len()) >= 100_000_000;
-    let (max_gap, max_drift, min_anchors, min_span, max_step) = if large_space {
-        (2000, 200, 8, 80, 180.0)
-    } else {
-        (3500, 350, 6, 60, 450.0)
-    };
-    let raw_fwd = cluster_strand_lcbs(
-        &hits_fwd,
-        max_gap,
-        max_drift,
-        min_anchors,
-        min_span,
-        max_step,
-    );
-    let raw_rc = cluster_strand_lcbs(
-        &hits_rc,
-        max_gap,
-        max_drift,
-        min_anchors,
-        min_span,
-        max_step,
-    );
+    let raw_fwd = cluster_strand_lcbs(&hits_fwd, 2500, 250, 7, 70, 220.0);
+    let raw_rc = cluster_strand_lcbs(&hits_rc, 2500, 250, 7, 70, 220.0);
     (raw_fwd, raw_rc)
 }
 

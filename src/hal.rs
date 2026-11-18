@@ -609,26 +609,65 @@ fn read_at<R: std::io::Read + std::io::Seek>(
     Ok(buf)
 }
 
-fn read_v1_obj_header_seek<R: std::io::Read + std::io::Seek>(
+fn iter_v1_header_messages_seek<R: std::io::Read + std::io::Seek, F>(
     r: &mut R,
     obj_addr: u64,
-) -> std::io::Result<Option<Vec<u8>>> {
+    mut f: F,
+) -> std::io::Result<Option<()>>
+where
+    F: FnMut(u16, &[u8]) -> std::ops::ControlFlow<()>,
+{
     let prefix = read_at(r, obj_addr, 16)?;
     if prefix.len() < 16 || prefix[0] != 1 {
         return Ok(None);
     }
+    let num_msgs = usize::from(u16::from_le_bytes([prefix[2], prefix[3]]));
     let hdr_size = usize::try_from(u32::from_le_bytes([
         prefix[8], prefix[9], prefix[10], prefix[11],
     ]))
     .unwrap_or(0);
-    read_at(r, obj_addr, 16 + hdr_size).map(Some)
+    let first_buf = read_at(r, obj_addr + 16, hdr_size)?;
+    let mut chunks = std::collections::VecDeque::from([first_buf]);
+    let mut visited_addrs = std::collections::HashSet::from([obj_addr]);
+    let mut seen = 0usize;
+
+    while let Some(buf) = chunks.pop_front() {
+        let mut pos = 0usize;
+        let end = buf.len();
+        while seen < num_msgs && pos + 8 <= end {
+            let mtype = u16::from_le_bytes([buf[pos], buf[pos + 1]]);
+            let msize = usize::from(u16::from_le_bytes([buf[pos + 2], buf[pos + 3]]));
+            let body_start = pos + 8;
+            let body_end = body_start.saturating_add(msize).min(end);
+            let body = &buf[body_start..body_end];
+            seen += 1;
+            pos += 8 + msize;
+
+            if mtype == 0x0010 && body.len() >= 16 {
+                if let (Some(cont_addr), Some(len_u64)) =
+                    (read_u64_le(body, 0), read_u64_le(body, 8))
+                    && let Ok(cont_len) = usize::try_from(len_u64)
+                    && visited_addrs.len() < 1024
+                    && visited_addrs.insert(cont_addr)
+                {
+                    chunks.push_back(read_at(r, cont_addr, cont_len)?);
+                }
+                continue;
+            }
+
+            if f(mtype, body).is_break() {
+                return Ok(Some(()));
+            }
+        }
+    }
+    Ok(Some(()))
 }
 
-fn collect_snod_names_seek<R: std::io::Read + std::io::Seek>(
+fn collect_snod_entries_seek<R: std::io::Read + std::io::Seek>(
     r: &mut R,
     snod_addr: u64,
     heap_data: &[u8],
-    out: &mut Vec<String>,
+    out: &mut Vec<Hdf5GroupEntry>,
 ) -> std::io::Result<()> {
     let hdr = read_at(r, snod_addr, 8)?;
     if hdr.len() < 8 || &hdr[0..4] != b"SNOD" {
@@ -640,6 +679,9 @@ fn collect_snod_names_seek<R: std::io::Read + std::io::Seek>(
         let Some(name_off_u64) = read_u64_le(&entries_buf, i * 40) else {
             break;
         };
+        let Some(obj_addr) = read_u64_le(&entries_buf, i * 40 + 8) else {
+            break;
+        };
         let Ok(name_off) = usize::try_from(name_off_u64) else {
             continue;
         };
@@ -648,18 +690,21 @@ fn collect_snod_names_seek<R: std::io::Read + std::io::Seek>(
             if let Ok(s) = std::str::from_utf8(&tail[..end])
                 && !s.is_empty()
             {
-                out.push(s.to_owned());
+                out.push(Hdf5GroupEntry {
+                    name: s.to_owned(),
+                    object_header_addr: obj_addr,
+                });
             }
         }
     }
     Ok(())
 }
 
-fn walk_btree_v1_group_seek<R: std::io::Read + std::io::Seek>(
+fn walk_btree_v1_group_entries_seek<R: std::io::Read + std::io::Seek>(
     r: &mut R,
     node_addr: u64,
     heap_data: &[u8],
-    out: &mut Vec<String>,
+    out: &mut Vec<Hdf5GroupEntry>,
 ) -> std::io::Result<()> {
     let hdr = read_at(r, node_addr, 24)?;
     if hdr.len() < 24 || &hdr[0..4] != b"TREE" || hdr[4] != 0 {
@@ -673,12 +718,54 @@ fn walk_btree_v1_group_seek<R: std::io::Read + std::io::Seek>(
             break;
         };
         if node_level == 0 {
-            collect_snod_names_seek(r, child_addr, heap_data, out)?;
+            collect_snod_entries_seek(r, child_addr, heap_data, out)?;
         } else {
-            walk_btree_v1_group_seek(r, child_addr, heap_data, out)?;
+            walk_btree_v1_group_entries_seek(r, child_addr, heap_data, out)?;
         }
     }
     Ok(())
+}
+
+/// Extract child member entries `(name, object_header_addr)` from an HDF5 v0 group via `Seek`.
+///
+/// # Errors
+/// Returns an `std::io::Error` if seeking or reading fails.
+pub fn read_hdf5_v0_group_entries_seek<R: std::io::Read + std::io::Seek>(
+    r: &mut R,
+    group_obj_addr: u64,
+) -> std::io::Result<Option<Vec<Hdf5GroupEntry>>> {
+    let mut symtab_addrs: Option<(u64, u64)> = None;
+    let Some(()) = iter_v1_header_messages_seek(r, group_obj_addr, |mtype, body| {
+        if mtype == 0x0011
+            && body.len() >= 16
+            && let (Some(bt), Some(hp)) = (read_u64_le(body, 0), read_u64_le(body, 8))
+        {
+            symtab_addrs = Some((bt, hp));
+            return std::ops::ControlFlow::Break(());
+        }
+        std::ops::ControlFlow::Continue(())
+    })?
+    else {
+        return Ok(None);
+    };
+    let Some((btree_addr, heap_addr)) = symtab_addrs else {
+        return Ok(None);
+    };
+    let heap_hdr = read_at(r, heap_addr, 32)?;
+    if heap_hdr.len() < 32 || &heap_hdr[0..4] != b"HEAP" {
+        return Ok(None);
+    }
+    let Some(data_seg_size) = read_u64_le(&heap_hdr, 8).and_then(|v| usize::try_from(v).ok())
+    else {
+        return Ok(None);
+    };
+    let Some(data_seg_addr) = read_u64_le(&heap_hdr, 24) else {
+        return Ok(None);
+    };
+    let heap_data = read_at(r, data_seg_addr, data_seg_size)?;
+    let mut entries = Vec::new();
+    walk_btree_v1_group_entries_seek(r, btree_addr, &heap_data, &mut entries)?;
+    Ok(Some(entries))
 }
 
 /// Extract root-group member names from an HDF5 v0 `.hal` stream via `Seek` without loading the full file.
@@ -695,50 +782,199 @@ pub fn read_hdf5_v0_root_names_seek<R: std::io::Read + std::io::Seek>(
     let Some(root_addr) = sb.root_group_addr else {
         return Ok(None);
     };
-    let Some(root_slice) = read_v1_obj_header_seek(r, root_addr)? else {
-        return Ok(None);
-    };
-    let num_msgs = usize::from(u16::from_le_bytes([root_slice[2], root_slice[3]]));
-    let mut pos = 16usize;
-    let end = root_slice.len();
-    let mut symtab_addrs: Option<(u64, u64)> = None;
-    let mut seen = 0usize;
-    while seen < num_msgs && pos + 8 <= end {
-        let mtype = u16::from_le_bytes([root_slice[pos], root_slice[pos + 1]]);
-        let msize = usize::from(u16::from_le_bytes([
-            root_slice[pos + 2],
-            root_slice[pos + 3],
-        ]));
-        if mtype == 0x0011 && msize >= 16 && pos + 8 + 16 <= end {
-            if let (Some(bt), Some(hp)) = (
-                read_u64_le(&root_slice, pos + 8),
-                read_u64_le(&root_slice, pos + 16),
-            ) {
-                symtab_addrs = Some((bt, hp));
+    Ok(read_hdf5_v0_group_entries_seek(r, root_addr)?
+        .map(|entries| entries.into_iter().map(|e| e.name).collect()))
+}
+
+/// Parse HDF5 `Dataspace` (`0x0001`) dimension sizes from an object header (`v1`) via `Seek`.
+///
+/// # Errors
+/// Returns an `std::io::Error` if seeking or reading fails.
+pub fn read_hdf5_dataspace_dims_seek<R: std::io::Read + std::io::Seek>(
+    r: &mut R,
+    obj_addr: u64,
+) -> std::io::Result<Option<Vec<u64>>> {
+    let mut result = None;
+    let Some(()) = iter_v1_header_messages_seek(r, obj_addr, |mtype, body| {
+        if mtype == 0x0001 && body.len() >= 4 {
+            let ds_ver = body[0];
+            let rank = usize::from(body[1]);
+            let dims_off = match ds_ver {
+                1 => 8usize,
+                2 => 4usize,
+                _ => return std::ops::ControlFlow::Break(()),
+            };
+            let mut dims = Vec::with_capacity(rank);
+            for d in 0..rank {
+                let Some(dim) = read_u64_le(body, dims_off + d * 8) else {
+                    return std::ops::ControlFlow::Break(());
+                };
+                dims.push(dim);
             }
-            break;
+            result = Some(dims);
+            return std::ops::ControlFlow::Break(());
         }
-        seen += 1;
-        pos += 8 + msize;
-    }
-    let Some((btree_addr, heap_addr)) = symtab_addrs else {
-        return Ok(None);
-    };
-    let heap_hdr = read_at(r, heap_addr, 32)?;
-    if heap_hdr.len() < 32 || &heap_hdr[0..4] != b"HEAP" {
-        return Ok(None);
-    }
-    let Some(data_seg_size) = read_u64_le(&heap_hdr, 8).and_then(|v| usize::try_from(v).ok())
+        std::ops::ControlFlow::Continue(())
+    })?
     else {
         return Ok(None);
     };
-    let Some(data_seg_addr) = read_u64_le(&heap_hdr, 24) else {
+    Ok(result)
+}
+
+/// Read element byte size from an HDF5 `Datatype` (`0x0003`) message via `Seek`.
+///
+/// # Errors
+/// Returns an `std::io::Error` if seeking or reading fails.
+pub fn read_hdf5_datatype_size_seek<R: std::io::Read + std::io::Seek>(
+    r: &mut R,
+    obj_addr: u64,
+) -> std::io::Result<Option<usize>> {
+    let mut size = None;
+    let Some(()) = iter_v1_header_messages_seek(r, obj_addr, |mtype, body| {
+        if mtype == 0x0003 && body.len() >= 8 {
+            let sz = u32::from_le_bytes([body[4], body[5], body[6], body[7]]);
+            size = usize::try_from(sz).ok();
+            return std::ops::ControlFlow::Break(());
+        }
+        std::ops::ControlFlow::Continue(())
+    })?
+    else {
         return Ok(None);
     };
-    let heap_data = read_at(r, data_seg_addr, data_seg_size)?;
-    let mut names = Vec::new();
-    walk_btree_v1_group_seek(r, btree_addr, &heap_data, &mut names)?;
-    Ok(Some(names))
+    Ok(size)
+}
+
+fn walk_chunk_btree_v1_seek<R: std::io::Read + std::io::Seek>(
+    r: &mut R,
+    node_addr: u64,
+    ndim: usize,
+    out: &mut Vec<Hdf5Chunk>,
+) -> std::io::Result<()> {
+    let hdr = read_at(r, node_addr, 24)?;
+    if hdr.len() < 24 || &hdr[0..4] != b"TREE" || hdr[4] != 1 {
+        return Ok(());
+    }
+    let node_level = hdr[5];
+    let n_entries = usize::from(u16::from_le_bytes([hdr[6], hdr[7]]));
+    let key_bytes = 8 + (ndim + 1) * 8;
+    let rec_bytes = key_bytes + 8;
+    let body = read_at(r, node_addr + 24, n_entries * rec_bytes)?;
+    for i in 0..n_entries {
+        let key_off = i * rec_bytes;
+        let Some(sz_bytes) = body.get(key_off..key_off + 4) else {
+            break;
+        };
+        let chunk_size = u32::from_le_bytes([sz_bytes[0], sz_bytes[1], sz_bytes[2], sz_bytes[3]]);
+        let Some(child_addr) = read_u64_le(&body, key_off + key_bytes) else {
+            break;
+        };
+        if node_level == 0 {
+            out.push(Hdf5Chunk {
+                size: chunk_size,
+                addr: child_addr,
+            });
+        } else {
+            walk_chunk_btree_v1_seek(r, child_addr, ndim, out)?;
+        }
+    }
+    Ok(())
+}
+
+/// Read raw dataset bytes from an HDF5 v0 dataset object header via `Seek`, supporting both
+/// contiguous (`DataLayout` class `1`) and chunked (`DataLayout` class `2`, optionally zlib-deflated) storage.
+///
+/// # Errors
+/// Returns an `std::io::Error` if seeking, reading, or zlib decompression fails.
+pub fn read_hdf5_v0_dataset_bytes_seek<R: std::io::Read + std::io::Seek>(
+    r: &mut R,
+    obj_addr: u64,
+) -> std::io::Result<Option<Vec<u8>>> {
+    let mut contig: Option<(u64, usize)> = None;
+    let mut chunk_btree: Option<(u64, usize)> = None;
+    let mut deflated = false;
+
+    let Some(()) = iter_v1_header_messages_seek(r, obj_addr, |mtype, body| {
+        if mtype == 0x0008 && body.len() >= 18 && body[0] == 3 && body[1] == 1 {
+            if let (Some(addr), Some(sz_u64)) = (read_u64_le(body, 2), read_u64_le(body, 10))
+                && let Ok(sz) = usize::try_from(sz_u64)
+            {
+                contig = Some((addr, sz));
+            }
+        } else if mtype == 0x0008 && body.len() >= 11 && body[0] == 3 && body[1] == 2 {
+            if let Some(bt_addr) = read_u64_le(body, 3) {
+                chunk_btree = Some((bt_addr, usize::from(body[2])));
+            }
+        } else if mtype == 0x000B && body.len() >= 4 {
+            let ver = body[0];
+            let n_filters = usize::from(body[1]);
+            let mut fpos = match ver {
+                1 => 8usize,
+                2 => 2usize,
+                _ => return std::ops::ControlFlow::Continue(()),
+            };
+            for _ in 0..n_filters {
+                if fpos + 2 > body.len() {
+                    break;
+                }
+                let filter_id = u16::from_le_bytes([body[fpos], body[fpos + 1]]);
+                if filter_id == 1 {
+                    deflated = true;
+                    break;
+                }
+                if ver == 1 && fpos + 8 <= body.len() {
+                    let name_len =
+                        usize::from(u16::from_le_bytes([body[fpos + 2], body[fpos + 3]]));
+                    let n_client =
+                        usize::from(u16::from_le_bytes([body[fpos + 6], body[fpos + 7]]));
+                    fpos += 8 + ((name_len + 7) & !7) + (((n_client * 4) + 7) & !7);
+                } else if ver == 2 && fpos + 6 <= body.len() {
+                    let n_client =
+                        usize::from(u16::from_le_bytes([body[fpos + 4], body[fpos + 5]]));
+                    let name_len = if filter_id >= 256 && fpos + 8 <= body.len() {
+                        usize::from(u16::from_le_bytes([body[fpos + 6], body[fpos + 7]])) + 2
+                    } else {
+                        0
+                    };
+                    fpos += 6 + name_len + n_client * 4;
+                } else {
+                    break;
+                }
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    })?
+    else {
+        return Ok(None);
+    };
+
+    if let Some((addr, size)) = contig {
+        return read_at(r, addr, size).map(Some);
+    }
+    let Some((btree_addr, ndim)) = chunk_btree else {
+        return Ok(None);
+    };
+    let mut chunks = Vec::new();
+    walk_chunk_btree_v1_seek(r, btree_addr, ndim, &mut chunks)?;
+    let mut out = Vec::new();
+    for ch in chunks {
+        let Ok(len) = usize::try_from(ch.size) else {
+            return Ok(None);
+        };
+        let raw_chunk = read_at(r, ch.addr, len)?;
+        if deflated {
+            use std::io::Read as _;
+            let dec = flate2::read::ZlibDecoder::new(raw_chunk.as_slice());
+            let mut bounded = dec.take(MAX_CHUNK_DECOMPRESSED_BYTES + 1);
+            let n = bounded.read_to_end(&mut out)?;
+            if u64::try_from(n).unwrap_or(u64::MAX) > MAX_CHUNK_DECOMPRESSED_BYTES {
+                return Ok(None);
+            }
+        } else {
+            out.extend_from_slice(&raw_chunk);
+        }
+    }
+    Ok(Some(out))
 }
 
 /// Inspect a `.hal` file on disk via `Seek` and extract its HDF5 superblock and v0 root member names.
@@ -1285,25 +1521,34 @@ mod tests {
     #[ignore = "requires HORIZON_TEST_HAL=/path/to/file.hal"]
     fn real_hal_decode_from_env() {
         let path = std::env::var("HORIZON_TEST_HAL").expect("set HORIZON_TEST_HAL");
-        let bytes = std::fs::read(&path).expect("read hal file");
-        let sb = read_hdf5_superblock(&bytes).expect("superblock");
-        let root_addr = usize::try_from(sb.root_group_addr.expect("root addr")).expect("usize");
-        let root = read_hdf5_v0_group_entries(&bytes, root_addr).expect("root entries");
+        let mut f = std::io::BufReader::new(std::fs::File::open(&path).expect("open hal file"));
+        let hdr = read_at(&mut f, 0, 512).expect("read header");
+        let sb = read_hdf5_superblock(&hdr).expect("superblock");
+        let root_addr = sb.root_group_addr.expect("root addr");
+        let root = read_hdf5_v0_group_entries_seek(&mut f, root_addr)
+            .expect("seek root")
+            .expect("root entries");
         assert_ne!(root.len(), 0);
         let first_genome = root
             .iter()
             .find(|e| e.name != "Meta" && e.name != "Phylogeny")
             .expect("genome group");
-        let g_addr = usize::try_from(first_genome.object_header_addr).expect("usize");
-        let g_entries = read_hdf5_v0_group_entries(&bytes, g_addr).expect("genome entries");
+        let g_entries = read_hdf5_v0_group_entries_seek(&mut f, first_genome.object_header_addr)
+            .expect("seek genome")
+            .expect("genome entries");
         let seqname_obj = g_entries
             .iter()
             .find(|e| e.name == "SEQNAME_ARRAY")
             .expect("SEQNAME_ARRAY");
-        let sn_addr = usize::try_from(seqname_obj.object_header_addr).expect("usize");
-        let sn_dims = read_hdf5_dataspace_dims(&bytes, sn_addr).expect("SEQNAME dims");
-        let sn_stride = read_hdf5_datatype_size(&bytes, sn_addr).expect("SEQNAME stride");
-        let sn_raw = read_hdf5_v0_dataset_bytes(&bytes, sn_addr).expect("SEQNAME bytes");
+        let sn_dims = read_hdf5_dataspace_dims_seek(&mut f, seqname_obj.object_header_addr)
+            .expect("seek dims")
+            .expect("SEQNAME dims");
+        let sn_stride = read_hdf5_datatype_size_seek(&mut f, seqname_obj.object_header_addr)
+            .expect("seek stride")
+            .expect("SEQNAME stride");
+        let sn_raw = read_hdf5_v0_dataset_bytes_seek(&mut f, seqname_obj.object_header_addr)
+            .expect("seek bytes")
+            .expect("SEQNAME bytes");
         let names = decode_hal_seq_names(&sn_raw, sn_stride);
         assert_eq!(names.len(), usize::try_from(sn_dims[0]).expect("len"));
         assert_ne!(names[0], "");

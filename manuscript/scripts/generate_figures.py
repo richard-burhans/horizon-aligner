@@ -246,8 +246,215 @@ def make_fig3_abstention_speedup() -> None:
     save_both(fig, "fig3_abstention_speedup")
 
 
+def make_fig4_ablation_profile() -> None:
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11.2, 4.4), gridspec_kw={"width_ratios": [1.1, 1.15]})
+
+    # Panel A: Before vs After Search-Space MDL Gating (60_amniotes ~3 Mb)
+    species = ["pan_troglodytes\n(Close)", "mus_musculus\n(Distant)", "gallus_gallus\n(Outgroup)"]
+    prec_before = [91.20, 17.69, 6.40]
+    prec_after = [95.13, 38.53, 54.24]
+    time_before = [223.56, 138.59, 93.71]
+    time_after = [25.49, 47.32, 26.69]
+
+    x = np.arange(len(species))
+    w = 0.34
+    b1 = ax1.bar(x - w / 2, prec_before, width=w, color=OI_GRAY, alpha=0.85, edgecolor=OI_BLACK, linewidth=0.6, label="Fixed-threshold baseline")
+    b2 = ax1.bar(x + w / 2, prec_after, width=w, color=OI_BLUE, alpha=0.9, edgecolor=OI_BLACK, linewidth=0.6, label="Search-space MDL + gap-only seeding")
+
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(species, fontsize=8.3)
+    ax1.set_ylim(0, 118)
+    ax1.set_ylabel("Base-Pair Precision (%)")
+    ax1.set_title("A. Precision & Speedup on ~3 Mb 60_amniotes Slices", loc="left")
+    ax1.grid(True, axis="y", linestyle=":", alpha=0.35)
+    for idx, (pb, pa, tb, ta) in enumerate(zip(prec_before, prec_after, time_before, time_after)):
+        ax1.text(idx - w / 2, pb + 2.0, f"{pb:.1f}%\n({tb:.0f}s)", ha="center", va="bottom", fontsize=7.2, color="#4B5563")
+        speedup = tb / ta
+        ax1.text(idx + w / 2, pa + 2.0, f"{pa:.1f}%\n({ta:.1f}s, {speedup:.1f}×)", ha="center", va="bottom", fontsize=7.2, fontweight="bold", color=OI_BLUE)
+    ax1.legend(loc="upper right", frameon=True, framealpha=0.95, fontsize=7.5, edgecolor="#CBD5E0")
+
+    # Panel B: HORIZON_PROFILE stage breakdown (seconds)
+    pairs = ["homo_sapiens ×\npan_troglodytes\n(25.5 s total)", "homo_sapiens ×\nmus_musculus\n(47.3 s total)", "homo_sapiens ×\ngallus_gallus\n(26.7 s total)"]
+    w12 = np.array([2.57, 2.47, 1.01])
+    w10 = np.array([2.46, 1.92, 1.11])
+    lz1 = np.array([12.86, 13.77, 6.70])
+    multi = np.array([0.00, 22.02, 14.08])
+    dp = np.array([1.43, 2.60, 0.69])
+    other = np.array([6.17, 4.54, 3.10])
+
+    y = np.arange(len(pairs))
+    stages = [
+        ("KP-14 w=12", w12, OI_BLUE),
+        ("w=10 fallback", w10, OI_SKY),
+        ("LASTZ12 1-trans", lz1, OI_ORANGE),
+        ("LASTZ11 + AA5", multi, OI_VERMILION),
+        ("BandGrid MDL DP", dp, OI_GREEN),
+        ("X-drop + I/O", other, OI_GRAY),
+    ]
+    left = np.zeros(len(pairs))
+    for name, vals, col in stages:
+        ax2.barh(y, vals, left=left, height=0.52, color=col, edgecolor=OI_BLACK, linewidth=0.45, label=name)
+        left += vals
+
+    ax2.set_yticks(y)
+    ax2.set_yticklabels(pairs, fontsize=8.0)
+    ax2.invert_yaxis()
+    ax2.set_xlim(0, 54)
+    ax2.set_xlabel("Wall-Clock Stage Time (s)")
+    ax2.set_title("B. HORIZON_PROFILE Stage Breakdown (3 Mb × 3 Mb)", loc="left")
+    ax2.grid(True, axis="x", linestyle=":", alpha=0.35)
+    ax2.legend(loc="lower right", ncol=2, frameon=True, framealpha=0.95, fontsize=7.3, edgecolor="#CBD5E0")
+
+    plt.tight_layout(w_pad=2.4)
+    save_both(fig, "fig4_ablation_profile")
+
+
+def make_fig_c1_bocpd_mdl_trace() -> None:
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(9.6, 4.8), sharex=True, gridspec_kw={"height_ratios": [1.0, 1.15]})
+    x = np.arange(0, 600)
+
+    # Synthetic 600 bp isochore + hypervariable bubble trace matching BOCPD dynamics
+    pw = np.empty_like(x, dtype=float)
+    pw[:220] = 0.81 + 0.018 * np.sin(x[:220] / 14.0)
+    # Sharp transition at 220..240 into 45% GC (P(W)=0.55), with BOCPD rapid reset
+    pw[220:240] = np.linspace(0.81, 0.55, 20)
+    pw[240:] = 0.55 + 0.02 * np.cos(x[240:] / 16.0)
+
+    ax1.plot(x, pw * 100.0, color=OI_BLUE, lw=2.0, label="BOCPD posterior P(W) (% A+T)")
+    ax1.axhline(52.5, color=OI_GRAY, ls="--", lw=1.2, label="Fixed HOXD70 assumption (52.5% A+T)")
+    ax1.axvspan(310, 410, color=OI_VERMILION, alpha=0.14)
+    ax1.axvline(220, color=OI_ORANGE, ls=":", lw=1.3)
+    ax1.text(225, 62, "Changepoint reset\n(19% → 45% GC)", fontsize=7.8, color=OI_ORANGE, fontweight="bold")
+    ax1.set_ylabel("Local A+T Share (%)")
+    ax1.set_ylim(45, 92)
+    ax1.set_title("A. Beta-Bernoulli BOCPD Tracking Across an Isochore Boundary", loc="left")
+    ax1.legend(loc="upper right", frameon=True, framealpha=0.94, fontsize=7.6, edgecolor="#CBD5E0")
+    ax1.grid(True, linestyle=":", alpha=0.35)
+
+    # Bottom track: Per-column posterior P(M_ij | X, Y) + Horizon Bubble abstention
+    post = np.ones_like(x, dtype=float) * 0.94
+    post[:220] = 0.93 + 0.04 * np.cos(x[:220] / 11.0)
+    post[220:310] = 0.90 + 0.04 * np.sin(x[220:310] / 9.0)
+    post[305:315] = np.linspace(0.91, 0.07, 10)
+    post[315:405] = 0.07 + 0.03 * np.sin(x[315:405] / 5.0)
+    post[405:415] = np.linspace(0.08, 0.92, 10)
+    post[415:] = 0.92 + 0.04 * np.cos(x[415:] / 13.0)
+
+    ax2.plot(x, post, color=OI_GREEN, lw=2.0, label="MDL column posterior P(M_ij | X, Y)")
+    ax2.axhline(0.15, color=OI_VERMILION, ls="--", lw=1.2, label="Posterior floor (0.15)")
+    ax2.axvspan(310, 410, color=OI_VERMILION, alpha=0.18, label="Abstained Horizon Bubble (ΔL < λ̂)")
+    ax2.text(360, 0.56, "Horizon Bubble\n(ΔL = -8.4 bits < λ̂)", ha="center", va="center",
+             fontsize=8.0, fontweight="bold", color=OI_VERMILION,
+             bbox=dict(boxstyle="round,pad=0.28", fc="white", ec=OI_VERMILION, lw=0.8))
+    ax2.set_xlabel("Reference Coordinate (bp)")
+    ax2.set_ylabel("Column Posterior P(M_ij)")
+    ax2.set_ylim(0.0, 1.06)
+    ax2.set_title("B. MDL Forward-Backward Posterior & Conformal Abstention Gate", loc="left")
+    ax2.legend(loc="lower right", frameon=True, framealpha=0.94, fontsize=7.6, edgecolor="#CBD5E0")
+    ax2.grid(True, linestyle=":", alpha=0.35)
+
+    plt.tight_layout()
+    save_both(fig, "fig_c1_bocpd_mdl_trace")
+
+
+def make_fig_c2_bandgrid_egraph() -> None:
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11.0, 4.3), gridspec_kw={"width_ratios": [1.0, 1.2]})
+
+    # Left: BandGrid diagonal band vs flat Vec<f64>
+    ax1.set_xlim(0, 10)
+    ax1.set_ylim(0, 10)
+    ax1.invert_yaxis()
+    ax1.set_xticks(range(11))
+    ax1.set_yticks(range(11))
+    ax1.set_xlabel("Query coordinate j")
+    ax1.set_ylabel("Target coordinate i")
+    ax1.set_title("A. BandGrid Diagonal Band (W = 2, stride = 2W + 1 = 5)", loc="left")
+    ax1.grid(True, linestyle=":", alpha=0.35)
+
+    for i in range(10):
+        for j in range(10):
+            if abs(j - i) <= 2:
+                col = OI_BLUE if j == i else "#D8ECFA"
+                alpha = 0.85 if j == i else 0.9
+                ax1.add_patch(mpatches.Rectangle((j, i), 1, 1, facecolor=col, edgecolor="#64748B", lw=0.6, alpha=alpha))
+                txt_col = "white" if j == i else OI_BLACK
+                ax1.text(j + 0.5, i + 0.5, f"{j - i + 2}", ha="center", va="center", fontsize=7.2, color=txt_col)
+            else:
+                ax1.add_patch(mpatches.Rectangle((j, i), 1, 1, facecolor="#F3F4F6", edgecolor="#E5E7EB", lw=0.4))
+
+    ax1.text(5.0, 9.55, "Flat index = i · (2W + 1) + (j − i + W)", ha="center", va="center",
+             fontsize=8.0, fontweight="bold", color=OI_BLACK,
+             bbox=dict(boxstyle="round,pad=0.25", fc="white", ec=OI_BLUE, lw=0.9))
+
+    # Right: E-Graph Duplication & Inversion Collapse
+    ax2.set_xlim(0, 10)
+    ax2.set_ylim(0, 6)
+    ax2.axis("off")
+    ax2.set_title("B. Congruence-Closed E-Graph Paralog Collapse", loc="left")
+
+    def ebox(bx, by, bw, bh, title, body, fc, ec):
+        p = mpatches.FancyBboxPatch((bx, by), bw, bh, boxstyle="round,pad=0.1,rounding_size=0.15",
+                           facecolor=fc, edgecolor=ec, linewidth=1.3)
+        ax2.add_patch(p)
+        ax2.text(bx + bw / 2, by + bh - 0.32, title, ha="center", va="top", fontsize=8.3, fontweight="bold", color=OI_BLACK)
+        ax2.text(bx + bw / 2, by + 0.42, body, ha="center", va="center", fontsize=7.5, color="#374151")
+
+    ebox(0.3, 4.1, 4.1, 1.4, "Input Synteny Sequence", "seq(inv(inv(A)), A)\n(raw LCB order)", "#FDEEE8", OI_VERMILION)
+    ebox(5.4, 4.1, 4.2, 1.4, "Rule 1: Double Inversion", "inv(inv(A)) ↔ A\n⇒ e-class(A)", "#FFF7E6", OI_ORANGE)
+    ebox(0.3, 1.8, 4.1, 1.4, "Congruence Merge", "seq(A, A) ≡ seq(inv(inv(A)), A)\n(same e-class)", "#EDF6FC", OI_BLUE)
+    ebox(5.4, 1.8, 4.2, 1.4, "Rule 4: Tandem Collapse", "seq(A, A) → dup(A)\n(# EG:Z: parsimonious tag)", "#EAF7F2", OI_GREEN)
+
+    ax2.annotate("", xy=(5.32, 4.8), xytext=(4.48, 4.8), arrowprops=dict(arrowstyle="-|>", color=OI_BLACK, lw=1.3))
+    ax2.annotate("", xy=(2.35, 3.28), xytext=(7.4, 4.04), arrowprops=dict(arrowstyle="-|>", color=OI_BLACK, lw=1.3, connectionstyle="arc3,rad=0.12"))
+    ax2.annotate("", xy=(5.32, 2.5), xytext=(4.48, 2.5), arrowprops=dict(arrowstyle="-|>", color=OI_GREEN, lw=1.4))
+    ax2.text(5.0, 0.7, "Extracted Minimum-Cost Form: dup(A)   (cost = 1 vs. raw cost = 4)",
+             ha="center", va="center", fontsize=8.3, fontweight="bold", color=OI_GREEN,
+             bbox=dict(boxstyle="round,pad=0.3", fc="#EAF7F2", ec=OI_GREEN, lw=0.9))
+
+    plt.tight_layout(w_pad=2.2)
+    save_both(fig, "fig_c2_bandgrid_egraph")
+
+
+def make_fig_c3_hdf5_hal_seek() -> None:
+    fig, ax = plt.subplots(figsize=(10.8, 3.8))
+    ax.set_xlim(0, 11.2)
+    ax.set_ylim(0, 4.2)
+    ax.axis("off")
+
+    def hbox(x, y, w, h, title, body, fc, ec):
+        p = mpatches.FancyBboxPatch((x, y), w, h, boxstyle="round,pad=0.08,rounding_size=0.12",
+                           facecolor=fc, edgecolor=ec, linewidth=1.3)
+        ax.add_patch(p)
+        ax.text(x + w / 2, y + h - 0.16, title, ha="center", va="top", fontsize=8.3, fontweight="bold", color=OI_BLACK)
+        ax.text(x + w / 2, y + (h - 0.35) / 2, body, ha="center", va="center", fontsize=7.2, color="#374151")
+
+    def harr(x1, y1, x2, y2, col=OI_BLACK):
+        ax.annotate("", xy=(x2, y2), xytext=(x1, y1), arrowprops=dict(arrowstyle="-|>", color=col, lw=1.3))
+
+    hbox(0.2, 2.35, 2.0, 1.35, "1. Superblock", "8B HDF5 magic\noffset/len = 8B\nroot_group_addr", "#EDF6FC", OI_BLUE)
+    hbox(2.6, 2.35, 2.35, 1.35, "2. v1 Object Header", "iter_v1_header_messages_seek\nfollows 0x0010 continuations\nreads SymbolTable (0x0011)", "#EDF6FC", OI_BLUE)
+    hbox(5.35, 2.35, 2.45, 1.35, "3. Group B-Tree", "TREE (type 0) → SNOD\n40B entries + HEAP names\n(e.g. Anc00..leaf genomes)", "#EAF7F2", OI_GREEN)
+    hbox(8.2, 2.35, 2.75, 1.35, "4. Dataset Metadata", "Dataspace (0x0001): dims\nDatatype (0x0003): stride\nFilterPipeline (0x000B): zlib", "#FFF7E6", OI_ORANGE)
+
+    hbox(1.8, 0.3, 3.6, 1.3, "5a. Contiguous (DataLayout class 1)", "Direct Seek + read_at(data_addr, size)\nused by small arrays (e.g. SEQIDX_ARRAY)", "#F7EEF4", OI_PURPLE)
+    hbox(6.0, 0.3, 4.4, 1.3, "5b. Chunked + Deflate (DataLayout class 2)", "Walk TREE (type 1) chunk coords\nbounded ZlibDecoder (≤256 MiB/chunk) → HAL decoders", "#F7EEF4", OI_PURPLE)
+
+    harr(2.24, 3.02, 2.56, 3.02, OI_BLUE)
+    harr(4.99, 3.02, 5.31, 3.02, OI_GREEN)
+    harr(7.84, 3.02, 8.16, 3.02, OI_ORANGE)
+    harr(8.9, 2.31, 3.6, 1.66, OI_PURPLE)
+    harr(9.6, 2.31, 8.2, 1.66, OI_PURPLE)
+
+    ax.set_title("Pure-Rust Streaming HDF5 / HAL Seek Traversal (Zero libhdf5 Dependency)", loc="left", pad=6, fontsize=10.5)
+    save_both(fig, "fig_c3_hdf5_hal_seek")
+
+
 if __name__ == "__main__":
     make_fig1_architecture()
     make_fig2_benchmarks()
     make_fig3_abstention_speedup()
-    print(f"Generated 3 figures (.png + .svg) in {OUT_DIR}")
+    make_fig4_ablation_profile()
+    make_fig_c1_bocpd_mdl_trace()
+    make_fig_c2_bandgrid_egraph()
+    make_fig_c3_hdf5_hal_seek()
+    print(f"Generated 7 figures (.png + .svg) in {OUT_DIR}")

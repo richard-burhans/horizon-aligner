@@ -1,0 +1,216 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="617.04pt" height="239.050359pt" viewBox="0 0 617.04 239.050359" xmlns="http://www.w3.org/2000/svg" version="1.1">
+ <metadata>
+  <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+   <cc:Work>
+    <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
+    <dc:date>2026-11-18T13:05:11.829944</dc:date>
+    <dc:format>image/svg+xml</dc:format>
+    <dc:creator>
+     <cc:Agent>
+      <dc:title>Matplotlib v3.11.2, https://matplotlib.org/</dc:title>
+     </cc:Agent>
+    </dc:creator>
+   </cc:Work>
+  </rdf:RDF>
+ </metadata>
+ <defs>
+  <style type="text/css">*{stroke-linejoin: round; stroke-linecap: butt}</style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 239.050359 
+L 617.04 239.050359 
+L 617.04 0 
+L 0 0 
+z
+" style="fill: #ffffff"/>
+  </g>
+  <g id="axes_1">
+   <g id="patch_2">
+    <path d="M 20.113714 117.987159 
+L 123.423429 117.987159 
+Q 129.880286 117.987159 129.880286 111.967959 
+L 129.880286 48.264759 
+Q 129.880286 42.245559 123.423429 42.245559 
+L 20.113714 42.245559 
+Q 13.656857 42.245559 13.656857 48.264759 
+L 13.656857 111.967959 
+Q 13.656857 117.987159 20.113714 117.987159 
+z
+" clip-path="url(#p3abfa91f54)" style="fill: #edf6fc; stroke: #0072b2; stroke-width: 1.3; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_3">
+    <path d="M 149.250857 117.987159 
+L 271.393071 117.987159 
+Q 277.849929 117.987159 277.849929 111.967959 
+L 277.849929 48.264759 
+Q 277.849929 42.245559 271.393071 42.245559 
+L 149.250857 42.245559 
+Q 142.794 42.245559 142.794 48.264759 
+L 142.794 111.967959 
+Q 142.794 117.987159 149.250857 117.987159 
+z
+" clip-path="url(#p3abfa91f54)" style="fill: #edf6fc; stroke: #0072b2; stroke-width: 1.3; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_4">
+    <path d="M 297.2205 117.987159 
+L 424.743429 117.987159 
+Q 431.200286 117.987159 431.200286 111.967959 
+L 431.200286 48.264759 
+Q 431.200286 42.245559 424.743429 42.245559 
+L 297.2205 42.245559 
+Q 290.763643 42.245559 290.763643 48.264759 
+L 290.763643 111.967959 
+Q 290.763643 117.987159 297.2205 117.987159 
+z
+" clip-path="url(#p3abfa91f54)" style="fill: #eaf7f2; stroke: #009e73; stroke-width: 1.3; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_5">
+    <path d="M 450.570857 117.987159 
+L 594.235929 117.987159 
+Q 600.692786 117.987159 600.692786 111.967959 
+L 600.692786 48.264759 
+Q 600.692786 42.245559 594.235929 42.245559 
+L 450.570857 42.245559 
+Q 444.114 42.245559 444.114 48.264759 
+L 444.114 111.967959 
+Q 444.114 117.987159 450.570857 117.987159 
+z
+" clip-path="url(#p3abfa91f54)" style="fill: #fff7e6; stroke: #e69f00; stroke-width: 1.3; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_6">
+    <path d="M 106.205143 220.815159 
+L 295.606286 220.815159 
+Q 302.063143 220.815159 302.063143 214.795959 
+L 302.063143 153.600759 
+Q 302.063143 147.581559 295.606286 147.581559 
+L 106.205143 147.581559 
+Q 99.748286 147.581559 99.748286 153.600759 
+L 99.748286 214.795959 
+Q 99.748286 220.815159 106.205143 220.815159 
+z
+" clip-path="url(#p3abfa91f54)" style="fill: #f7eef4; stroke: #cc79a7; stroke-width: 1.3; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_7">
+    <path d="M 332.195143 220.815159 
+L 564.642 220.815159 
+Q 571.098857 220.815159 571.098857 214.795959 
+L 571.098857 153.600759 
+Q 571.098857 147.581559 564.642 147.581559 
+L 332.195143 147.581559 
+Q 325.738286 147.581559 325.738286 153.600759 
+L 325.738286 214.795959 
+Q 325.738286 220.815159 332.195143 220.815159 
+z
+" clip-path="url(#p3abfa91f54)" style="fill: #f7eef4; stroke: #cc79a7; stroke-width: 1.3; stroke-linejoin: miter"/>
+   </g>
+   <g id="text_1">
+    <text style="font-weight: 700; font-size: 8.3px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; text-anchor: middle; fill: #1a1a1a" x="71.768571" y="60.590663" transform="rotate(-0 71.768571 60.590663)">1. Superblock</text>
+   </g>
+   <g id="text_2">
+    <text style="font-size: 7.2px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #374151" transform="translate(43.901759 82.122984)">8B HDF5 magic</text>
+    <text style="font-size: 7.2px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #374151" transform="translate(44.809071 90.764953)">offset/len = 8B</text>
+    <text style="font-size: 7.2px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #374151" transform="translate(42.238446 99.406922)">root_group_addr</text>
+   </g>
+   <g id="text_3">
+    <text style="font-weight: 700; font-size: 8.3px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; text-anchor: middle; fill: #1a1a1a" x="210.321964" y="60.590663" transform="rotate(-0 210.321964 60.590663)">2. v1 Object Header</text>
+   </g>
+   <g id="text_4">
+    <text style="font-size: 7.2px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #374151" transform="translate(153.466152 82.122984)">iter_v1_header_messages_seek</text>
+    <text style="font-size: 7.2px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #374151" transform="translate(157.542589 90.764953)">follows 0x0010 continuations</text>
+    <text style="font-size: 7.2px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #374151" transform="translate(158.937589 99.406922)">reads SymbolTable (0x0011)</text>
+   </g>
+   <g id="text_5">
+    <text style="font-weight: 700; font-size: 8.3px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; text-anchor: middle; fill: #1a1a1a" x="360.981964" y="60.590014" transform="rotate(-0 360.981964 60.590014)">3. Group B-Tree</text>
+   </g>
+   <g id="text_6">
+    <text style="font-size: 7.2px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #374151" transform="translate(320.412214 82.122703)">TREE (type 0) → SNOD</text>
+    <text style="font-size: 7.2px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #374151" transform="translate(312.159214 90.764672)">40B entries + HEAP names</text>
+    <text style="font-size: 7.2px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #374151" transform="translate(312.232339 99.406641)">(e.g. Anc00..leaf genomes)</text>
+   </g>
+   <g id="text_7">
+    <text style="font-weight: 700; font-size: 8.3px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; text-anchor: middle; fill: #1a1a1a" x="522.403393" y="60.590663" transform="rotate(-0 522.403393 60.590663)">4. Dataset Metadata</text>
+   </g>
+   <g id="text_8">
+    <text style="font-size: 7.2px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #374151" transform="translate(474.685393 82.122984)">Dataspace (0x0001): dims</text>
+    <text style="font-size: 7.2px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #374151" transform="translate(475.604518 90.764953)">Datatype (0x0003): stride</text>
+    <text style="font-size: 7.2px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #374151" transform="translate(473.151455 99.406922)">FilterPipeline (0x000B): zlib</text>
+   </g>
+   <g id="text_9">
+    <text style="font-weight: 700; font-size: 8.3px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; text-anchor: middle; fill: #1a1a1a" x="200.905714" y="165.926662" transform="rotate(-0 200.905714 165.926662)">5a. Contiguous (DataLayout class 1)</text>
+   </g>
+   <g id="text_10">
+    <text style="font-size: 7.2px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #374151" transform="translate(131.109589 190.525969)">Direct Seek + read_at(data_addr, size)</text>
+    <text style="font-size: 7.2px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #374151" transform="translate(124.414152 199.167937)">used by small arrays (e.g. SEQIDX_ARRAY)</text>
+   </g>
+   <g id="text_11">
+    <text style="font-weight: 700; font-size: 8.3px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; text-anchor: middle; fill: #1a1a1a" x="448.418571" y="165.926662" transform="rotate(-0 448.418571 165.926662)">5b. Chunked + Deflate (DataLayout class 2)</text>
+   </g>
+   <g id="text_12">
+    <text style="font-size: 7.2px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #374151" transform="translate(388.814384 190.525969)">Walk TREE (type 1) chunk coords</text>
+    <text style="font-size: 7.2px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #374151" transform="translate(345.689196 199.167937)">bounded ZlibDecoder (≤256 MiB/chunk) → HAL decoders</text>
+   </g>
+   <g id="patch_8">
+    <path d="M 129.724749 80.367159 
+Q 136.334003 80.367159 141.489812 80.367159 
+" style="fill: none; stroke: #0072b2; stroke-width: 1.3; stroke-linecap: round"/>
+    <path d="M 137.689812 78.467159 
+L 141.489812 80.367159 
+L 137.689812 82.267159 
+z
+" style="fill: #0072b2; stroke: #0072b2; stroke-width: 1.3; stroke-linecap: round"/>
+   </g>
+   <g id="patch_9">
+    <path d="M 277.694392 80.367159 
+Q 284.303646 80.367159 289.459455 80.367159 
+" style="fill: none; stroke: #009e73; stroke-width: 1.3; stroke-linecap: round"/>
+    <path d="M 285.659455 78.467159 
+L 289.459455 80.367159 
+L 285.659455 82.267159 
+z
+" style="fill: #009e73; stroke: #009e73; stroke-width: 1.3; stroke-linecap: round"/>
+   </g>
+   <g id="patch_10">
+    <path d="M 431.044749 80.367159 
+Q 437.654003 80.367159 442.809812 80.367159 
+" style="fill: none; stroke: #e69f00; stroke-width: 1.3; stroke-linecap: round"/>
+    <path d="M 439.009812 78.467159 
+L 442.809812 80.367159 
+L 439.009812 82.267159 
+z
+" style="fill: #e69f00; stroke: #e69f00; stroke-width: 1.3; stroke-linecap: round"/>
+   </g>
+   <g id="patch_11">
+    <path d="M 484.09495 116.208116 
+Q 343.49203 132.283058 204.333148 148.192906 
+" style="fill: none; stroke: #cc79a7; stroke-width: 1.3; stroke-linecap: round"/>
+    <path d="M 208.324372 149.648971 
+L 204.333148 148.192906 
+L 207.892735 145.873566 
+z
+" style="fill: #cc79a7; stroke: #cc79a7; stroke-width: 1.3; stroke-linecap: round"/>
+   </g>
+   <g id="patch_12">
+    <path d="M 521.911759 116.77576 
+Q 486.082484 132.28323 451.587077 147.213381 
+" style="fill: none; stroke: #cc79a7; stroke-width: 1.3; stroke-linecap: round"/>
+    <path d="M 455.829141 147.447677 
+L 451.587077 147.213381 
+L 454.319753 143.960308 
+z
+" style="fill: #cc79a7; stroke: #cc79a7; stroke-width: 1.3; stroke-linecap: round"/>
+   </g>
+   <g id="text_13">
+    <text style="font-weight: 700; font-size: 10.5px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; text-anchor: start" x="7.2" y="15.178359" transform="rotate(-0 7.2 15.178359)">Pure-Rust Streaming HDF5 / HAL Seek Traversal (Zero libhdf5 Dependency)</text>
+   </g>
+  </g>
+ </g>
+ <defs>
+  <clipPath id="p3abfa91f54">
+   <rect x="7.2" y="21.178359" width="602.64" height="210.672"/>
+  </clipPath>
+ </defs>
+</svg>
