@@ -233,6 +233,71 @@ impl HalAlignment {
     }
 }
 
+/// Summary metadata parsed from an HDF5 `.hal` file superblock (v0/v1/v2/v3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Hdf5Superblock {
+    /// Superblock format version (`0`, `1`, `2`, or `3`).
+    pub version: u8,
+    /// Size in bytes of file offsets (`sizeof_addr`).
+    pub offset_size: u8,
+    /// Size in bytes of object lengths (`sizeof_len`).
+    pub length_size: u8,
+}
+
+/// Parse the HDF5 superblock header from the leading bytes of a `.hal` file.
+#[must_use]
+pub fn read_hdf5_superblock(bytes: &[u8]) -> Option<Hdf5Superblock> {
+    if bytes.len() < 16 || !is_hdf5_hal(bytes) {
+        return None;
+    }
+    let version = bytes[8];
+    match version {
+        0 | 1 => Some(Hdf5Superblock {
+            version,
+            offset_size: bytes[13],
+            length_size: bytes[14],
+        }),
+        2 | 3 => Some(Hdf5Superblock {
+            version,
+            offset_size: bytes[9],
+            length_size: bytes[10],
+        }),
+        _ => None,
+    }
+}
+
+const fn decode_hal_nibble(nibble: u8) -> u8 {
+    match nibble & 0x0f {
+        0 => b'a',
+        1 => b'c',
+        2 => b'g',
+        3 => b't',
+        8 => b'A',
+        9 => b'C',
+        10 => b'G',
+        11 => b'T',
+        4 => b'n',
+        _ => b'N',
+    }
+}
+
+/// Decode HAL 4-bit nibble-packed `DNA_ARRAY` bytes (high nibble first) into ASCII DNA.
+#[must_use]
+pub fn decode_hal_dna(packed: &[u8], length: usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(length);
+    for &b in packed {
+        if out.len() >= length {
+            break;
+        }
+        out.push(decode_hal_nibble(b >> 4));
+        if out.len() >= length {
+            break;
+        }
+        out.push(decode_hal_nibble(b));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,5 +325,25 @@ mod tests {
         assert!(maf.contains("s hg38 0 12 + 12 ACGTACGTACGT"));
         assert!(maf.contains("s mm10 0 12 + 12 ACGTACGTACGT"));
         assert!(maf.contains("s tupChi1 0 12 - 12 ACGTACGTACGT"));
+    }
+
+    #[test]
+    fn hal_dna_nibble_decode_and_superblock_parse() {
+        let packed = [0x8b_u8, 0xb8, 0x88, 0xaa, 0xbb, 0xb8];
+        assert_eq!(decode_hal_dna(&packed, 11), b"ATTAAAGGTTT");
+
+        let mut hdr = [0u8; 16];
+        hdr[..8].copy_from_slice(&HDF5_SIGNATURE);
+        hdr[8] = 2;
+        hdr[9] = 8;
+        hdr[10] = 8;
+        assert_eq!(
+            read_hdf5_superblock(&hdr),
+            Some(Hdf5Superblock {
+                version: 2,
+                offset_size: 8,
+                length_size: 8
+            })
+        );
     }
 }

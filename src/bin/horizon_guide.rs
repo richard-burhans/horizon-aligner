@@ -440,7 +440,8 @@ impl AncRunAccum {
     ) {
         if self.cur_anc.len() >= 12 {
             if !anc_seq.is_empty() {
-                anc_seq.extend_from_slice(&[b'N'; 40]);
+                // Separate independent ancestral runs beyond cluster_strand_lcbs max_gap (1800 bp).
+                anc_seq.extend_from_slice(&[b'N'; 2000]);
             }
             let anc_start = anc_seq.len();
             anc_seq.extend_from_slice(&self.cur_anc);
