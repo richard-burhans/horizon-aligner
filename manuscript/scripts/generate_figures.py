@@ -120,15 +120,18 @@ def make_fig2_benchmarks() -> None:
         ("470-way primates (n=6)", 83.7, 98.4, OI_BLUE, -82, -14, "right"),
         ("Pf × Pr Chr1 / WG", 85.6, 98.3, OI_BLUE, -10, 16, "center"),
         ("100-way chrM (panTro4)", 88.9, 99.2, OI_BLUE, 10, -14, "left"),
+        ("60_amniotes (panTro)", 87.8, 95.1, OI_BLUE, 10, -24, "left"),
         ("sars-cov-2.hal (SARS-1)", 76.8, 98.4, OI_BLUE, -14, 12, "right"),
         ("cactus447way primates", 74.4, 93.1, OI_SKY, 12, -4, "left"),
         ("92_mammals EPO (n=6)", 67.2, 90.2, OI_GREEN, -14, 6, "right"),
-        ("100-way chrM (galGal4)", 65.6, 88.6, OI_GREEN, -14, -10, "right"),
+        ("65_fish (orySin)", 60.3, 89.6, OI_GREEN, -14, -2, "right"),
+        ("100-way chrM (galGal4)", 65.6, 88.6, OI_GREEN, -14, -14, "right"),
         ("27_sauropsids birds (n=4)", 71.0, 83.2, OI_GREEN, 10, -4, "left"),
         ("Pf × Pv Chr1 (--top-k 4)", 50.6, 79.5, OI_ORANGE, 10, -2, "left"),
         ("sars-cov-2.hal (MERS/OC43)", 40.7, 67.9, OI_VERMILION, 10, -4, "left"),
         ("cactus447way Laurasiatheria", 37.1, 75.9, OI_VERMILION, 10, 4, "left"),
-        ("hg38 5-way promoters", 22.6, 49.3, OI_PURPLE, 10, 2, "left"),
+        ("60_amniotes (galGal)", 25.7, 54.2, OI_VERMILION, 10, 8, "left"),
+        ("hg38 5-way promoters", 22.6, 49.3, OI_PURPLE, 10, -8, "left"),
     ]
 
     for label, rec, prec, col, dx, dy, ha in points:
@@ -149,7 +152,7 @@ def make_fig2_benchmarks() -> None:
     ax1.set_ylim(42, 108)
     ax1.set_xlabel("Base-Pair Recall vs. Reference Alignment (%)")
     ax1.set_ylabel("Base-Pair Precision (%)")
-    ax1.set_title("A. De Novo Pairwise Accuracy Across 7 External Suites", loc="left")
+    ax1.set_title("A. De Novo Pairwise Accuracy Across 9 External Suites", loc="left")
     ax1.grid(True, linestyle=":", alpha=0.35, zorder=0)
 
     legend_handles = [
@@ -167,17 +170,19 @@ def make_fig2_benchmarks() -> None:
     suites = [
         "27_sauropsids\n(23 sp, 50 blk)",
         "92_mammals\n(92 sp, 30 blk)",
-        "100-way chrM\n(92 sp, 459 blk)",
         "470-way\n(317 sp, 200 blk)",
+        "100-way chrM\n(92 sp, 459 blk)",
+        "65_fish\n(58 sp, 40 blk)",
         "cactus447way\n(406 sp, 200 blk)",
+        "60_amniotes\n(60 sp, 40 blk)",
     ]
-    times = [0.62, 1.38, 3.07, 2.53, 3.84]
+    times = [0.62, 1.38, 2.53, 3.07, 3.66, 3.84, 16.61]
     y_pos = np.arange(len(suites))
     bars = ax2.barh(y_pos, times, height=0.56, color=OI_BLUE, alpha=0.88, edgecolor=OI_BLACK, linewidth=0.6)
     ax2.set_yticks(y_pos)
     ax2.set_yticklabels(suites, fontsize=8.0)
     ax2.invert_yaxis()
-    ax2.set_xlim(0, 4.7)
+    ax2.set_xlim(0, 19.8)
     ax2.set_xlabel("Wall-Clock Merge Runtime (s)")
     ax2.set_title("B. Exact O(N log N) Merge Scaling (Up to 406 Species)", loc="left")
     for bar, t in zip(bars, times):
