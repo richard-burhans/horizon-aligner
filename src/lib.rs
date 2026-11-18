@@ -1364,6 +1364,118 @@ fn find_translated_aa5_hits(
     hits
 }
 
+/// Extend an ungapped codon-level amino-acid HSP from a 5-codon (`15 bp`) seed.
+fn extend_aa_ungapped_hsp(
+    seq_x: &[u8],
+    seq_y: &[u8],
+    px: usize,
+    py: usize,
+    min_score: i32,
+) -> Option<(usize, usize, usize, usize, i32)> {
+    const AA_MATCH: i32 = 15;
+    const AA_MISMATCH: i32 = -6;
+    const AA_XDROP: i32 = 30;
+    if px + 15 > seq_x.len() || py + 15 > seq_y.len() {
+        return None;
+    }
+    let mut core = 0i32;
+    for c in 0..5 {
+        let ax = codon_to_aa(
+            seq_x[px + c * 3],
+            seq_x[px + c * 3 + 1],
+            seq_x[px + c * 3 + 2],
+        )?;
+        let ay = codon_to_aa(
+            seq_y[py + c * 3],
+            seq_y[py + c * 3 + 1],
+            seq_y[py + c * 3 + 2],
+        )?;
+        core += if ax == ay { AA_MATCH } else { AA_MISMATCH };
+    }
+
+    let mut cur = 0i32;
+    let mut best_left = 0i32;
+    let (mut lx, mut ly) = (px, py);
+    let (mut ix, mut iy) = (px, py);
+    while ix >= 3 && iy >= 3 {
+        ix -= 3;
+        iy -= 3;
+        let (Some(ax), Some(ay)) = (
+            codon_to_aa(seq_x[ix], seq_x[ix + 1], seq_x[ix + 2]),
+            codon_to_aa(seq_y[iy], seq_y[iy + 1], seq_y[iy + 2]),
+        ) else {
+            break;
+        };
+        cur += if ax == ay { AA_MATCH } else { AA_MISMATCH };
+        if cur > best_left {
+            best_left = cur;
+            lx = ix;
+            ly = iy;
+        } else if best_left - cur > AA_XDROP {
+            break;
+        }
+    }
+
+    cur = 0;
+    let mut best_right = 0i32;
+    let (mut rx, mut ry) = (px + 15, py + 15);
+    ix = px + 15;
+    iy = py + 15;
+    while ix + 3 <= seq_x.len() && iy + 3 <= seq_y.len() {
+        let (Some(ax), Some(ay)) = (
+            codon_to_aa(seq_x[ix], seq_x[ix + 1], seq_x[ix + 2]),
+            codon_to_aa(seq_y[iy], seq_y[iy + 1], seq_y[iy + 2]),
+        ) else {
+            break;
+        };
+        cur += if ax == ay { AA_MATCH } else { AA_MISMATCH };
+        ix += 3;
+        iy += 3;
+        if cur > best_right {
+            best_right = cur;
+            rx = ix;
+            ry = iy;
+        } else if best_right - cur > AA_XDROP {
+            break;
+        }
+    }
+
+    let total = core + best_left + best_right;
+    (total >= min_score).then_some((lx, ly, rx, ry, total))
+}
+
+fn append_hsp_gated_aa_lcbs(
+    target: &mut LcbList,
+    seq_x: &[u8],
+    seq_y: &[u8],
+    hits: &[(usize, usize)],
+    min_aa_score: i32,
+) {
+    let mut gated = Vec::new();
+    let mut strong = Vec::new();
+    for &(px, py) in hits {
+        if let Some((lx, ly, rx, ry, sc)) =
+            extend_aa_ungapped_hsp(seq_x, seq_y, px, py, min_aa_score)
+        {
+            gated.push((px, py));
+            if sc >= min_aa_score + 30 && rx >= lx + 24 && ry >= ly + 24 {
+                strong.push(vec![(lx, ly), (rx - 15, ry - 15)]);
+            }
+        }
+    }
+    let mut candidates = cluster_strand_lcbs(&gated, 1800, 200, 2, 24, 250.0);
+    candidates.extend(strong);
+    for lcb in candidates {
+        let (sx, ex) = (lcb[0].0, lcb[lcb.len() - 1].0);
+        if !target
+            .iter()
+            .any(|c| sx <= c[c.len() - 1].0 && ex >= c[0].0)
+        {
+            target.push(lcb);
+        }
+    }
+}
+
 /// Find 2-hit translated amino-acid `5-mer` (15 bp) anchors across all reading frames.
 #[allow(dead_code)]
 fn append_translated_aa5_lcbs(
@@ -1695,11 +1807,11 @@ pub fn align_contig_pair_with_config(
         append_hsp_gated_lastz12_lcbs(&mut combined_fwd, seq_x, seq_y, &hits_w10_fwd, 200);
         append_hsp_gated_lastz12_lcbs(&mut combined_rc, seq_x, seq_y_rc, &hits_w10_rc, 200);
 
-        // HSP-gated 6-frame translated 5-mer amino-acid seeding for divergent coding homologs.
+        // Amino-acid HSP-gated 6-frame translated 5-mer seeding for divergent coding homologs.
         let aa_fwd = find_translated_aa5_hits(seq_x, seq_y, 2, cfg.skip_softmasked);
         let aa_rc = find_translated_aa5_hits(seq_x, seq_y_rc, 2, cfg.skip_softmasked);
-        append_hsp_gated_lastz12_lcbs(&mut combined_fwd, seq_x, seq_y, &aa_fwd, 180);
-        append_hsp_gated_lastz12_lcbs(&mut combined_rc, seq_x, seq_y_rc, &aa_rc, 180);
+        append_hsp_gated_aa_lcbs(&mut combined_fwd, seq_x, seq_y, &aa_fwd, 120);
+        append_hsp_gated_aa_lcbs(&mut combined_rc, seq_x, seq_y_rc, &aa_rc, 120);
     }
 
     // Transition-tolerant R/Y (1-bit purine/pyrimidine) fallback for divergent homologs.
@@ -2879,6 +2991,13 @@ mod tests {
         assert!(
             !lcbs.is_empty(),
             "expected translated 5-mer AA LCB for synonymous coding pair"
+        );
+        let mut aa_gated = Vec::new();
+        let aa_hits = find_translated_aa5_hits(sx, sy, 2, false);
+        append_hsp_gated_aa_lcbs(&mut aa_gated, sx, sy, &aa_hits, 120);
+        assert!(
+            !aa_gated.is_empty(),
+            "expected AA HSP gate to accept synonymous 12-codon stretch"
         );
     }
 }

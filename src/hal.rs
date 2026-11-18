@@ -371,6 +371,126 @@ pub fn read_hdf5_object_header(slice: &[u8]) -> Option<Hdf5ObjectHeader> {
     None
 }
 
+fn read_u64_le(bytes: &[u8], off: usize) -> Option<u64> {
+    Some(u64::from_le_bytes(
+        bytes.get(off..off + 8)?.try_into().ok()?,
+    ))
+}
+
+fn collect_snod_names(bytes: &[u8], snod_addr: usize, heap_data: &[u8], out: &mut Vec<String>) {
+    if bytes.get(snod_addr..snod_addr + 4) != Some(b"SNOD") {
+        return;
+    }
+    let Some(n_syms) = bytes
+        .get(snod_addr + 6..snod_addr + 8)
+        .map(|b| usize::from(u16::from_le_bytes([b[0], b[1]])))
+    else {
+        return;
+    };
+    for i in 0..n_syms {
+        let entry_off = snod_addr + 8 + i * 40;
+        let Some(name_off_u64) = read_u64_le(bytes, entry_off) else {
+            break;
+        };
+        let Ok(name_off) = usize::try_from(name_off_u64) else {
+            continue;
+        };
+        if let Some(tail) = heap_data.get(name_off..) {
+            let end = tail.iter().position(|&b| b == 0).unwrap_or(tail.len());
+            if let Ok(s) = std::str::from_utf8(&tail[..end])
+                && !s.is_empty()
+            {
+                out.push(s.to_owned());
+            }
+        }
+    }
+}
+
+fn walk_btree_v1_group(bytes: &[u8], node_addr: usize, heap_data: &[u8], out: &mut Vec<String>) {
+    if bytes.get(node_addr..node_addr + 4) != Some(b"TREE") {
+        return;
+    }
+    let node_type = *bytes.get(node_addr + 4).unwrap_or(&255);
+    let node_level = *bytes.get(node_addr + 5).unwrap_or(&255);
+    let Some(n_entries) = bytes
+        .get(node_addr + 6..node_addr + 8)
+        .map(|b| usize::from(u16::from_le_bytes([b[0], b[1]])))
+    else {
+        return;
+    };
+    if node_type != 0 {
+        return;
+    }
+    // B-tree v1 header with 8-byte offsets: 8 bytes prefix + 2 * 8 bytes sibling addrs = 24 bytes.
+    // Entries are alternating (key: u64, child_addr: u64) for `n_entries`.
+    for i in 0..n_entries {
+        let child_off = node_addr + 24 + i * 16 + 8;
+        let Some(child_u64) = read_u64_le(bytes, child_off) else {
+            break;
+        };
+        let Ok(child_addr) = usize::try_from(child_u64) else {
+            continue;
+        };
+        if node_level == 0 {
+            collect_snod_names(bytes, child_addr, heap_data, out);
+        } else {
+            walk_btree_v1_group(bytes, child_addr, heap_data, out);
+        }
+    }
+}
+
+/// Extract root-group member names from an HDF5 v0 `.hal` file via its `SymbolTable` (`0x0011`),
+/// `HEAP` local heap, and `TREE`/`SNOD` B-tree v1 nodes.
+#[must_use]
+pub fn read_hdf5_v0_root_names(bytes: &[u8]) -> Option<Vec<String>> {
+    let sb = read_hdf5_superblock(bytes)?;
+    if sb.version > 1 || sb.offset_size != 8 || sb.length_size != 8 {
+        return None;
+    }
+    let root_addr = usize::try_from(sb.root_group_addr?).ok()?;
+    let root_slice = bytes.get(root_addr..)?;
+    if root_slice.len() < 16 || root_slice[0] != 1 {
+        return None;
+    }
+    let num_msgs = usize::from(u16::from_le_bytes([root_slice[2], root_slice[3]]));
+    let hdr_size = usize::try_from(u32::from_le_bytes([
+        root_slice[8],
+        root_slice[9],
+        root_slice[10],
+        root_slice[11],
+    ]))
+    .ok()?;
+    let mut pos = 16usize;
+    let end = (16 + hdr_size).min(root_slice.len());
+    let mut symtab_addrs: Option<(usize, usize)> = None;
+    let mut seen = 0usize;
+    while seen < num_msgs && pos + 8 <= end {
+        let mtype = u16::from_le_bytes([root_slice[pos], root_slice[pos + 1]]);
+        let msize = usize::from(u16::from_le_bytes([
+            root_slice[pos + 2],
+            root_slice[pos + 3],
+        ]));
+        if mtype == 0x0011 && msize >= 16 && pos + 8 + 16 <= end {
+            let btree_addr = usize::try_from(read_u64_le(root_slice, pos + 8)?).ok()?;
+            let heap_addr = usize::try_from(read_u64_le(root_slice, pos + 16)?).ok()?;
+            symtab_addrs = Some((btree_addr, heap_addr));
+            break;
+        }
+        seen += 1;
+        pos += 8 + msize;
+    }
+    let (btree_addr, heap_addr) = symtab_addrs?;
+    if bytes.get(heap_addr..heap_addr + 4) != Some(b"HEAP") {
+        return None;
+    }
+    let data_seg_size = usize::try_from(read_u64_le(bytes, heap_addr + 8)?).ok()?;
+    let data_seg_addr = usize::try_from(read_u64_le(bytes, heap_addr + 24)?).ok()?;
+    let heap_data = bytes.get(data_seg_addr..data_seg_addr + data_seg_size)?;
+    let mut names = Vec::new();
+    walk_btree_v1_group(bytes, btree_addr, heap_data, &mut names);
+    Some(names)
+}
+
 const fn decode_hal_nibble(nibble: u8) -> u8 {
     match nibble & 0x0f {
         0 => b'a',
