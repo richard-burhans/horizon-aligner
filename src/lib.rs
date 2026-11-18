@@ -1077,28 +1077,28 @@ fn intersect_seed_maps(
     (hits_fwd, hits_rc)
 }
 
-/// Find `12-of-19` (`MASK_LASTZ12`) seed hits including 1-transition (`A<->G`, `C<->T`) neighbors.
-#[must_use]
-pub fn find_lastz12_1transition_hits<S: std::hash::BuildHasher>(
+fn find_spaced_1transition_hits<S: std::hash::BuildHasher>(
     seq_x: &[u8],
+    offsets: &[usize],
+    rev_offsets: &[usize],
+    span: usize,
     iy_fwd: &HashMap<u64, Vec<usize>, S>,
     iy_rc: &HashMap<u64, Vec<usize>, S>,
     skip_softmasked: bool,
 ) -> (AnchorPairs, AnchorPairs) {
-    const OFFSETS: [usize; 12] = [0, 1, 2, 4, 7, 8, 11, 13, 15, 16, 17, 18];
-    const REV_OFFSETS: [usize; 12] = [0, 1, 2, 3, 5, 7, 10, 11, 14, 16, 17, 18];
-    let span = 19usize;
     if seq_x.len() < span {
         return (Vec::new(), Vec::new());
     }
+    let w = offsets.len();
     let mut hits_fwd = Vec::new();
     let mut hits_rc = Vec::new();
+    let mut keys = Vec::with_capacity(w + 1);
     for i in 0..=(seq_x.len() - span) {
         let sub = &seq_x[i..i + span];
         let mut fwd = 0_u64;
         let mut rc = 0_u64;
         let mut valid = true;
-        for (&fo, &ro) in OFFSETS.iter().zip(&REV_OFFSETS) {
+        for (&fo, &ro) in offsets.iter().zip(rev_offsets) {
             if skip_softmasked && (sub[fo].is_ascii_lowercase() || sub[ro].is_ascii_lowercase()) {
                 valid = false;
                 break;
@@ -1113,14 +1113,14 @@ pub fn find_lastz12_1transition_hits<S: std::hash::BuildHasher>(
         if !valid {
             continue;
         }
-        let mut keys = [0_u64; 13];
-        keys[0] = fwd.min(rc);
-        for (b, slot) in keys.iter_mut().skip(1).enumerate() {
-            let mf = fwd ^ (2_u64 << (2 * (11 - b)));
+        keys.clear();
+        keys.push(fwd.min(rc));
+        for b in 0..w {
+            let mf = fwd ^ (2_u64 << (2 * (w - 1 - b)));
             let mr = rc ^ (2_u64 << (2 * b));
-            *slot = mf.min(mr);
+            keys.push(mf.min(mr));
         }
-        for key in keys {
+        for &key in &keys {
             if let Some(pys) = iy_fwd.get(&key) {
                 for &py in pys {
                     hits_fwd.push((i, py));
@@ -1134,6 +1134,27 @@ pub fn find_lastz12_1transition_hits<S: std::hash::BuildHasher>(
         }
     }
     (hits_fwd, hits_rc)
+}
+
+/// Find `12-of-19` (`MASK_LASTZ12`) seed hits including 1-transition (`A<->G`, `C<->T`) neighbors.
+#[must_use]
+pub fn find_lastz12_1transition_hits<S: std::hash::BuildHasher>(
+    seq_x: &[u8],
+    iy_fwd: &HashMap<u64, Vec<usize>, S>,
+    iy_rc: &HashMap<u64, Vec<usize>, S>,
+    skip_softmasked: bool,
+) -> (AnchorPairs, AnchorPairs) {
+    const OFFSETS: [usize; 12] = [0, 1, 2, 4, 7, 8, 11, 13, 15, 16, 17, 18];
+    const REV_OFFSETS: [usize; 12] = [0, 1, 2, 3, 5, 7, 10, 11, 14, 16, 17, 18];
+    find_spaced_1transition_hits(
+        seq_x,
+        &OFFSETS,
+        &REV_OFFSETS,
+        19,
+        iy_fwd,
+        iy_rc,
+        skip_softmasked,
+    )
 }
 
 #[inline]
