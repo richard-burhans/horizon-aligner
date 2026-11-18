@@ -3,7 +3,8 @@
 use anyhow::{Context, Result, bail};
 use horizon_aligner::{
     AlignConfig, ContigIndex, align_contig_pair_with_config, format_maf_blocks, hal::HalAlignment,
-    merge_pairwise_mafs, prepare_contig_index_opts, read_fasta_contigs, shared_seed_count,
+    merge_pairwise_mafs, prepare_contig_index_opts, read_fasta_contigs, score_contig_pair_lcb,
+    shared_seed_count,
 };
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -38,7 +39,52 @@ fn select_central_hinge(species: &[IndexedSpecies]) -> usize {
     best_idx
 }
 
-type HalBlockList = Vec<(usize, usize, usize, bool)>;
+type HalBlock = (usize, usize, usize, bool);
+type HalBlockList = Vec<HalBlock>;
+
+fn select_top_k_pairs(
+    ref_indices: &[(String, ContigIndex)],
+    qry_indices: &[(String, ContigIndex)],
+    top_k: usize,
+    min_shared_seeds: usize,
+) -> Vec<Vec<bool>> {
+    let scores: Vec<((usize, usize), (usize, usize))> = (0..ref_indices.len())
+        .into_par_iter()
+        .flat_map(|x_i| {
+            (0..qry_indices.len()).into_par_iter().map(move |y_i| {
+                let seeds = shared_seed_count(&ref_indices[x_i].1, &qry_indices[y_i].1);
+                let lcb = if seeds >= min_shared_seeds {
+                    score_contig_pair_lcb(&ref_indices[x_i].1, &qry_indices[y_i].1)
+                } else {
+                    0
+                };
+                ((x_i, y_i), (lcb, seeds))
+            })
+        })
+        .collect();
+    let mut by_x: Vec<Vec<((usize, usize), usize)>> = vec![Vec::new(); ref_indices.len()];
+    let mut by_y: Vec<Vec<((usize, usize), usize)>> = vec![Vec::new(); qry_indices.len()];
+    for &((x_i, y_i), sc) in &scores {
+        if sc.1 >= min_shared_seeds {
+            by_x[x_i].push((sc, y_i));
+            by_y[y_i].push((sc, x_i));
+        }
+    }
+    let mut mask = vec![vec![false; qry_indices.len()]; ref_indices.len()];
+    for (x_i, list) in by_x.iter_mut().enumerate() {
+        list.sort_unstable_by_key(|a| std::cmp::Reverse(a.0));
+        for &(_, y_i) in list.iter().take(top_k) {
+            mask[x_i][y_i] = true;
+        }
+    }
+    for (y_i, list) in by_y.iter_mut().enumerate() {
+        list.sort_unstable_by_key(|a| std::cmp::Reverse(a.0));
+        for &(_, x_i) in list.iter().take(top_k) {
+            mask[x_i][y_i] = true;
+        }
+    }
+    mask
+}
 
 fn align_species_pair(
     ref_contigs: &ContigList,
@@ -46,27 +92,63 @@ fn align_species_pair(
     qry_contigs: &ContigList,
     qry_indices: &[(String, ContigIndex)],
     cfg: &AlignConfig,
+    top_k: usize,
 ) -> Result<(String, HalBlockList)> {
-    let mut maf_buf = String::from("##maf version=1 scoring=horizon_mdl\n");
-    let mut hal_blocks = Vec::new();
-    for (xi, (nx, ix)) in ref_indices.iter().enumerate() {
-        for (yi, (ny, iy)) in qry_indices.iter().enumerate() {
-            if shared_seed_count(ix, iy) < 8 {
-                continue;
+    let min_shared_seeds = 8usize;
+    let top_mask = if top_k > 0 {
+        Some(select_top_k_pairs(
+            ref_indices,
+            qry_indices,
+            top_k,
+            min_shared_seeds,
+        ))
+    } else {
+        None
+    };
+
+    let pairs: Vec<(usize, usize)> = (0..ref_indices.len())
+        .flat_map(|xi| (0..qry_indices.len()).map(move |yi| (xi, yi)))
+        .filter(|&(xi, yi)| {
+            if let Some(mask) = &top_mask {
+                mask[xi][yi]
+            } else {
+                shared_seed_count(&ref_indices[xi].1, &qry_indices[yi].1) >= min_shared_seeds
             }
+        })
+        .collect();
+
+    let results: Vec<(String, Option<HalBlock>)> = pairs
+        .par_iter()
+        .map(|&(xi, yi)| {
+            let (nx, ix) = &ref_indices[xi];
+            let (ny, iy) = &qry_indices[yi];
             let aln = align_contig_pair_with_config(ix, iy, cfg)?;
             if aln.aligned_pairs.is_empty() {
-                continue;
+                return Ok((String::new(), None));
             }
             let sx = &ref_contigs[xi].1;
             let sy = &qry_contigs[yi].1;
-            maf_buf.push_str(&format_maf_blocks(nx, sx.len(), ny, sy.len(), sx, sy, &aln));
-            if let Some(&(x0, y0)) = aln.aligned_pairs.first()
+            let maf = format_maf_blocks(nx, sx.len(), ny, sy.len(), sx, sy, &aln);
+            let hblk = if let Some(&(x0, y0)) = aln.aligned_pairs.first()
                 && let Some(&(x1, y1)) = aln.aligned_pairs.last()
                 && x1 > x0
             {
-                hal_blocks.push((x0, y0.min(y1), x1 - x0 + 1, y1 < y0));
-            }
+                Some((x0, y0.min(y1), x1 - x0 + 1, y1 < y0))
+            } else {
+                None
+            };
+            Ok((maf, hblk))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut maf_buf = String::from("##maf version=1 scoring=horizon_mdl\n");
+    let mut hal_blocks = Vec::new();
+    for (maf, hblk) in results {
+        if !maf.is_empty() {
+            maf_buf.push_str(&maf);
+        }
+        if let Some(b) = hblk {
+            hal_blocks.push(b);
         }
     }
     Ok((maf_buf, hal_blocks))
@@ -365,19 +447,38 @@ fn main() -> Result<()> {
     let raw_args: Vec<String> = std::env::args().skip(1).collect();
     let mut progressive = false;
     let mut respect_softmask = false;
+    let mut top_k = 0usize;
     let mut pos = Vec::new();
-    for a in raw_args {
-        if a == "--progressive" {
-            progressive = true;
-        } else if a == "--respect-softmask" {
-            respect_softmask = true;
-        } else {
-            pos.push(a);
+    let mut arg_i = 0usize;
+    while arg_i < raw_args.len() {
+        match raw_args[arg_i].as_str() {
+            "--progressive" => {
+                progressive = true;
+                arg_i += 1;
+            }
+            "--respect-softmask" => {
+                respect_softmask = true;
+                arg_i += 1;
+            }
+            "--rbest" => {
+                top_k = 1;
+                arg_i += 1;
+            }
+            "--top-k" if arg_i + 1 < raw_args.len() => {
+                if let Ok(v) = raw_args[arg_i + 1].parse() {
+                    top_k = v;
+                }
+                arg_i += 2;
+            }
+            other => {
+                pos.push(other.to_owned());
+                arg_i += 1;
+            }
         }
     }
     if pos.len() < 4 {
         bail!(
-            "usage: horizon_guide [--progressive] [--respect-softmask] <out_prefix> <max_contigs> <sp1=fa1> <sp2=fa2>..."
+            "usage: horizon_guide [--progressive] [--respect-softmask] [--rbest | --top-k K] <out_prefix> <max_contigs> <sp1=fa1> <sp2=fa2>..."
         );
     }
     let t0 = Instant::now();
@@ -420,8 +521,14 @@ fn main() -> Result<()> {
         if i == hinge_idx {
             continue;
         }
-        let (maf_buf, hblocks) =
-            align_species_pair(hinge_contigs, hinge_indices, qry_contigs, qry_indices, &cfg)?;
+        let (maf_buf, hblocks) = align_species_pair(
+            hinge_contigs,
+            hinge_indices,
+            qry_contigs,
+            qry_indices,
+            &cfg,
+            top_k,
+        )?;
         let q_idx = hal_queries.len();
         hal_queries.push((
             qry_sp.clone(),
@@ -467,6 +574,7 @@ fn main() -> Result<()> {
                     &indexed[j].1,
                     &indexed[j].2,
                     &cfg,
+                    top_k,
                 )?;
                 let pw_i = sp_to_pw_idx[&i];
                 let pw_j = sp_to_pw_idx[&j];
