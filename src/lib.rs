@@ -21,7 +21,7 @@ pub use mdl::{
 };
 pub use merge::merge_pairwise_mafs;
 pub use seeding::{
-    ContigIndex, MASK_KP14, MASK_LASTZ11, MASK_LASTZ12, MASK_W9, MASK_W10, canonical_spaced_seeds,
+    ContigIndex, MASK_PRIMARY_11_15, MASK_LASTZ11, MASK_LASTZ12, MASK_W9, MASK_W10, canonical_spaced_seeds,
     canonical_spaced_seeds_with_opts, cluster_strand_lcbs, find_lastz12_1transition_hits,
     find_lastz12_2transition_hits, lis_chain, local_w9_subchain, prepare_contig_index,
     prepare_contig_index_opts, revcomp, score_contig_pair_lcb, select_top_k_pairs,
@@ -70,7 +70,7 @@ mod tests {
     #[test]
     fn spaced_seeds_are_strand_symmetric_and_match_oracle() {
         let seq = b"ATATATATATATATATATATGCGCGCGCGCGCGCGCGCGCATATATATATATATATATAT";
-        let seeds = canonical_spaced_seeds(seq, MASK_KP14, 2).expect("valid mask");
+        let seeds = canonical_spaced_seeds(seq, MASK_PRIMARY_11_15, 2).expect("valid mask");
         assert_eq!(seeds.len(), 28);
 
         let rc: Vec<u8> = seq
@@ -84,7 +84,7 @@ mod tests {
                 other => other,
             })
             .collect();
-        let rc_seeds = canonical_spaced_seeds(&rc, MASK_KP14, 2).expect("valid mask");
+        let rc_seeds = canonical_spaced_seeds(&rc, MASK_PRIMARY_11_15, 2).expect("valid mask");
         assert_eq!(seeds.len(), rc_seeds.len());
         for key in seeds.keys() {
             assert!(rc_seeds.contains_key(key));

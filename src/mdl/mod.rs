@@ -7,7 +7,7 @@
 use crate::AlignError;
 use crate::bocpd::MIN_POST_PROB;
 use crate::seeding::{
-    ContigIndex, MASK_KP14, MASK_LASTZ11, MASK_LASTZ12, MASK_RY20, MASK_W9, MASK_W10,
+    ContigIndex, MASK_PRIMARY_11_15, MASK_LASTZ11, MASK_LASTZ12, MASK_RY20, MASK_W9, MASK_W10,
     append_hsp_gated_aa_lcbs, append_hsp_gated_lastz12_lcbs, append_nonoverlapping_lcbs,
     canonical_spaced_seeds_with_opts, find_lastz11_1transition_hits, find_lastz12_1transition_hits,
     find_lastz12_2transition_hits, find_translated_aa5_hits, find_w10_1transition_hits,
@@ -115,7 +115,7 @@ pub fn align_contig_pair_with_config(
     idx_y: &ContigIndex,
     cfg: &AlignConfig,
 ) -> Result<ContigAlignment, AlignError> {
-    let span = MASK_KP14.len();
+    let span = MASK_PRIMARY_11_15.len();
     let max_gap_bp = 2400;
     let max_local_rescue_bp = 40_000;
     let seq_x = &idx_x.seq;
@@ -259,7 +259,7 @@ pub fn align_contig_pair_with_config(
     }
     let t_lz1 = t_start.elapsed();
 
-    if cfg.use_multi_shape_seeds && primary_cov < 0.35 {
+    if cfg.use_multi_shape_seeds && primary_cov < 1.0 {
         // Skip O(N * 264) 2-transition scan once search space exceeds ~10^9 cell lookups
         // where single-transition + AA5 + BOCPD/MDL already dominate runtime.
         if (seq_x.len() as u128) * (seq_y.len() as u128) < 1_000_000_000 {

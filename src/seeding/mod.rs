@@ -5,7 +5,7 @@ use crate::bocpd::base_to_idx;
 use std::collections::HashMap;
 
 /// KP-14 spaced seed mask (weight 11, span 15).
-pub const MASK_KP14: &str = "111011011011011";
+pub const MASK_PRIMARY_11_15: &str = "111011011011011";
 /// Secondary `w=10` spaced seed mask for divergent intra-LCB chaining.
 pub const MASK_W10: &str = "11011011011011";
 /// Local `w=9` spaced seed mask for intra-gap anchor seeding.
@@ -337,7 +337,7 @@ pub struct ContigIndex {
 ///
 /// # Errors
 ///
-/// Returns [`AlignError::InvalidMask`] if `MASK_KP14` is invalid.
+/// Returns [`AlignError::InvalidMask`] if `MASK_PRIMARY_11_15` is invalid.
 pub fn prepare_contig_index(seq: &[u8]) -> Result<ContigIndex, AlignError> {
     prepare_contig_index_opts(seq, false)
 }
@@ -347,7 +347,7 @@ pub fn prepare_contig_index(seq: &[u8]) -> Result<ContigIndex, AlignError> {
 ///
 /// # Errors
 ///
-/// Returns [`AlignError::InvalidMask`] if `MASK_KP14` is invalid.
+/// Returns [`AlignError::InvalidMask`] if `MASK_PRIMARY_11_15` is invalid.
 pub fn prepare_contig_index_opts(
     seq: &[u8],
     skip_softmasked: bool,
@@ -369,9 +369,9 @@ pub fn prepare_contig_index_opts(
         .collect();
     let max_occ = if seq.len() >= 100_000 { 2 } else { 4 };
     let seeds_fwd =
-        canonical_spaced_seeds_with_opts(seq, MASK_KP14, max_occ, skip_softmasked, false)?;
+        canonical_spaced_seeds_with_opts(seq, MASK_PRIMARY_11_15, max_occ, skip_softmasked, false)?;
     let seeds_rc =
-        canonical_spaced_seeds_with_opts(&seq_rc_case, MASK_KP14, max_occ, skip_softmasked, false)?;
+        canonical_spaced_seeds_with_opts(&seq_rc_case, MASK_PRIMARY_11_15, max_occ, skip_softmasked, false)?;
     Ok(ContigIndex {
         seq: seq.to_vec(),
         seq_rc: revcomp(seq),

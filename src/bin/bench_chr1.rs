@@ -1,7 +1,7 @@
 //! Benchmark binary running KP-14 + banded MDL/BOCPD on real Plasmodium Chr1 FASTAs.
 
 use anyhow::{Context, Result};
-use horizon_aligner::{MASK_KP14, banded_mdl_gap, canonical_spaced_seeds, lis_chain};
+use horizon_aligner::{MASK_PRIMARY_11_15, banded_mdl_gap, canonical_spaced_seeds, lis_chain};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -47,8 +47,8 @@ fn main() -> Result<()> {
     let seq_x = read_first_contig(&fa_x)?;
     let seq_y_raw = read_first_contig(&fa_y)?;
 
-    let ix = canonical_spaced_seeds(&seq_x, MASK_KP14, 1)?;
-    let iy_fwd = canonical_spaced_seeds(&seq_y_raw, MASK_KP14, 1)?;
+    let ix = canonical_spaced_seeds(&seq_x, MASK_PRIMARY_11_15, 1)?;
+    let iy_fwd = canonical_spaced_seeds(&seq_y_raw, MASK_PRIMARY_11_15, 1)?;
     let mut hits_fwd = Vec::new();
     for (k, px) in &ix {
         if let Some(py) = iy_fwd.get(k) {
@@ -58,7 +58,7 @@ fn main() -> Result<()> {
     let chain_fwd = lis_chain(&hits_fwd);
 
     let seq_y_rc = revcomp(&seq_y_raw);
-    let iy_rc = canonical_spaced_seeds(&seq_y_rc, MASK_KP14, 1)?;
+    let iy_rc = canonical_spaced_seeds(&seq_y_rc, MASK_PRIMARY_11_15, 1)?;
     let mut hits_rc = Vec::new();
     for (k, px) in &ix {
         if let Some(py) = iy_rc.get(k) {
@@ -73,7 +73,7 @@ fn main() -> Result<()> {
         (chain_fwd, seq_y_raw)
     };
 
-    let span = MASK_KP14.len();
+    let span = MASK_PRIMARY_11_15.len();
     let mut macro_bubbles = 0usize;
     let mut dp_gaps = 0usize;
     let mut kept_gap_cols = 0usize;
