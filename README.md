@@ -103,3 +103,4 @@ For a detailed explanation of the algorithmic stages (MDL, BOCPD, multi-shape se
 
 * [Technical Manual](docs/manual.md): Comprehensive documentation covering theory, processing stages, CLI usage, and outputs.
 * [Benchmark Datasets](docs/BENCHMARK_DATASETS.md): A complete listing of the UCSC and Ensembl datasets used to evaluate aligner performance across different evolutionary divergences.
+* [Benchmark Results](docs/BENCHMARK_RESULTS.md): Zero-shot evaluation metrics on deep divergence datasets using the default Information-Theoretic MDL thresholds. of the UCSC and Ensembl datasets used to evaluate aligner performance across different evolutionary divergences.
