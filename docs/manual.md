@@ -33,6 +33,17 @@
 `horizon-aligner` solves this by replacing the static affine penalty model with a **Minimum Description Length (MDL)** framework, governed by **Bayesian Online Changepoint Detection (BOCPD)**. 
 
 ### Horizon Bubbles
+
+```mermaid
+flowchart LR
+    A[LCB 1] -->|Aligned DP path| B[LCB 2]
+    B -->|Unaligned Query sequence| C[LCB 3]
+    B -->|Unaligned Target sequence| C
+    style B stroke:#333,stroke-width:2px
+    style C stroke:#333,stroke-width:2px
+    C -.->|Horizon Bubble explicitly preserves topology| C
+```
+
 Instead of forcing low-confidence sequences to align or arbitrarily breaking the alignment, the aligner explicitly abstains. Regions lacking sufficient bit-savings are emitted as "Horizon Bubbles"—unaligned graphical paths preserving the structural topology.
 
 ---
@@ -53,6 +64,24 @@ Binaries will be placed in `target/release/`.
 ---
 
 ## 3. Overview of Processing Stages
+
+```mermaid
+flowchart TD
+    A[FASTA Inputs] --> B[Target Indexing]
+    B --> C{Spaced Seeding}
+    C -->|Primary 11-of-15| D[Ungapped Extension / HSP Gating]
+    C -->|Fallback RY20 / AA / LASTZ12| D
+    D --> E[LIS Chaining into LCBs]
+    E --> F{Gap Evaluation}
+    F -->|> max_gap_bp| G[Macro Horizon Bubble]
+    F -->|<= max_gap_bp| H[Banded MDL+BOCPD DP]
+    H -->|Bit-savings < min_delta| I[Internal Horizon Bubble]
+    H -->|Bit-savings >= min_delta| J[Aligned Bases]
+    G --> K[E-Graph Paralog Resolution]
+    I --> K
+    J --> K
+    K --> L[(MAF / GFA Output)]
+```
 
 The general flow of `horizon-aligner` mimics the traditional BLASTZ/LASTZ pipeline but introduces novel theoretical frameworks at key bottlenecks:
 
