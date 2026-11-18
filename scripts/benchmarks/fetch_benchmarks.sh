@@ -14,3 +14,11 @@ echo "Downloading UCSC hg38 470-way chr22 random..."
 curl -O -s http://hgdownload.soe.ucsc.edu/goldenPath/hg38/multiz470way/maf/chr22_KI270735v1_random.maf
 
 echo "Done!"
+
+echo "Extracting Zoonomia 241-way chr22 random slice via UCSC API..."
+# Download bigMafToMaf if not present
+if [ ! -f "bigMafToMaf" ]; then
+    curl -O -s http://hgdownload.soe.ucsc.edu/admin/exe/linux.x86_64/bigMafToMaf
+    chmod +x bigMafToMaf
+fi
+./bigMafToMaf http://hgdownload.soe.ucsc.edu/goldenPath/hg38/cactus241way/cactus241way.bigMaf -chrom=chr22_KI270735v1_random -start=0 -end=38000 cactus241way_chr22_random.maf
