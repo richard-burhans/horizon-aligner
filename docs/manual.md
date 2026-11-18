@@ -34,7 +34,7 @@
 
 ### Horizon Bubbles
 
-![Horizon Bubbles Concept](images/bubble.svg?v=2)
+![Horizon Bubbles Concept](images/bubble.svg)
 
 Instead of forcing low-confidence sequences to align or arbitrarily breaking the alignment, the aligner explicitly abstains. Regions lacking sufficient bit-savings are emitted as "Horizon Bubbles"—unaligned graphical paths preserving the structural topology.
 
@@ -57,7 +57,7 @@ Binaries will be placed in `target/release/`.
 
 ## 3. Overview of Processing Stages
 
-![Horizon Aligner Pipeline](images/pipeline.svg?v=2)
+![Horizon Aligner Pipeline](images/pipeline.svg)
 
 The general flow of `horizon-aligner` mimics the traditional BLASTZ/LASTZ pipeline but introduces novel theoretical frameworks at key bottlenecks:
 
