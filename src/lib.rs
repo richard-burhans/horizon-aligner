@@ -23,7 +23,8 @@ pub use seeding::{
     ContigIndex, MASK_KP14, MASK_LASTZ11, MASK_LASTZ12, MASK_W9, MASK_W10, canonical_spaced_seeds,
     canonical_spaced_seeds_with_opts, cluster_strand_lcbs, find_lastz12_1transition_hits,
     find_lastz12_2transition_hits, lis_chain, local_w9_subchain, prepare_contig_index,
-    prepare_contig_index_opts, revcomp, score_contig_pair_lcb, shared_seed_count,
+    prepare_contig_index_opts, revcomp, score_contig_pair_lcb, select_top_k_pairs,
+    shared_seed_count,
 };
 
 use thiserror::Error;

@@ -1008,6 +1008,53 @@ pub fn score_contig_pair_lcb(idx_x: &ContigIndex, idx_y: &ContigIndex) -> usize 
         .unwrap_or(0)
 }
 
+/// Select top-`K` (or reciprocal-best when `top_k == 1`) contig pairs between two assemblies.
+#[must_use]
+pub fn select_top_k_pairs(
+    target_idx: &[(String, ContigIndex)],
+    query_idx: &[(String, ContigIndex)],
+    top_k: usize,
+    min_shared_seeds: usize,
+) -> Vec<Vec<bool>> {
+    use rayon::prelude::*;
+    let scores: Vec<((usize, usize), (usize, usize))> = (0..target_idx.len())
+        .into_par_iter()
+        .flat_map(|x_i| {
+            (0..query_idx.len()).into_par_iter().map(move |y_i| {
+                let seeds = shared_seed_count(&target_idx[x_i].1, &query_idx[y_i].1);
+                let lcb = if seeds >= min_shared_seeds {
+                    score_contig_pair_lcb(&target_idx[x_i].1, &query_idx[y_i].1)
+                } else {
+                    0
+                };
+                ((x_i, y_i), (lcb, seeds))
+            })
+        })
+        .collect();
+    let mut by_x: Vec<Vec<((usize, usize), usize)>> = vec![Vec::new(); target_idx.len()];
+    let mut by_y: Vec<Vec<((usize, usize), usize)>> = vec![Vec::new(); query_idx.len()];
+    for &((x_i, y_i), sc) in &scores {
+        if sc.1 >= min_shared_seeds {
+            by_x[x_i].push((sc, y_i));
+            by_y[y_i].push((sc, x_i));
+        }
+    }
+    let mut mask = vec![vec![false; query_idx.len()]; target_idx.len()];
+    for (x_i, list) in by_x.iter_mut().enumerate() {
+        list.sort_unstable_by_key(|a| std::cmp::Reverse(a.0));
+        for &(_, y_i) in list.iter().take(top_k) {
+            mask[x_i][y_i] = true;
+        }
+    }
+    for (y_i, list) in by_y.iter_mut().enumerate() {
+        list.sort_unstable_by_key(|a| std::cmp::Reverse(a.0));
+        for &(_, x_i) in list.iter().take(top_k) {
+            mask[x_i][y_i] = true;
+        }
+    }
+    mask
+}
+
 /// Align two pre-indexed contigs without recomputing KP-14 seed maps.
 ///
 /// Reverse-complement a DNA byte slice (uppercasing ASCII bases).

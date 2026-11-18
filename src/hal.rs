@@ -609,6 +609,8 @@ fn read_at<R: std::io::Read + std::io::Seek>(
     Ok(buf)
 }
 
+const MAX_HDF5_META_BYTES: usize = 16 * 1024 * 1024;
+
 fn iter_v1_header_messages_seek<R: std::io::Read + std::io::Seek, F>(
     r: &mut R,
     obj_addr: u64,
@@ -626,6 +628,9 @@ where
         prefix[8], prefix[9], prefix[10], prefix[11],
     ]))
     .unwrap_or(0);
+    if hdr_size > MAX_HDF5_META_BYTES {
+        return Ok(None);
+    }
     let first_buf = read_at(r, obj_addr + 16, hdr_size)?;
     let mut chunks = std::collections::VecDeque::from([first_buf]);
     let mut visited_addrs = std::collections::HashSet::from([obj_addr]);
@@ -647,6 +652,7 @@ where
                 if let (Some(cont_addr), Some(len_u64)) =
                     (read_u64_le(body, 0), read_u64_le(body, 8))
                     && let Ok(cont_len) = usize::try_from(len_u64)
+                    && cont_len <= MAX_HDF5_META_BYTES
                     && visited_addrs.len() < 1024
                     && visited_addrs.insert(cont_addr)
                 {
@@ -759,6 +765,9 @@ pub fn read_hdf5_v0_group_entries_seek<R: std::io::Read + std::io::Seek>(
     else {
         return Ok(None);
     };
+    if data_seg_size > MAX_HDF5_META_BYTES {
+        return Ok(None);
+    }
     let Some(data_seg_addr) = read_u64_le(&heap_hdr, 24) else {
         return Ok(None);
     };

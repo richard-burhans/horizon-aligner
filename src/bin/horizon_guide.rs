@@ -3,7 +3,7 @@
 use anyhow::{Context, Result, bail};
 use horizon_aligner::{
     AlignConfig, ContigIndex, align_contig_pair_with_config, format_maf_blocks, hal::HalAlignment,
-    merge_pairwise_mafs, prepare_contig_index_opts, read_fasta_contigs, score_contig_pair_lcb,
+    merge_pairwise_mafs, prepare_contig_index_opts, read_fasta_contigs, select_top_k_pairs,
     shared_seed_count,
 };
 use rayon::prelude::*;
@@ -45,50 +45,6 @@ fn select_central_hinge(species: &[IndexedSpecies]) -> usize {
 
 type HalBlock = (usize, usize, usize, bool);
 type HalBlockList = Vec<HalBlock>;
-
-fn select_top_k_pairs(
-    ref_indices: &[(String, ContigIndex)],
-    qry_indices: &[(String, ContigIndex)],
-    top_k: usize,
-    min_shared_seeds: usize,
-) -> Vec<Vec<bool>> {
-    let scores: Vec<((usize, usize), (usize, usize))> = (0..ref_indices.len())
-        .into_par_iter()
-        .flat_map(|x_i| {
-            (0..qry_indices.len()).into_par_iter().map(move |y_i| {
-                let seeds = shared_seed_count(&ref_indices[x_i].1, &qry_indices[y_i].1);
-                let lcb = if seeds >= min_shared_seeds {
-                    score_contig_pair_lcb(&ref_indices[x_i].1, &qry_indices[y_i].1)
-                } else {
-                    0
-                };
-                ((x_i, y_i), (lcb, seeds))
-            })
-        })
-        .collect();
-    let mut by_x: Vec<Vec<((usize, usize), usize)>> = vec![Vec::new(); ref_indices.len()];
-    let mut by_y: Vec<Vec<((usize, usize), usize)>> = vec![Vec::new(); qry_indices.len()];
-    for &((x_i, y_i), sc) in &scores {
-        if sc.1 >= min_shared_seeds {
-            by_x[x_i].push((sc, y_i));
-            by_y[y_i].push((sc, x_i));
-        }
-    }
-    let mut mask = vec![vec![false; qry_indices.len()]; ref_indices.len()];
-    for (x_i, list) in by_x.iter_mut().enumerate() {
-        list.sort_unstable_by_key(|a| std::cmp::Reverse(a.0));
-        for &(_, y_i) in list.iter().take(top_k) {
-            mask[x_i][y_i] = true;
-        }
-    }
-    for (y_i, list) in by_y.iter_mut().enumerate() {
-        list.sort_unstable_by_key(|a| std::cmp::Reverse(a.0));
-        for &(_, x_i) in list.iter().take(top_k) {
-            mask[x_i][y_i] = true;
-        }
-    }
-    mask
-}
 
 fn align_species_pair(
     ref_contigs: &ContigList,
