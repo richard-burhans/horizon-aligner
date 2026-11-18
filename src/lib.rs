@@ -1370,6 +1370,18 @@ fn find_translated_aa5_hits(
     hits
 }
 
+const fn aa_pair_score(ax: u8, ay: u8) -> i32 {
+    const GROUP: [u8; 20] = [0, 1, 2, 2, 3, 0, 4, 5, 4, 5, 5, 6, 7, 6, 4, 8, 8, 5, 3, 3];
+    if ax == ay {
+        return 15;
+    }
+    if (ax as usize) < 20 && (ay as usize) < 20 && GROUP[ax as usize] == GROUP[ay as usize] {
+        6
+    } else {
+        -6
+    }
+}
+
 /// Extend an ungapped codon-level amino-acid HSP from a 5-codon (`15 bp`) seed.
 fn extend_aa_ungapped_hsp(
     seq_x: &[u8],
@@ -1378,8 +1390,6 @@ fn extend_aa_ungapped_hsp(
     py: usize,
     min_score: i32,
 ) -> Option<(usize, usize, usize, usize, i32)> {
-    const AA_MATCH: i32 = 15;
-    const AA_MISMATCH: i32 = -6;
     const AA_XDROP: i32 = 30;
     if px + 15 > seq_x.len() || py + 15 > seq_y.len() {
         return None;
@@ -1396,7 +1406,7 @@ fn extend_aa_ungapped_hsp(
             seq_y[py + c * 3 + 1],
             seq_y[py + c * 3 + 2],
         )?;
-        core += if ax == ay { AA_MATCH } else { AA_MISMATCH };
+        core += aa_pair_score(ax, ay);
     }
 
     let mut cur = 0i32;
@@ -1412,7 +1422,7 @@ fn extend_aa_ungapped_hsp(
         ) else {
             break;
         };
-        cur += if ax == ay { AA_MATCH } else { AA_MISMATCH };
+        cur += aa_pair_score(ax, ay);
         if cur > best_left {
             best_left = cur;
             lx = ix;
@@ -1434,7 +1444,7 @@ fn extend_aa_ungapped_hsp(
         ) else {
             break;
         };
-        cur += if ax == ay { AA_MATCH } else { AA_MISMATCH };
+        cur += aa_pair_score(ax, ay);
         ix += 3;
         iy += 3;
         if cur > best_right {
@@ -1869,6 +1879,35 @@ pub fn align_contig_pair_with_config(
                 let sub9 = local_w9_subchain(seq_x, y_work, 0, 0, MASK_W9, 120, 1200)?;
                 if sub9.len() >= 4 {
                     rescued_inter.push(sub9);
+                }
+            }
+        }
+        if let Some(first_lcb) = lcb_list.first()
+            && seq_x.len() <= 50_000
+        {
+            let (fx, fy) = first_lcb[0];
+            if (100..=2500).contains(&fx) && (100..=2500).contains(&fy) {
+                let sub =
+                    local_w9_subchain(&seq_x[..fx], &y_work[..fy], 0, 0, MASK_W10, 200, 1800)?;
+                if sub.len() >= 3 {
+                    rescued_inter.push(sub);
+                }
+            }
+        }
+        if let Some(last_lcb) = lcb_list.last()
+            && seq_x.len() <= 50_000
+        {
+            let lx = last_lcb[last_lcb.len() - 1].0 + span;
+            let ly = last_lcb[last_lcb.len() - 1].1 + span;
+            if seq_x.len() > lx
+                && y_work.len() > ly
+                && (100..=2500).contains(&(seq_x.len() - lx))
+                && (100..=2500).contains(&(y_work.len() - ly))
+            {
+                let sub =
+                    local_w9_subchain(&seq_x[lx..], &y_work[ly..], lx, ly, MASK_W10, 200, 1800)?;
+                if sub.len() >= 3 {
+                    rescued_inter.push(sub);
                 }
             }
         }

@@ -524,6 +524,88 @@ pub fn read_hdf5_v0_contiguous_data(bytes: &[u8], obj_addr: usize) -> Option<&[u
     None
 }
 
+/// One raw HDF5 chunk descriptor from a B-tree v1 type-1 chunk index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Hdf5Chunk {
+    /// Compressed/stored byte length of the chunk in the file.
+    pub size: u32,
+    /// File byte offset of the chunk payload.
+    pub addr: u64,
+}
+
+fn walk_chunk_btree_v1(bytes: &[u8], node_addr: usize, ndim: usize, out: &mut Vec<Hdf5Chunk>) {
+    if bytes.get(node_addr..node_addr + 4) != Some(b"TREE") {
+        return;
+    }
+    let node_type = *bytes.get(node_addr + 4).unwrap_or(&255);
+    let node_level = *bytes.get(node_addr + 5).unwrap_or(&255);
+    let Some(n_entries) = bytes
+        .get(node_addr + 6..node_addr + 8)
+        .map(|b| usize::from(u16::from_le_bytes([b[0], b[1]])))
+    else {
+        return;
+    };
+    if node_type != 1 {
+        return;
+    }
+    // Type-1 chunk key: 4 bytes chunk_size + 4 bytes filter_mask + (ndim + 1) * 8 bytes coords.
+    let key_bytes = 8 + (ndim + 1) * 8;
+    let rec_bytes = key_bytes + 8;
+    for i in 0..n_entries {
+        let key_off = node_addr + 24 + i * rec_bytes;
+        let Some(sz_bytes) = bytes.get(key_off..key_off + 4) else {
+            break;
+        };
+        let chunk_size = u32::from_le_bytes([sz_bytes[0], sz_bytes[1], sz_bytes[2], sz_bytes[3]]);
+        let Some(child_addr) = read_u64_le(bytes, key_off + key_bytes) else {
+            break;
+        };
+        if node_level == 0 {
+            out.push(Hdf5Chunk {
+                size: chunk_size,
+                addr: child_addr,
+            });
+        } else if let Ok(sub) = usize::try_from(child_addr) {
+            walk_chunk_btree_v1(bytes, sub, ndim, out);
+        }
+    }
+}
+
+/// Read chunked dataset descriptors (`DataLayout` `0x0008`, class `2`) from an HDF5 v1 object header.
+#[must_use]
+pub fn read_hdf5_v0_chunk_addrs(bytes: &[u8], obj_addr: usize) -> Option<Vec<Hdf5Chunk>> {
+    let slice = bytes.get(obj_addr..)?;
+    if slice.len() < 16 || slice[0] != 1 {
+        return None;
+    }
+    let num_msgs = usize::from(u16::from_le_bytes([slice[2], slice[3]]));
+    let hdr_size = usize::try_from(u32::from_le_bytes([
+        slice[8], slice[9], slice[10], slice[11],
+    ]))
+    .ok()?;
+    let mut pos = 16usize;
+    let end = (16 + hdr_size).min(slice.len());
+    let mut seen = 0usize;
+    while seen < num_msgs && pos + 8 <= end {
+        let mtype = u16::from_le_bytes([slice[pos], slice[pos + 1]]);
+        let msize = usize::from(u16::from_le_bytes([slice[pos + 2], slice[pos + 3]]));
+        if mtype == 0x0008 && msize >= 11 && pos + 8 + 11 <= end {
+            let layout_ver = slice[pos + 8];
+            let layout_class = slice[pos + 9];
+            if layout_ver == 3 && layout_class == 2 {
+                let ndim = usize::from(slice[pos + 10]);
+                let btree_addr = usize::try_from(read_u64_le(slice, pos + 11)?).ok()?;
+                let mut chunks = Vec::new();
+                walk_chunk_btree_v1(bytes, btree_addr, ndim, &mut chunks);
+                return Some(chunks);
+            }
+        }
+        seen += 1;
+        pos += 8 + msize;
+    }
+    None
+}
+
 const fn decode_hal_nibble(nibble: u8) -> u8 {
     match nibble & 0x0f {
         0 => b'a',

@@ -360,7 +360,12 @@ fn emit_rescued_runs(
             .iter()
             .filter(|p| p.2.eq_ignore_ascii_case(&p.3))
             .count();
-        if run.len() >= min_run_len && matches * 100 >= run.len() * min_ident_pct {
+        let mismatches = run.len() - matches;
+        let net_score = matches.cast_signed() * 10 - mismatches.cast_signed() * 12;
+        if run.len() >= min_run_len
+            && matches * 100 >= run.len() * min_ident_pct
+            && net_score >= 100
+        {
             let h_start = run[0].0;
             let size = run.len();
             let d_min = run.iter().map(|p| p.1).min().unwrap_or(0);
@@ -502,7 +507,7 @@ fn main() -> Result<()> {
                     &pairwise_mafs[pw_j].1,
                     true,
                     12,
-                    70,
+                    75,
                 );
                 if !rescued_j.is_empty() {
                     rescues.push((pw_j, rescued_j));
@@ -515,7 +520,7 @@ fn main() -> Result<()> {
                     &pairwise_mafs[pw_i].1,
                     false,
                     12,
-                    70,
+                    75,
                 );
                 if !rescued_i.is_empty() {
                     rescues.push((pw_i, rescued_i));
