@@ -38,15 +38,24 @@
 
   <path d="M300,240 L300,280" stroke="#333333" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)" />
 
-  <!-- Level 5: Gapped Extension -->
+  <!-- Level 5: Gapped Alignment -->
   <rect x="200" y="280" width="200" height="30" fill="#D55E00" stroke="none" rx="4" />
   <text x="300" y="299" text-anchor="middle" fill="white" font-weight="bold" font-family="Helvetica, Arial, sans-serif" font-size="10px">Banded MDL+BOCPD Gapped Alignment</text>
 
   <path d="M300,310 L300,350" stroke="#333333" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)" />
   <text x="310" y="335" fill="#333333" font-size="9px" font-family="Helvetica, Arial, sans-serif">Bit-savings &gt;= min_delta</text>
 
-  <path d="M200,295 L140,295 L140,365 L200,365" stroke="#333333" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)" />
-  <text x="130" y="335" fill="#333333" font-size="9px" font-family="Helvetica, Arial, sans-serif" text-anchor="end">Explicit Abstention</text>
+  <!-- Explicit Abstention Path -->
+  <path d="M200,295 L90,295 L90,320" stroke="#333333" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)" />
+  <text x="180" y="290" fill="#333333" font-size="9px" font-family="Helvetica, Arial, sans-serif" text-anchor="end">Explicit Abstention</text>
+
+  <!-- Bubble Node -->
+  <rect x="20" y="320" width="140" height="35" fill="white" stroke="#D55E00" stroke-width="1.5" stroke-dasharray="4 2" rx="4" />
+  <text x="90" y="335" text-anchor="middle" fill="#333333" font-weight="bold" font-family="Helvetica, Arial, sans-serif" font-size="10px">Horizon Bubbles</text>
+  <text x="90" y="348" text-anchor="middle" fill="#555555" font-family="Helvetica, Arial, sans-serif" font-size="9px">(External / Macro &amp; Internal)</text>
+
+  <!-- Bubble to Output -->
+  <path d="M90,355 L90,435 L200,435" stroke="#333333" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)" />
 
   <!-- Level 6: Resolution -->
   <rect x="200" y="350" width="200" height="30" fill="#F0E442" stroke="none" rx="4" />

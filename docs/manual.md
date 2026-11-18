@@ -34,7 +34,7 @@
 
 ### Horizon Bubbles
 
-![Horizon Bubbles Concept](images/bubble_v3.svg)
+![Horizon Bubbles Concept](images/bubble_v4.svg)
 
 *Figure 2. Explicit abstention produces unaligned Horizon Bubbles preserving graph topology.* Orange blocks represent chained locally colinear blocks (LCBs). The solid green path depicts an aligned region passing the minimum bit-savings threshold. Dashed paths (blue for target, pink for query) represent a "Horizon Bubble"—a region where the algorithm explicitly abstains from alignment, preserving the independent topologies of the divergent sequences without forcing spurious matches.
 
@@ -59,9 +59,9 @@ Binaries will be placed in `target/release/`.
 
 ## 3. Overview of Processing Stages
 
-![Horizon Aligner Pipeline](images/pipeline_v3.svg)
+![Horizon Aligner Pipeline](images/pipeline_v4.svg)
 
-*Figure 1. Flowchart of the Horizon Aligner processing stages.* The algorithm proceeds through target indexing, spaced-seed querying, ungapped extension, banded gapped alignment, and e-graph paralog resolution. Arrows indicate the flow of sequence data, highlighting the explicit abstention pathway that bypasses forced alignment in low-confidence regions. Colors denote distinct algorithmic phases according to the Okabe-Ito palette.
+*Figure 1. Flowchart of the Horizon Aligner processing stages.* The algorithm proceeds through target indexing, spaced-seed querying, ungapped extension, banded gapped alignment, and e-graph paralog resolution. Arrows indicate the flow of sequence data, highlighting the explicit abstention pathway that bypasses forced alignment in low-confidence regions. Colors denote distinct algorithmic phases.
 
 The general flow of `horizon-aligner` mimics the traditional BLASTZ/LASTZ pipeline but introduces novel theoretical frameworks at key bottlenecks:
 
