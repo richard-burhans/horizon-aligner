@@ -2,8 +2,8 @@
 
 use anyhow::{Context, Result};
 use horizon_aligner::{
-    ContigIndex, align_contig_pair_indexed, format_gfa_summary, prepare_contig_index,
-    shared_seed_count,
+    ContigIndex, align_contig_pair_indexed, format_gfa_blocks, format_gfa_summary,
+    format_maf_blocks, prepare_contig_index, resolve_lcb_duplications, shared_seed_count,
 };
 use rayon::prelude::*;
 use std::fs;
@@ -40,23 +40,70 @@ fn read_fasta_contigs(path: &Path, max_contigs: usize) -> Result<Vec<(String, Ve
     Ok(out)
 }
 
-fn main() -> Result<()> {
-    let args: Vec<String> = std::env::args().collect();
-    let (fa_x, fa_y, max_contigs) = if args.len() >= 3 {
-        let mc = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(1);
-        (PathBuf::from(&args[1]), PathBuf::from(&args[2]), mc)
-    } else {
-        let base = "/home/agent/.gemini/antigravity-cli/brain/c77b5ff5-88ad-43af-973a-c37dbadc186d/scratch/plasmodium_fastas";
-        (
-            Path::new(base).join("GCA_032713075.1__Plasmodium_falciparum.fa"),
-            Path::new(base).join("GCA_914969965.1__Plasmodium_vivax.fa"),
-            1,
-        )
-    };
+struct CliArgs {
+    fa_x: PathBuf,
+    fa_y: PathBuf,
+    max_contigs: usize,
+    maf_out: Option<PathBuf>,
+    gfa_out: Option<PathBuf>,
+    resolve_dups: bool,
+}
 
+fn parse_args() -> CliArgs {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut pos = Vec::new();
+    let mut maf_out = None;
+    let mut gfa_out = None;
+    let mut resolve_dups = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--maf" if i + 1 < args.len() => {
+                maf_out = Some(PathBuf::from(&args[i + 1]));
+                i += 2;
+            }
+            "--gfa" if i + 1 < args.len() => {
+                gfa_out = Some(PathBuf::from(&args[i + 1]));
+                i += 2;
+            }
+            "--resolve-dups" => {
+                resolve_dups = true;
+                i += 1;
+            }
+            _ => {
+                pos.push(args[i].clone());
+                i += 1;
+            }
+        }
+    }
+
+    let base = "/home/agent/.gemini/antigravity-cli/brain/c77b5ff5-88ad-43af-973a-c37dbadc186d/scratch/plasmodium_fastas";
+    let fa_x = pos.first().map_or_else(
+        || Path::new(base).join("GCA_032713075.1__Plasmodium_falciparum.fa"),
+        PathBuf::from,
+    );
+    let fa_y = pos.get(1).map_or_else(
+        || Path::new(base).join("GCA_914969965.1__Plasmodium_vivax.fa"),
+        PathBuf::from,
+    );
+    let max_contigs = pos.get(2).and_then(|s| s.parse().ok()).unwrap_or(1);
+
+    CliArgs {
+        fa_x,
+        fa_y,
+        max_contigs,
+        maf_out,
+        gfa_out,
+        resolve_dups,
+    }
+}
+
+fn main() -> Result<()> {
+    let cli = parse_args();
     let t0 = Instant::now();
-    let contigs_x = read_fasta_contigs(&fa_x, max_contigs)?;
-    let contigs_y = read_fasta_contigs(&fa_y, max_contigs)?;
+    let contigs_x = read_fasta_contigs(&cli.fa_x, cli.max_contigs)?;
+    let contigs_y = read_fasta_contigs(&cli.fa_y, cli.max_contigs)?;
 
     let idx_x: Vec<(String, ContigIndex)> = contigs_x
         .par_iter()
@@ -69,20 +116,53 @@ fn main() -> Result<()> {
 
     let mut total_pairs = 0usize;
     let mut total_bubbles = 0usize;
-    let mut gfa_out = String::new();
+    let mut summary_out = String::new();
+    let mut maf_buf = String::new();
+    let mut gfa_buf = String::new();
 
-    for (nx, ix) in &idx_x {
-        for (ny, iy) in &idx_y {
+    for (x_i, (nx, ix)) in idx_x.iter().enumerate() {
+        for (y_i, (ny, iy)) in idx_y.iter().enumerate() {
             if shared_seed_count(ix, iy) < 8 {
                 continue;
             }
             let aln = align_contig_pair_indexed(ix, iy)?;
-            if !aln.aligned_pairs.is_empty() {
-                total_pairs += aln.aligned_pairs.len();
-                total_bubbles += aln.macro_bubbles + aln.internal_bubbles;
-                gfa_out.push_str(&format_gfa_summary(nx, ny, &aln));
+            if aln.aligned_pairs.is_empty() {
+                continue;
+            }
+            total_pairs += aln.aligned_pairs.len();
+            total_bubbles += aln.macro_bubbles + aln.internal_bubbles;
+            summary_out.push_str(&format_gfa_summary(nx, ny, &aln));
+
+            if cli.maf_out.is_some() {
+                let sx = &contigs_x[x_i].1;
+                let sy = &contigs_y[y_i].1;
+                maf_buf.push_str(&format_maf_blocks(nx, sx.len(), ny, sy.len(), sx, sy, &aln));
+            }
+            if cli.gfa_out.is_some() {
+                gfa_buf.push_str(&format_gfa_blocks(nx, ny, &aln));
+            }
+            if cli.resolve_dups {
+                let mut labels: Vec<(String, i8)> = Vec::new();
+                for idx in 0..aln.lcbs_fwd.min(4) {
+                    labels.push((format!("F{idx}"), 1));
+                }
+                for idx in 0..aln.lcbs_rc.min(4) {
+                    labels.push((format!("R{idx}"), -1));
+                }
+                let refs: Vec<(&str, i8)> =
+                    labels.iter().map(|(s, st)| (s.as_str(), *st)).collect();
+                if let Some(expr) = resolve_lcb_duplications(&refs) {
+                    let _ = expr;
+                }
             }
         }
+    }
+
+    if let Some(maf_path) = &cli.maf_out {
+        fs::write(maf_path, &maf_buf).with_context(|| format!("writing {}", maf_path.display()))?;
+    }
+    if let Some(gfa_path) = &cli.gfa_out {
+        fs::write(gfa_path, &gfa_buf).with_context(|| format!("writing {}", gfa_path.display()))?;
     }
 
     let elapsed = t0.elapsed().as_secs_f64();
@@ -94,8 +174,8 @@ fn main() -> Result<()> {
         total_bubbles,
         elapsed
     );
-    if !gfa_out.is_empty() {
-        print!("{gfa_out}");
+    if !summary_out.is_empty() {
+        print!("{summary_out}");
     }
     Ok(())
 }

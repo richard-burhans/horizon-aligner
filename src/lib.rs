@@ -981,6 +981,17 @@ pub fn align_contig_pair_indexed(
     let raw_fwd = cluster_strand_lcbs(&hits_fwd, 3500, 350, 8, 100, 450.0);
     let raw_rc = cluster_strand_lcbs(&hits_rc, 3500, 350, 8, 100, 450.0);
 
+    // Early exit for off-diagonal contig pairs with no colinear w=12 LCBs.
+    if raw_fwd.is_empty() && raw_rc.is_empty() {
+        return Ok(ContigAlignment {
+            aligned_pairs: Vec::new(),
+            lcbs_fwd: 0,
+            lcbs_rc: 0,
+            macro_bubbles: 0,
+            internal_bubbles: 0,
+        });
+    }
+
     // Sparse-exon fallback: find w=10 LCBs in intervals not covered by unmerged w=12 LCBs.
     let ix10 = canonical_spaced_seeds(seq_x, MASK_W10, 2)?;
     let iy10_fwd = canonical_spaced_seeds(seq_y, MASK_W10, 2)?;
@@ -1228,6 +1239,91 @@ pub fn format_gfa_summary(name_x: &str, name_y: &str, aln: &ContigAlignment) -> 
     out
 }
 
+/// Emit detailed GFA v1.1 block segments, Horizon-Bubble nodes, and links for a contig pair.
+#[must_use]
+pub fn format_gfa_blocks(name_x: &str, name_y: &str, aln: &ContigAlignment) -> String {
+    let mut out = String::from("H\tVN:Z:1.1\n");
+    if aln.aligned_pairs.is_empty() {
+        return out;
+    }
+
+    let runs: Vec<(usize, usize, usize, char)> = partition_colinear_blocks(&aln.aligned_pairs)
+        .into_iter()
+        .map(|(blk, is_rev)| {
+            let strand = if is_rev { '-' } else { '+' };
+            (blk[0].0, blk[0].1, blk.len(), strand)
+        })
+        .collect();
+
+    for (idx, &(bx, by, blen, bst)) in runs.iter().enumerate() {
+        let seg_id = format!("{name_x}__{name_y}__blk_{idx}");
+        let _ = writeln!(
+            out,
+            "S\t{seg_id}\t*\tLN:i:{blen}\tXS:i:{bx}\tYS:i:{by}\tST:Z:{bst}"
+        );
+        if idx > 0 {
+            let prev_seg = format!("{name_x}__{name_y}__blk_{}", idx - 1);
+            let gap_x = bx.saturating_sub(runs[idx - 1].0 + runs[idx - 1].2);
+            if gap_x >= 6 {
+                let bub_id = format!("{name_x}__{name_y}__bub_{idx}");
+                let _ = writeln!(out, "S\t{bub_id}\t*\tLN:i:{gap_x}\tHB:i:1");
+                let _ = writeln!(out, "L\t{prev_seg}\t+\t{bub_id}\t+\t0M");
+                let _ = writeln!(out, "L\t{bub_id}\t+\t{seg_id}\t+\t0M");
+            } else {
+                let _ = writeln!(out, "L\t{prev_seg}\t+\t{seg_id}\t+\t0M");
+            }
+        }
+    }
+    out
+}
+
+/// Run e-graph duplication/inversion collapse on a sequence of signed block labels.
+#[must_use]
+pub fn resolve_lcb_duplications(blocks: &[(&str, i8)]) -> Option<egraph::Expr> {
+    let mut eg = egraph::EGraph::new();
+    let root = egraph::build_seq_expr(&mut eg, blocks)?;
+    egraph::saturate_synteny(&mut eg, 4, 800);
+    egraph::extract_min_cost(&mut eg, root).map(|(_, expr)| expr)
+}
+
+/// Partition sorted aligned pairs into colinear runs of at least 12 bases.
+fn partition_colinear_blocks(pairs: &[(usize, usize)]) -> Vec<(Vec<(usize, usize)>, bool)> {
+    let mut blocks: Vec<(Vec<(usize, usize)>, bool)> = Vec::new();
+    let mut cur: Vec<(usize, usize)> = Vec::new();
+    let mut cur_rev: Option<bool> = None;
+
+    for &(x, y) in pairs {
+        if let Some(&(px, py)) = cur.last() {
+            let dx_ok = x > px && (x - px) <= 20;
+            let fwd = dx_ok && y > py && (y - py) <= 20;
+            let rev = dx_ok && py > y && (py - y) <= 20;
+            let matches = match cur_rev {
+                None => fwd || rev,
+                Some(false) => fwd,
+                Some(true) => rev,
+            };
+            if matches {
+                if cur_rev.is_none() {
+                    cur_rev = Some(rev);
+                }
+                cur.push((x, y));
+                continue;
+            }
+        }
+        if cur.len() >= 12 {
+            blocks.push((std::mem::take(&mut cur), cur_rev.unwrap_or(false)));
+        } else {
+            cur.clear();
+        }
+        cur_rev = None;
+        cur.push((x, y));
+    }
+    if cur.len() >= 12 {
+        blocks.push((cur, cur_rev.unwrap_or(false)));
+    }
+    blocks
+}
+
 /// Group aligned `(x, y)` pairs into colinear MAF blocks and emit standard MAF v1 text.
 #[must_use]
 #[allow(clippy::too_many_arguments)]
@@ -1245,33 +1341,7 @@ pub fn format_maf_blocks(
         return out;
     }
 
-    // Partition sorted aligned_pairs into colinear runs (allowing small <=20bp indels).
-    let mut blocks: Vec<Vec<(usize, usize)>> = Vec::new();
-    let mut cur: Vec<(usize, usize)> = Vec::new();
-    for &(x, y) in &aln.aligned_pairs {
-        if let Some(&(px, py)) = cur.last() {
-            let dx = x.saturating_sub(px);
-            let same_fwd = y > py && (y - py) <= 20 && dx <= 20;
-            let same_rev = py > y && (py - y) <= 20 && dx <= 20;
-            if same_fwd || same_rev {
-                cur.push((x, y));
-                continue;
-            }
-        }
-        if !cur.is_empty() {
-            blocks.push(std::mem::take(&mut cur));
-        }
-        cur.push((x, y));
-    }
-    if !cur.is_empty() {
-        blocks.push(cur);
-    }
-
-    for blk in blocks {
-        if blk.len() < 12 {
-            continue;
-        }
-        let is_rev = blk.len() >= 2 && blk[blk.len() - 1].1 < blk[0].1;
+    for (blk, is_rev) in partition_colinear_blocks(&aln.aligned_pairs) {
         let x0 = blk[0].0;
         let x_end = blk[blk.len() - 1].0 + 1;
         let mut ax = String::with_capacity(blk.len() + 8);
@@ -1533,5 +1603,44 @@ mod tests {
         assert!(maf.starts_with("##maf version=1"));
         assert!(maf.contains("s chr1 0 16 + 16 ACGTACGTACGTACGT"));
         assert!(maf.contains("s chr2 0 16 + 16 ACGTACGTACGTACGT"));
+    }
+
+    #[test]
+    fn gfa_blocks_emits_segments_bubbles_and_links() {
+        let mut pairs: Vec<(usize, usize)> = (0..15).map(|i| (i, i)).collect();
+        pairs.extend((100..115).map(|i| (i, i)));
+        let aln = ContigAlignment {
+            aligned_pairs: pairs,
+            lcbs_fwd: 1,
+            lcbs_rc: 0,
+            macro_bubbles: 0,
+            internal_bubbles: 1,
+        };
+        let gfa = format_gfa_blocks("c1", "c2", &aln);
+        assert!(gfa.contains("S\tc1__c2__blk_0"));
+        assert!(gfa.contains("S\tc1__c2__bub_1\t*\tLN:i:85\tHB:i:1"));
+        assert!(gfa.contains("L\tc1__c2__blk_0\t+\tc1__c2__bub_1\t+\t0M"));
+    }
+
+    #[test]
+    fn maf_and_gfa_handle_duplicate_x_and_strand_flips() {
+        let sx = vec![b'A'; 64];
+        let sy = vec![b'A'; 64];
+        // Duplicate x=5 and a strand flip mid-stream should not panic.
+        let mut pairs: Vec<(usize, usize)> = (0..14).map(|i| (i, 30 - i)).collect();
+        pairs.push((5, 5));
+        pairs.push((14, 31));
+        pairs.sort_unstable();
+        let aln = ContigAlignment {
+            aligned_pairs: pairs,
+            lcbs_fwd: 0,
+            lcbs_rc: 1,
+            macro_bubbles: 0,
+            internal_bubbles: 0,
+        };
+        let maf = format_maf_blocks("c1", 64, "c2", 64, &sx, &sy, &aln);
+        let gfa = format_gfa_blocks("c1", "c2", &aln);
+        assert!(maf.contains("##maf version=1"));
+        assert!(gfa.contains("H\tVN:Z:1.1"));
     }
 }
