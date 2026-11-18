@@ -114,6 +114,10 @@ impl Hdf5V0Builder {
         let mut msg_bytes = Vec::new();
         for &(mtype, body) in messages {
             let padded_len = (body.len() + 7) & !7;
+            debug_assert!(
+                u16::try_from(padded_len).is_ok(),
+                "HDF5 v1 object header message exceeds 65535 bytes: {padded_len}"
+            );
             msg_bytes.extend_from_slice(&mtype.to_le_bytes());
             msg_bytes
                 .extend_from_slice(&u16::try_from(padded_len).unwrap_or(u16::MAX).to_le_bytes());

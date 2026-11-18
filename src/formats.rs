@@ -297,18 +297,31 @@ pub fn parse_two_row_maf_blocks(maf_text: &str) -> Vec<(MafRow, MafRow)> {
             continue;
         }
         if let Some(rest) = trimmed.strip_prefix("s ") {
-            let parts: Vec<&str> = rest.split_whitespace().collect();
-            if parts.len() >= 6
-                && let (Ok(start), Ok(src_size)) =
-                    (parts[1].parse::<usize>(), parts[4].parse::<usize>())
+            let mut parts = rest.split_whitespace();
+            if let (
+                Some(src),
+                Some(start_str),
+                Some(_size_str),
+                Some(strand_str),
+                Some(src_size_str),
+                Some(seq),
+            ) = (
+                parts.next(),
+                parts.next(),
+                parts.next(),
+                parts.next(),
+                parts.next(),
+                parts.next(),
+            ) && let (Ok(start), Ok(src_size)) =
+                (start_str.parse::<usize>(), src_size_str.parse::<usize>())
             {
-                let strand = parts[3].chars().next().unwrap_or('+');
+                let strand = strand_str.chars().next().unwrap_or('+');
                 rows.push(MafRow {
-                    src: parts[0].to_owned(),
+                    src: src.to_owned(),
                     start,
                     strand,
                     src_size,
-                    seq: parts[5].to_owned(),
+                    seq: seq.to_owned(),
                 });
             }
         }
