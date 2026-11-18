@@ -2,8 +2,9 @@
 
 use anyhow::{Context, Result};
 use horizon_aligner::{
-    ContigIndex, align_contig_pair_indexed, format_gfa_blocks, format_gfa_summary,
-    format_maf_blocks, prepare_contig_index, resolve_lcb_duplications, shared_seed_count,
+    ContigIndex, align_contig_pair_indexed_with_min_lcb, format_gfa_blocks,
+    format_gfa_paralog_tags, format_gfa_summary, format_maf_blocks, prepare_contig_index,
+    resolve_alignment_duplications, shared_seed_count,
 };
 use rayon::prelude::*;
 use std::fs;
@@ -48,6 +49,7 @@ struct CliArgs {
     gfa_out: Option<PathBuf>,
     resolve_dups: bool,
     min_shared_seeds: usize,
+    min_top_lcb: usize,
 }
 
 fn parse_args() -> CliArgs {
@@ -57,6 +59,7 @@ fn parse_args() -> CliArgs {
     let mut gfa_out = None;
     let mut resolve_dups = false;
     let mut min_shared_seeds = 8usize;
+    let mut min_top_lcb = 0usize;
 
     let mut i = 0;
     while i < args.len() {
@@ -72,6 +75,12 @@ fn parse_args() -> CliArgs {
             "--min-shared-seeds" if i + 1 < args.len() => {
                 if let Ok(v) = args[i + 1].parse() {
                     min_shared_seeds = v;
+                }
+                i += 2;
+            }
+            "--min-top-lcb" if i + 1 < args.len() => {
+                if let Ok(v) = args[i + 1].parse() {
+                    min_top_lcb = v;
                 }
                 i += 2;
             }
@@ -105,6 +114,7 @@ fn parse_args() -> CliArgs {
         gfa_out,
         resolve_dups,
         min_shared_seeds,
+        min_top_lcb,
     }
 }
 
@@ -136,8 +146,9 @@ fn main() -> Result<()> {
                 pruned_pairs += 1;
                 continue;
             }
-            let aln = align_contig_pair_indexed(ix, iy)?;
+            let aln = align_contig_pair_indexed_with_min_lcb(ix, iy, cli.min_top_lcb)?;
             if aln.aligned_pairs.is_empty() {
+                pruned_pairs += 1;
                 continue;
             }
             total_pairs += aln.aligned_pairs.len();
@@ -153,17 +164,13 @@ fn main() -> Result<()> {
                 gfa_buf.push_str(&format_gfa_blocks(nx, ny, &aln));
             }
             if cli.resolve_dups {
-                let mut labels: Vec<(String, i8)> = Vec::new();
-                for idx in 0..aln.lcbs_fwd.min(4) {
-                    labels.push((format!("F{idx}"), 1));
-                }
-                for idx in 0..aln.lcbs_rc.min(4) {
-                    labels.push((format!("R{idx}"), -1));
-                }
-                let refs: Vec<(&str, i8)> =
-                    labels.iter().map(|(s, st)| (s.as_str(), *st)).collect();
-                if let Some(expr) = resolve_lcb_duplications(&refs) {
-                    let _ = expr;
+                let dups = resolve_alignment_duplications(&aln, 1000);
+                let tag_line = format_gfa_paralog_tags(nx, ny, &dups);
+                if !tag_line.is_empty() {
+                    summary_out.push_str(&tag_line);
+                    if cli.gfa_out.is_some() {
+                        gfa_buf.push_str(&tag_line);
+                    }
                 }
             }
         }

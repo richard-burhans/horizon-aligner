@@ -326,6 +326,35 @@ pub fn extract_min_cost(eg: &mut EGraph, root: usize) -> Option<(f64, Expr)> {
     best.remove(&eg.find(root))
 }
 
+/// Collect all block labels wrapped in `Expr::Dup(...)`.
+#[must_use]
+pub fn collect_dups(expr: &Expr) -> Vec<String> {
+    fn walk(e: &Expr, out: &mut Vec<String>) {
+        match e {
+            Expr::Dup(inner) => match inner.as_ref() {
+                Expr::Block(lbl) => out.push(lbl.clone()),
+                Expr::Inv(b) => {
+                    if let Expr::Block(lbl) = b.as_ref() {
+                        out.push(lbl.clone());
+                    } else {
+                        walk(b, out);
+                    }
+                }
+                _ => walk(inner, out),
+            },
+            Expr::Seq(a, b) => {
+                walk(a, out);
+                walk(b, out);
+            }
+            Expr::Inv(a) => walk(a, out),
+            Expr::Block(_) => {}
+        }
+    }
+    let mut out = Vec::new();
+    walk(expr, &mut out);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

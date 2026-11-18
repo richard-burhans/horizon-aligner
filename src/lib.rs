@@ -942,10 +942,24 @@ pub fn shared_seed_count(idx_x: &ContigIndex, idx_y: &ContigIndex) -> usize {
 /// # Errors
 ///
 /// Returns [`AlignError::InvalidMask`] if internal masks fail validation.
-#[allow(clippy::too_many_lines)]
 pub fn align_contig_pair_indexed(
     idx_x: &ContigIndex,
     idx_y: &ContigIndex,
+) -> Result<ContigAlignment, AlignError> {
+    align_contig_pair_indexed_with_min_lcb(idx_x, idx_y, 0)
+}
+
+/// Align two pre-indexed contigs, pruning pairs whose largest `w=12` LCB has fewer than
+/// `min_top_lcb_anchors` anchors before running `w=10` fallback or DP.
+///
+/// # Errors
+///
+/// Returns [`AlignError::InvalidMask`] if internal masks fail validation.
+#[allow(clippy::too_many_lines)]
+pub fn align_contig_pair_indexed_with_min_lcb(
+    idx_x: &ContigIndex,
+    idx_y: &ContigIndex,
+    min_top_lcb_anchors: usize,
 ) -> Result<ContigAlignment, AlignError> {
     let span = MASK_KP14.len();
     let max_gap_bp = 2400;
@@ -981,8 +995,14 @@ pub fn align_contig_pair_indexed(
     let raw_fwd = cluster_strand_lcbs(&hits_fwd, 3500, 350, 8, 100, 450.0);
     let raw_rc = cluster_strand_lcbs(&hits_rc, 3500, 350, 8, 100, 450.0);
 
-    // Early exit for off-diagonal contig pairs with no colinear w=12 LCBs.
-    if raw_fwd.is_empty() && raw_rc.is_empty() {
+    // Early exit for off-diagonal contig pairs lacking colinear w=12 LCB support.
+    let top_lcb_anchors = raw_fwd
+        .iter()
+        .chain(raw_rc.iter())
+        .map(Vec::len)
+        .max()
+        .unwrap_or(0);
+    if top_lcb_anchors == 0 || top_lcb_anchors < min_top_lcb_anchors {
         return Ok(ContigAlignment {
             aligned_pairs: Vec::new(),
             lcbs_fwd: 0,
@@ -1284,6 +1304,185 @@ pub fn resolve_lcb_duplications(blocks: &[(&str, i8)]) -> Option<egraph::Expr> {
     let root = egraph::build_seq_expr(&mut eg, blocks)?;
     egraph::saturate_synteny(&mut eg, 4, 800);
     egraph::extract_min_cost(&mut eg, root).map(|(_, expr)| expr)
+}
+
+/// Bucket colinear alignment blocks into `bin_bp` reference windows and return
+/// deduplicated block labels collapsed by the e-graph duplication/inversion rules.
+#[must_use]
+pub fn resolve_alignment_duplications(aln: &ContigAlignment, bin_bp: usize) -> Vec<String> {
+    let bins: Vec<(String, i8)> = partition_colinear_blocks(&aln.aligned_pairs)
+        .into_iter()
+        .map(|(blk, is_rev)| {
+            let b_idx = blk[0].0 / bin_bp.max(1);
+            (format!("B{b_idx}"), if is_rev { -1 } else { 1 })
+        })
+        .collect();
+    let mut dups: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for win in bins.chunks(12) {
+        if win.len() < 2 {
+            continue;
+        }
+        let refs: Vec<(&str, i8)> = win.iter().map(|(s, st)| (s.as_str(), *st)).collect();
+        if let Some(expr) = resolve_lcb_duplications(&refs) {
+            for d in egraph::collect_dups(&expr) {
+                dups.insert(d);
+            }
+        }
+    }
+    dups.into_iter().collect()
+}
+
+/// Format e-graph-resolved paralog annotations as GFA v1.1 comment/tag lines.
+#[must_use]
+pub fn format_gfa_paralog_tags(name_x: &str, name_y: &str, dups: &[String]) -> String {
+    if dups.is_empty() {
+        return String::new();
+    }
+    format!("# EG:Z:{name_x}__{name_y}\t{}\n", dups.join(","))
+}
+
+type MergeRowTuple = (String, usize, usize, char, usize, String);
+type MergeGrid =
+    std::collections::BTreeMap<(String, usize), std::collections::BTreeMap<String, MergeRowTuple>>;
+
+fn parse_maf_into_grid(
+    ref_species: &str,
+    query_sp: &str,
+    maf_text: &str,
+    step_bp: usize,
+    grid: &mut MergeGrid,
+) -> std::collections::BTreeSet<String> {
+    let mut cur_rows: Vec<MergeRowTuple> = Vec::new();
+    let mut tokens: Vec<(String, i8)> = Vec::new();
+
+    let flush =
+        |rows: &mut Vec<MergeRowTuple>, grid: &mut MergeGrid, tokens: &mut Vec<(String, i8)>| {
+            if rows.len() >= 2 {
+                let ref_row = &rows[0];
+                let qry_row = &rows[1];
+                let b_idx = ref_row.1 / step_bp;
+                let st_sign = if qry_row.3 == '-' { -1 } else { 1 };
+                tokens.push((format!("B{b_idx}"), st_sign));
+                let slot = grid.entry((ref_row.0.clone(), b_idx)).or_default();
+                slot.entry(ref_species.to_owned())
+                    .or_insert_with(|| ref_row.clone());
+                slot.entry(query_sp.to_owned())
+                    .or_insert_with(|| qry_row.clone());
+            }
+            rows.clear();
+        };
+
+    for line in maf_text.lines() {
+        if line.is_empty() || line.starts_with("##") {
+            continue;
+        }
+        if line.starts_with("a ") {
+            flush(&mut cur_rows, grid, &mut tokens);
+        } else if let Some(rest) = line.strip_prefix("s ") {
+            let parts: Vec<&str> = rest.split_whitespace().collect();
+            if parts.len() >= 6
+                && let (Ok(start), Ok(size), Ok(src_size)) = (
+                    parts[1].parse::<usize>(),
+                    parts[2].parse::<usize>(),
+                    parts[4].parse::<usize>(),
+                )
+            {
+                let strand = parts[3].chars().next().unwrap_or('+');
+                cur_rows.push((
+                    parts[0].to_owned(),
+                    start,
+                    size,
+                    strand,
+                    src_size,
+                    parts[5].to_owned(),
+                ));
+            }
+        }
+    }
+    flush(&mut cur_rows, grid, &mut tokens);
+
+    let mut sp_dups = std::collections::BTreeSet::new();
+    for win in tokens.chunks(12) {
+        if win.len() < 2 {
+            continue;
+        }
+        let refs: Vec<(&str, i8)> = win.iter().map(|(s, st)| (s.as_str(), *st)).collect();
+        if let Some(expr) = resolve_lcb_duplications(&refs) {
+            for d in egraph::collect_dups(&expr) {
+                sp_dups.insert(d);
+            }
+        }
+    }
+    sp_dups
+}
+
+/// Merge multiple pairwise MAF texts anchored on `ref_species` into multi-species MAF v1 +
+/// GFA v1.1 + e-graph paralog tags.
+#[must_use]
+pub fn merge_pairwise_mafs(
+    ref_species: &str,
+    pairwise_mafs: &[(String, String)],
+    bin_bp: usize,
+) -> (String, String, usize, usize) {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let mut grid: MergeGrid = BTreeMap::new();
+    let mut dups_by_species: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let step_bp = bin_bp.max(1);
+
+    for (query_sp, maf_text) in pairwise_mafs {
+        let sp_dups = parse_maf_into_grid(ref_species, query_sp, maf_text, step_bp, &mut grid);
+        dups_by_species
+            .entry(query_sp.clone())
+            .or_default()
+            .extend(sp_dups);
+    }
+
+    let mut maf_out = String::from("##maf version=1 scoring=horizon_merge\n");
+    let mut gfa_out = String::from("H\tVN:Z:1.1\n");
+    let mut total_blocks = 0usize;
+    let mut multi_species_blocks = 0usize;
+    let mut prev_seg: Option<String> = None;
+
+    for ((ref_contig, b_idx), sp_map) in grid {
+        total_blocks += 1;
+        if sp_map.len() >= 3 {
+            multi_species_blocks += 1;
+        }
+        let _ = writeln!(maf_out, "a score={}.0", sp_map.len());
+        for (sp, (contig, start, size, strand, src_size, seq)) in &sp_map {
+            let label = if sp == ref_species {
+                contig.clone()
+            } else {
+                format!("{sp}.{contig}")
+            };
+            let _ = writeln!(
+                maf_out,
+                "s {label} {start} {size} {strand} {src_size} {seq}"
+            );
+        }
+        maf_out.push('\n');
+
+        let seg_id = format!("ms_{ref_contig}_{b_idx}");
+        let _ = writeln!(
+            gfa_out,
+            "S\t{seg_id}\t*\tLN:i:{step_bp}\tSP:i:{}",
+            sp_map.len()
+        );
+        if let Some(prev) = prev_seg.as_ref() {
+            let _ = writeln!(gfa_out, "L\t{prev}\t+\t{seg_id}\t+\t0M");
+        }
+        prev_seg = Some(seg_id);
+    }
+
+    for (sp, dups) in dups_by_species {
+        if !dups.is_empty() {
+            let joined: Vec<&str> = dups.iter().map(String::as_str).collect();
+            let _ = writeln!(gfa_out, "# EG:Z:{ref_species}__{sp}\t{}", joined.join(","));
+        }
+    }
+
+    (maf_out, gfa_out, total_blocks, multi_species_blocks)
 }
 
 /// Partition sorted aligned pairs into colinear runs of at least 12 bases.
@@ -1642,5 +1841,34 @@ mod tests {
         let gfa = format_gfa_blocks("c1", "c2", &aln);
         assert!(maf.contains("##maf version=1"));
         assert!(gfa.contains("H\tVN:Z:1.1"));
+    }
+
+    #[test]
+    fn min_top_lcb_prunes_small_lcb_pairs() {
+        let sx = b"ACGTACGTACGTACGTGCGCGCGCATATATATACGTACGTACGTACGT";
+        let sy = b"ACGTACGTACGTACGTGCGCGCGCATATATATACGTACGTACGTACGT";
+        let ix = prepare_contig_index(sx).expect("valid");
+        let iy = prepare_contig_index(sy).expect("valid");
+        let pruned = align_contig_pair_indexed_with_min_lcb(&ix, &iy, 10_000).expect("valid");
+        assert_eq!(pruned.aligned_pairs.len(), 0);
+    }
+
+    #[test]
+    fn resolve_dups_and_merge_pairwise_mafs_work() {
+        let maf1 = "##maf version=1\na score=12.0\ns chr1 100 12 + 5000 ACGTACGTACGT\ns q1 10 12 + 5000 ACGTACGTACGT\n\na score=12.0\ns chr1 200 12 + 5000 ACGTACGTACGT\ns q1 200 12 + 5000 ACGTACGTACGT\n";
+        let maf2 = "##maf version=1\na score=12.0\ns chr1 150 12 + 5000 ACGTACGTACGT\ns q2 50 12 - 5000 ACGTACGTACGT\n";
+        let (merged_maf, merged_gfa, total, multi) = merge_pairwise_mafs(
+            "Pf",
+            &[
+                ("Pr".to_owned(), maf1.to_owned()),
+                ("Pv".to_owned(), maf2.to_owned()),
+            ],
+            1000,
+        );
+        assert_eq!(total, 1);
+        assert_eq!(multi, 1);
+        assert!(merged_maf.contains("s Pr.q1"));
+        assert!(merged_maf.contains("s Pv.q2"));
+        assert!(merged_gfa.contains("# EG:Z:Pf__Pr\tB0"));
     }
 }
