@@ -303,7 +303,7 @@ def make_fig4_ablation_profile() -> None:
     ax2.set_xlabel("Wall-Clock Stage Time (s)")
     ax2.set_title("B. HORIZON_PROFILE Stage Breakdown (3 Mb × 3 Mb)", loc="left")
     ax2.grid(True, axis="x", linestyle=":", alpha=0.35)
-    ax2.legend(loc="lower right", ncol=2, frameon=True, framealpha=0.95, fontsize=7.3, edgecolor="#CBD5E0")
+    ax2.legend(bbox_to_anchor=(0.48, -0.18), loc="upper center", ncol=3, frameon=True, framealpha=0.95, fontsize=7.3, edgecolor="#CBD5E0")
 
     plt.tight_layout(w_pad=2.4)
     save_both(fig, "fig4_ablation_profile")
