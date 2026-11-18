@@ -17,7 +17,7 @@ fn read_named_contig(path: &Path, target: &str) -> Result<Vec<u8>> {
                 break;
             }
             let id = rest.split_whitespace().next().unwrap_or("");
-            if id == target {
+            if id == target || id.starts_with(&format!("{}.", target)) {
                 active = true;
             }
         } else if active {
@@ -118,6 +118,12 @@ fn main() -> Result<()> {
 
     let proto_set: HashSet<(usize, usize)> = aln.aligned_pairs.iter().copied().collect();
     let overlap = proto_set.intersection(&maf_all).count();
+    if overlap == 0 && !proto_set.is_empty() && !maf_all.is_empty() {
+        let p_samp: Vec<_> = proto_set.iter().take(5).collect();
+        let m_samp: Vec<_> = maf_all.iter().take(5).collect();
+        println!("DEBUG: proto={:?} maf={:?}", p_samp, m_samp);
+    }
+    
     #[allow(clippy::cast_precision_loss)]
     let recall = (overlap as f64) / (maf_all.len().max(1) as f64);
     println!(
