@@ -163,6 +163,32 @@ pub fn canonical_spaced_seeds(
     mask: &str,
     max_occ: usize,
 ) -> Result<HashMap<u64, Vec<usize>>, AlignError> {
+    canonical_spaced_seeds_impl(seq, mask, max_occ, false, false)
+}
+
+/// Extract canonical spaced-seed positions with optional softmask skipping and 1-bit `R/Y`
+/// transition-tolerant encoding.
+///
+/// # Errors
+///
+/// Returns [`AlignError::InvalidMask`] if `mask` is empty, exceeds active bit limits, or contains invalid characters.
+pub fn canonical_spaced_seeds_with_opts(
+    seq: &[u8],
+    mask: &str,
+    max_occ: usize,
+    skip_softmasked: bool,
+    ry_mode: bool,
+) -> Result<HashMap<u64, Vec<usize>>, AlignError> {
+    canonical_spaced_seeds_impl(seq, mask, max_occ, skip_softmasked, ry_mode)
+}
+
+fn canonical_spaced_seeds_impl(
+    seq: &[u8],
+    mask: &str,
+    max_occ: usize,
+    skip_softmasked: bool,
+    ry_mode: bool,
+) -> Result<HashMap<u64, Vec<usize>>, AlignError> {
     if mask.is_empty() {
         return Err(AlignError::InvalidMask("mask is empty".to_owned()));
     }
@@ -181,10 +207,11 @@ pub fn canonical_spaced_seeds(
             }
         }
     }
-    if offsets.is_empty() || offsets.len() > 31 {
-        return Err(AlignError::InvalidMask(
-            "active mask bits must be in 1..=31".to_owned(),
-        ));
+    let max_bits = if ry_mode { 62 } else { 31 };
+    if offsets.is_empty() || offsets.len() > max_bits {
+        return Err(AlignError::InvalidMask(format!(
+            "active mask bits must be in 1..={max_bits}"
+        )));
     }
     if seq.len() < span {
         return Ok(HashMap::new());
@@ -200,12 +227,21 @@ pub fn canonical_spaced_seeds(
         let mut rc = 0_u64;
         let mut valid = true;
         for (&fo, &ro) in offsets.iter().zip(&rev_offsets) {
+            if skip_softmasked && (sub[fo].is_ascii_lowercase() || sub[ro].is_ascii_lowercase()) {
+                valid = false;
+                break;
+            }
             let (Some(bf), Some(br)) = (base_to_idx(sub[fo]), base_to_idx(sub[ro])) else {
                 valid = false;
                 break;
             };
-            fwd = (fwd << 2) | (bf as u64);
-            rc = (rc << 2) | ((3 - br) as u64);
+            if ry_mode {
+                fwd = (fwd << 1) | ((bf & 1) as u64);
+                rc = (rc << 1) | ((1 - (br & 1)) as u64);
+            } else {
+                fwd = (fwd << 2) | (bf as u64);
+                rc = (rc << 2) | ((3 - br) as u64);
+            }
         }
         if !valid {
             continue;
@@ -893,18 +929,87 @@ pub struct ContigIndex {
     seeds_rc: HashMap<u64, Vec<usize>>,
 }
 
+const MASK_RY20: &str = "1110110110111011011011011";
+
+/// Configurable parameters for [`align_contig_pair_with_config`].
+#[derive(Debug, Clone)]
+pub struct AlignConfig {
+    /// Minimum `w=12` LCB anchor count required before running fallback seeding and DP (`0` = disabled).
+    pub min_top_lcb_anchors: usize,
+    /// Skip lowercase softmasked bases during `w=10` / `R/Y` seeding.
+    pub skip_softmasked: bool,
+    /// Enable transition-tolerant 1-bit `R/Y` (`MASK_RY20`) fallback seeding for divergent homologs.
+    pub use_ry_seeds: bool,
+    /// Minimum anchor count for `w=10` and `R/Y` fallback LCB clustering.
+    pub fallback_min_anchors: usize,
+    /// Minimum genomic span (bp) for `w=10` and `R/Y` fallback LCB clustering.
+    pub fallback_min_span: usize,
+    /// Half-band width for banded MDL+BOCPD DP.
+    pub band_w: usize,
+    /// Maximum X-drop extension distance (bp) at LCB flanks.
+    pub max_ext: usize,
+    /// Minimum MDL log-likelihood gain (bits) required to accept a DP gap/flank.
+    pub min_delta_bits: f64,
+    /// Minimum posterior homology probability required to emit a base pair.
+    pub min_post_prob: f64,
+}
+
+impl Default for AlignConfig {
+    fn default() -> Self {
+        Self {
+            min_top_lcb_anchors: 0,
+            skip_softmasked: false,
+            use_ry_seeds: false,
+            fallback_min_anchors: 4,
+            fallback_min_span: 50,
+            band_w: 180,
+            max_ext: 1500,
+            min_delta_bits: 10.0,
+            min_post_prob: MIN_POST_PROB,
+        }
+    }
+}
+
 /// Precompute forward and reverse-complement KP-14 seed maps for a contig.
 ///
 /// # Errors
 ///
 /// Returns [`AlignError::InvalidMask`] if `MASK_KP14` is invalid.
 pub fn prepare_contig_index(seq: &[u8]) -> Result<ContigIndex, AlignError> {
-    let seq_rc = revcomp(seq);
-    let seeds_fwd = canonical_spaced_seeds(seq, MASK_KP14, 2)?;
-    let seeds_rc = canonical_spaced_seeds(&seq_rc, MASK_KP14, 2)?;
+    prepare_contig_index_opts(seq, false)
+}
+
+/// Precompute forward and reverse-complement KP-14 seed maps, optionally skipping lowercase
+/// softmasked bases during seeding.
+///
+/// # Errors
+///
+/// Returns [`AlignError::InvalidMask`] if `MASK_KP14` is invalid.
+pub fn prepare_contig_index_opts(
+    seq: &[u8],
+    skip_softmasked: bool,
+) -> Result<ContigIndex, AlignError> {
+    let seq_rc_case: Vec<u8> = seq
+        .iter()
+        .rev()
+        .map(|&b| match b {
+            b'A' => b'T',
+            b'T' => b'A',
+            b'C' => b'G',
+            b'G' => b'C',
+            b'a' => b't',
+            b't' => b'a',
+            b'c' => b'g',
+            b'g' => b'c',
+            other => other,
+        })
+        .collect();
+    let seeds_fwd = canonical_spaced_seeds_with_opts(seq, MASK_KP14, 2, skip_softmasked, false)?;
+    let seeds_rc =
+        canonical_spaced_seeds_with_opts(&seq_rc_case, MASK_KP14, 2, skip_softmasked, false)?;
     Ok(ContigIndex {
         seq: seq.to_vec(),
-        seq_rc,
+        seq_rc: revcomp(seq),
         seeds_fwd,
         seeds_rc,
     })
@@ -939,18 +1044,24 @@ pub fn shared_seed_count(idx_x: &ContigIndex, idx_y: &ContigIndex) -> usize {
 
 type LcbList = Vec<Vec<(usize, usize)>>;
 
-fn find_w12_raw_lcbs(idx_x: &ContigIndex, idx_y: &ContigIndex) -> (LcbList, LcbList) {
+type AnchorPairs = Vec<(usize, usize)>;
+
+fn intersect_seed_maps(
+    ix: &HashMap<u64, Vec<usize>>,
+    iy_fwd: &HashMap<u64, Vec<usize>>,
+    iy_rc: &HashMap<u64, Vec<usize>>,
+) -> (AnchorPairs, AnchorPairs) {
     let mut hits_fwd = Vec::new();
     let mut hits_rc = Vec::new();
-    for (k, pxs) in &idx_x.seeds_fwd {
-        if let Some(pys) = idx_y.seeds_fwd.get(k) {
+    for (k, pxs) in ix {
+        if let Some(pys) = iy_fwd.get(k) {
             for &px in pxs {
                 for &py in pys {
                     hits_fwd.push((px, py));
                 }
             }
         }
-        if let Some(pys) = idx_y.seeds_rc.get(k) {
+        if let Some(pys) = iy_rc.get(k) {
             for &px in pxs {
                 for &py in pys {
                     hits_rc.push((px, py));
@@ -958,9 +1069,33 @@ fn find_w12_raw_lcbs(idx_x: &ContigIndex, idx_y: &ContigIndex) -> (LcbList, LcbL
             }
         }
     }
+    (hits_fwd, hits_rc)
+}
+
+fn find_w12_raw_lcbs(idx_x: &ContigIndex, idx_y: &ContigIndex) -> (LcbList, LcbList) {
+    let (hits_fwd, hits_rc) =
+        intersect_seed_maps(&idx_x.seeds_fwd, &idx_y.seeds_fwd, &idx_y.seeds_rc);
     let raw_fwd = cluster_strand_lcbs(&hits_fwd, 3500, 350, 8, 100, 450.0);
     let raw_rc = cluster_strand_lcbs(&hits_rc, 3500, 350, 8, 100, 450.0);
     (raw_fwd, raw_rc)
+}
+
+fn append_nonoverlapping_lcbs(
+    target: &mut LcbList,
+    existing: &[Vec<(usize, usize)>],
+    hits: &[(usize, usize)],
+    min_anchors: usize,
+    min_span: usize,
+) {
+    for lcb in cluster_strand_lcbs(hits, 1800, 200, min_anchors, min_span, 250.0) {
+        let (sx, ex) = (lcb[0].0, lcb[lcb.len() - 1].0);
+        if !existing
+            .iter()
+            .any(|c| sx <= c[c.len() - 1].0 && ex >= c[0].0)
+        {
+            target.push(lcb);
+        }
+    }
 }
 
 /// Fast pre-DP score: return the anchor count of the largest `w=12` LCB between two contigs.
@@ -984,20 +1119,37 @@ pub fn align_contig_pair_indexed(
     idx_x: &ContigIndex,
     idx_y: &ContigIndex,
 ) -> Result<ContigAlignment, AlignError> {
-    align_contig_pair_indexed_with_min_lcb(idx_x, idx_y, 0)
+    align_contig_pair_with_config(idx_x, idx_y, &AlignConfig::default())
 }
 
 /// Align two pre-indexed contigs, pruning pairs whose largest `w=12` LCB has fewer than
-/// `min_top_lcb_anchors` anchors before running `w=10` fallback or DP.
+/// `min_top_lcb_anchors` anchors before running fallback seeding or DP.
+///
+/// # Errors
+///
+/// Returns [`AlignError::InvalidMask`] if internal masks fail validation.
+pub fn align_contig_pair_indexed_with_min_lcb(
+    idx_x: &ContigIndex,
+    idx_y: &ContigIndex,
+    min_top_lcb_anchors: usize,
+) -> Result<ContigAlignment, AlignError> {
+    let cfg = AlignConfig {
+        min_top_lcb_anchors,
+        ..AlignConfig::default()
+    };
+    align_contig_pair_with_config(idx_x, idx_y, &cfg)
+}
+
+/// Align two pre-indexed contigs using an explicit [`AlignConfig`].
 ///
 /// # Errors
 ///
 /// Returns [`AlignError::InvalidMask`] if internal masks fail validation.
 #[allow(clippy::too_many_lines)]
-pub fn align_contig_pair_indexed_with_min_lcb(
+pub fn align_contig_pair_with_config(
     idx_x: &ContigIndex,
     idx_y: &ContigIndex,
-    min_top_lcb_anchors: usize,
+    cfg: &AlignConfig,
 ) -> Result<ContigAlignment, AlignError> {
     let span = MASK_KP14.len();
     let max_gap_bp = 2400;
@@ -1009,14 +1161,14 @@ pub fn align_contig_pair_indexed_with_min_lcb(
 
     let (raw_fwd, raw_rc) = find_w12_raw_lcbs(idx_x, idx_y);
 
-    // Early exit for off-diagonal contig pairs lacking colinear w=12 LCB support.
+    // Early exit when caller requests a minimum w=12 LCB anchor threshold.
     let top_lcb_anchors = raw_fwd
         .iter()
         .chain(raw_rc.iter())
         .map(Vec::len)
         .max()
         .unwrap_or(0);
-    if top_lcb_anchors == 0 || top_lcb_anchors < min_top_lcb_anchors {
+    if cfg.min_top_lcb_anchors > 0 && top_lcb_anchors < cfg.min_top_lcb_anchors {
         return Ok(ContigAlignment {
             aligned_pairs: Vec::new(),
             lcbs_fwd: 0,
@@ -1026,47 +1178,55 @@ pub fn align_contig_pair_indexed_with_min_lcb(
         });
     }
 
-    // Sparse-exon fallback: find w=10 LCBs in intervals not covered by unmerged w=12 LCBs.
-    let ix10 = canonical_spaced_seeds(seq_x, MASK_W10, 2)?;
-    let iy10_fwd = canonical_spaced_seeds(seq_y, MASK_W10, 2)?;
-    let iy10_rc = canonical_spaced_seeds(seq_y_rc, MASK_W10, 2)?;
-    let mut hits10_fwd = Vec::new();
-    let mut hits10_rc = Vec::new();
-    for (k, pxs) in &ix10 {
-        if let Some(pys) = iy10_fwd.get(k) {
-            for &px in pxs {
-                for &py in pys {
-                    hits10_fwd.push((px, py));
-                }
-            }
-        }
-        if let Some(pys) = iy10_rc.get(k) {
-            for &px in pxs {
-                for &py in pys {
-                    hits10_rc.push((px, py));
-                }
-            }
-        }
-    }
+    // Sparse-exon fallback: w=10 exact seeds in intervals not covered by w=12 LCBs.
+    let ix10 = canonical_spaced_seeds_with_opts(seq_x, MASK_W10, 2, cfg.skip_softmasked, false)?;
+    let iy10_fwd =
+        canonical_spaced_seeds_with_opts(seq_y, MASK_W10, 2, cfg.skip_softmasked, false)?;
+    let iy10_rc =
+        canonical_spaced_seeds_with_opts(seq_y_rc, MASK_W10, 2, cfg.skip_softmasked, false)?;
+    let (hits10_fwd, hits10_rc) = intersect_seed_maps(&ix10, &iy10_fwd, &iy10_rc);
     let mut combined_fwd = raw_fwd.clone();
-    for lcb in cluster_strand_lcbs(&hits10_fwd, 1500, 150, 6, 80, 250.0) {
-        let (sx, ex) = (lcb[0].0, lcb[lcb.len() - 1].0);
-        if !raw_fwd
-            .iter()
-            .any(|c| sx <= c[c.len() - 1].0 && ex >= c[0].0)
-        {
-            combined_fwd.push(lcb);
-        }
-    }
     let mut combined_rc = raw_rc.clone();
-    for lcb in cluster_strand_lcbs(&hits10_rc, 1500, 150, 6, 80, 250.0) {
-        let (sx, ex) = (lcb[0].0, lcb[lcb.len() - 1].0);
-        if !raw_rc
-            .iter()
-            .any(|c| sx <= c[c.len() - 1].0 && ex >= c[0].0)
-        {
-            combined_rc.push(lcb);
-        }
+    append_nonoverlapping_lcbs(
+        &mut combined_fwd,
+        &raw_fwd,
+        &hits10_fwd,
+        cfg.fallback_min_anchors,
+        cfg.fallback_min_span,
+    );
+    append_nonoverlapping_lcbs(
+        &mut combined_rc,
+        &raw_rc,
+        &hits10_rc,
+        cfg.fallback_min_anchors,
+        cfg.fallback_min_span,
+    );
+
+    // Transition-tolerant R/Y (1-bit purine/pyrimidine) fallback for divergent homologs.
+    if cfg.use_ry_seeds {
+        let ix_ry =
+            canonical_spaced_seeds_with_opts(seq_x, MASK_RY20, 2, cfg.skip_softmasked, true)?;
+        let iy_ry_fwd =
+            canonical_spaced_seeds_with_opts(seq_y, MASK_RY20, 2, cfg.skip_softmasked, true)?;
+        let iy_ry_rc =
+            canonical_spaced_seeds_with_opts(seq_y_rc, MASK_RY20, 2, cfg.skip_softmasked, true)?;
+        let (hits_ry_fwd, hits_ry_rc) = intersect_seed_maps(&ix_ry, &iy_ry_fwd, &iy_ry_rc);
+        let prev_fwd = combined_fwd.clone();
+        let prev_rc = combined_rc.clone();
+        append_nonoverlapping_lcbs(
+            &mut combined_fwd,
+            &prev_fwd,
+            &hits_ry_fwd,
+            cfg.fallback_min_anchors,
+            cfg.fallback_min_span,
+        );
+        append_nonoverlapping_lcbs(
+            &mut combined_rc,
+            &prev_rc,
+            &hits_ry_rc,
+            cfg.fallback_min_anchors,
+            cfg.fallback_min_span,
+        );
     }
 
     let lcbs_fwd = merge_colinear_lcbs(&combined_fwd, max_local_rescue_bp);
@@ -1368,25 +1528,36 @@ struct PairwiseMafBlock {
     qry_seq: Vec<u8>,
 }
 
+struct ProjectedInterval {
+    ref_bases: Vec<u8>,
+    qry_bases: Vec<u8>,
+    ins_after: Vec<Vec<u8>>,
+    qry_start: usize,
+    qry_size: usize,
+    qry_src_size: usize,
+}
+
 fn project_block_interval(
     blk: &PairwiseMafBlock,
     lo: usize,
     hi: usize,
-) -> Option<(String, String, usize, usize, usize)> {
+) -> Option<ProjectedInterval> {
     if blk.ref_start > lo || blk.ref_end < hi {
         return None;
     }
+    let span = hi - lo;
     let mut ref_pos = blk.ref_start;
     let mut qry_before = 0usize;
     let mut qry_in = 0usize;
-    let mut ref_sub = Vec::with_capacity(hi - lo);
-    let mut qry_sub = Vec::with_capacity(hi - lo);
+    let mut ref_bases = Vec::with_capacity(span);
+    let mut qry_bases = Vec::with_capacity(span);
+    let mut ins_after = vec![Vec::new(); span];
 
     for (&rb, &qb) in blk.ref_seq.iter().zip(blk.qry_seq.iter()) {
         if rb != b'-' {
             if (lo..hi).contains(&ref_pos) {
-                ref_sub.push(rb);
-                qry_sub.push(qb);
+                ref_bases.push(rb);
+                qry_bases.push(qb);
                 if qb != b'-' {
                     qry_in += 1;
                 }
@@ -1394,21 +1565,82 @@ fn project_block_interval(
                 qry_before += 1;
             }
             ref_pos += 1;
-        } else if ref_pos <= lo && qb != b'-' {
-            qry_before += 1;
+        } else if ref_pos <= lo {
+            if qb != b'-' {
+                qry_before += 1;
+            }
+        } else if ref_pos < hi {
+            let prev_idx = ref_pos - lo - 1;
+            if qb != b'-' {
+                ins_after[prev_idx].push(qb);
+                qry_in += 1;
+            }
         }
     }
 
-    if ref_sub.len() != hi - lo || qry_in == 0 {
+    if ref_bases.len() != span || qry_in == 0 {
         return None;
     }
-    Some((
-        String::from_utf8_lossy(&ref_sub).into_owned(),
-        String::from_utf8_lossy(&qry_sub).into_owned(),
-        blk.qry_start + qry_before,
-        qry_in,
-        blk.qry_src_size,
-    ))
+    Some(ProjectedInterval {
+        ref_bases,
+        qry_bases,
+        ins_after,
+        qry_start: blk.qry_start + qry_before,
+        qry_size: qry_in,
+        qry_src_size: blk.qry_src_size,
+    })
+}
+
+type ThreadedQueryRow = (String, String, usize, usize, char, usize, String);
+
+fn thread_interval_columns(
+    ref_bases: &[u8],
+    sp_proj: &[(String, String, char, ProjectedInterval)],
+) -> (String, Vec<ThreadedQueryRow>) {
+    let span = ref_bases.len();
+    let max_ins: Vec<usize> = (0..span)
+        .map(|i| {
+            sp_proj
+                .iter()
+                .map(|(_, _, _, p)| p.ins_after[i].len())
+                .max()
+                .unwrap_or(0)
+        })
+        .collect();
+    let total_cols = span + max_ins.iter().sum::<usize>();
+    let mut ref_out = String::with_capacity(total_cols);
+    let mut q_outs: Vec<String> = vec![String::with_capacity(total_cols); sp_proj.len()];
+
+    for (i, &rb) in ref_bases.iter().enumerate() {
+        ref_out.push(rb as char);
+        for (q_idx, (_, _, _, proj)) in sp_proj.iter().enumerate() {
+            q_outs[q_idx].push(proj.qry_bases[i] as char);
+        }
+        for k in 0..max_ins[i] {
+            ref_out.push('-');
+            for (q_idx, (_, _, _, proj)) in sp_proj.iter().enumerate() {
+                let ch = proj.ins_after[i].get(k).copied().unwrap_or(b'-') as char;
+                q_outs[q_idx].push(ch);
+            }
+        }
+    }
+
+    let rows = sp_proj
+        .iter()
+        .zip(q_outs)
+        .map(|((sp, qc, st, proj), qseq)| {
+            (
+                sp.clone(),
+                qc.clone(),
+                proj.qry_start,
+                proj.qry_size,
+                *st,
+                proj.qry_src_size,
+                qseq,
+            )
+        })
+        .collect();
+    (ref_out, rows)
 }
 
 fn parse_pairwise_maf_blocks(
@@ -1492,6 +1724,42 @@ fn parse_pairwise_maf_blocks(
     sp_dups
 }
 
+#[allow(clippy::too_many_arguments)]
+fn emit_merged_block(
+    ref_contig: &str,
+    lo: usize,
+    hi: usize,
+    ref_src_size: usize,
+    ref_sub: &str,
+    sp_rows: &[ThreadedQueryRow],
+    maf_out: &mut String,
+    gfa_out: &mut String,
+    prev_seg: &mut Option<String>,
+) {
+    let _ = writeln!(maf_out, "a score={}.0", sp_rows.len() + 1);
+    let _ = writeln!(
+        maf_out,
+        "s {ref_contig} {lo} {} + {ref_src_size} {ref_sub}",
+        hi - lo
+    );
+    for (sp, qc, qs, qz, st, qsrc, qseq) in sp_rows {
+        let _ = writeln!(maf_out, "s {sp}.{qc} {qs} {qz} {st} {qsrc} {qseq}");
+    }
+    maf_out.push('\n');
+
+    let seg_id = format!("ms_{ref_contig}_{lo}_{hi}");
+    let _ = writeln!(
+        gfa_out,
+        "S\t{seg_id}\t*\tLN:i:{}\tSP:i:{}",
+        hi - lo,
+        sp_rows.len() + 1
+    );
+    if let Some(prev) = prev_seg.as_ref() {
+        let _ = writeln!(gfa_out, "L\t{prev}\t+\t{seg_id}\t+\t0M");
+    }
+    *prev_seg = Some(seg_id);
+}
+
 /// Merge multiple pairwise MAF texts anchored on `ref_species` using exact reference-interval
 /// splitting and base-level threading into multi-species MAF v1 + GFA v1.1 + e-graph paralog tags.
 #[must_use]
@@ -1520,7 +1788,8 @@ pub fn merge_pairwise_mafs(
     let mut multi_species_blocks = 0usize;
     let mut prev_seg: Option<String> = None;
 
-    for (ref_contig, blocks) in by_contig {
+    for (ref_contig, mut blocks) in by_contig {
+        blocks.sort_unstable_by_key(|b| (b.ref_start, b.ref_end));
         let mut bounds: Vec<usize> = blocks
             .iter()
             .flat_map(|b| [b.ref_start, b.ref_end])
@@ -1528,64 +1797,67 @@ pub fn merge_pairwise_mafs(
         bounds.sort_unstable();
         bounds.dedup();
 
+        let mut active: Vec<usize> = Vec::new();
+        let mut next_idx = 0usize;
+
         for w in bounds.windows(2) {
             let (lo, hi) = (w[0], w[1]);
             if lo >= hi {
                 continue;
             }
-            let mut ref_row_meta: Option<(usize, String)> = None;
-            let mut sp_rows: BTreeMap<String, (String, usize, usize, char, usize, String)> =
-                BTreeMap::new();
-            for blk in &blocks {
-                if sp_rows.contains_key(&blk.qry_species) {
+            while next_idx < blocks.len() && blocks[next_idx].ref_start <= lo {
+                if blocks[next_idx].ref_end >= hi {
+                    active.push(next_idx);
+                }
+                next_idx += 1;
+            }
+            active.retain(|&idx| blocks[idx].ref_end >= hi);
+            if active.is_empty() {
+                continue;
+            }
+
+            let mut ref_src_size_opt: Option<usize> = None;
+            let mut ref_bases_opt: Option<Vec<u8>> = None;
+            let mut sp_seen: BTreeSet<String> = BTreeSet::new();
+            let mut sp_proj: Vec<(String, String, char, ProjectedInterval)> = Vec::new();
+            for &idx in &active {
+                let blk = &blocks[idx];
+                if sp_seen.contains(&blk.qry_species) {
                     continue;
                 }
-                if let Some((r_sub, q_sub, q_start, q_size, q_src)) =
-                    project_block_interval(blk, lo, hi)
-                {
-                    ref_row_meta.get_or_insert((blk.ref_src_size, r_sub));
-                    sp_rows.insert(
+                if let Some(proj) = project_block_interval(blk, lo, hi) {
+                    sp_seen.insert(blk.qry_species.clone());
+                    ref_src_size_opt.get_or_insert(blk.ref_src_size);
+                    if ref_bases_opt.is_none() {
+                        ref_bases_opt = Some(proj.ref_bases.clone());
+                    }
+                    sp_proj.push((
                         blk.qry_species.clone(),
-                        (
-                            blk.qry_contig.clone(),
-                            q_start,
-                            q_size,
-                            blk.qry_strand,
-                            q_src,
-                            q_sub,
-                        ),
-                    );
+                        blk.qry_contig.clone(),
+                        blk.qry_strand,
+                        proj,
+                    ));
                 }
             }
-            let Some((ref_src_size, ref_sub)) = ref_row_meta else {
+            let (Some(ref_src_size), Some(ref_bases)) = (ref_src_size_opt, ref_bases_opt) else {
                 continue;
             };
+            let (ref_sub, sp_rows) = thread_interval_columns(&ref_bases, &sp_proj);
             total_blocks += 1;
             if sp_rows.len() >= 2 {
                 multi_species_blocks += 1;
             }
-            let _ = writeln!(maf_out, "a score={}.0", sp_rows.len() + 1);
-            let _ = writeln!(
-                maf_out,
-                "s {ref_contig} {lo} {} + {ref_src_size} {ref_sub}",
-                hi - lo
+            emit_merged_block(
+                &ref_contig,
+                lo,
+                hi,
+                ref_src_size,
+                &ref_sub,
+                &sp_rows,
+                &mut maf_out,
+                &mut gfa_out,
+                &mut prev_seg,
             );
-            for (sp, (qc, qs, qz, st, qsrc, qseq)) in &sp_rows {
-                let _ = writeln!(maf_out, "s {sp}.{qc} {qs} {qz} {st} {qsrc} {qseq}");
-            }
-            maf_out.push('\n');
-
-            let seg_id = format!("ms_{ref_contig}_{lo}_{hi}");
-            let _ = writeln!(
-                gfa_out,
-                "S\t{seg_id}\t*\tLN:i:{}\tSP:i:{}",
-                hi - lo,
-                sp_rows.len() + 1
-            );
-            if let Some(prev) = prev_seg.as_ref() {
-                let _ = writeln!(gfa_out, "L\t{prev}\t+\t{seg_id}\t+\t0M");
-            }
-            prev_seg = Some(seg_id);
         }
     }
 
@@ -1985,5 +2257,41 @@ mod tests {
         assert!(merged_maf.contains("s Pr.q1"));
         assert!(merged_maf.contains("s Pv.q2"));
         assert!(merged_gfa.contains("# EG:Z:Pf__Pr\tB0"));
+    }
+
+    #[test]
+    fn merge_threads_query_insertion_columns() {
+        let maf1 =
+            "##maf version=1\na score=4.0\ns chr1 10 4 + 100 AC--GT\ns q1 0 6 + 100 ACTTGT\n";
+        let maf2 = "##maf version=1\na score=4.0\ns chr1 10 4 + 100 ACGT\ns q2 0 4 + 100 ACGT\n";
+        let (merged_maf, _, total, multi) = merge_pairwise_mafs(
+            "Pf",
+            &[
+                ("Pr".to_owned(), maf1.to_owned()),
+                ("Pv".to_owned(), maf2.to_owned()),
+            ],
+            1000,
+        );
+        assert_eq!(total, 1);
+        assert_eq!(multi, 1);
+        assert!(merged_maf.contains("s chr1 10 4 + 100 AC--GT"));
+        assert!(merged_maf.contains("s Pr.q1 0 6 + 100 ACTTGT"));
+        assert!(merged_maf.contains("s Pv.q2 0 4 + 100 AC--GT"));
+    }
+
+    #[test]
+    fn ry_seeds_recover_transitions_and_softmask_skips_lowercase() {
+        // Transitions (A<->G, C<->T) at multiple positions: R/Y seeds still match identically.
+        let sx = b"ACGTTGCACTGATCGTAGCTAGCTAAGGCCAT";
+        let sy = b"ATGTTGTACTGATTGTAGCTAGCTAAGGCTAT";
+        let ry_x = canonical_spaced_seeds_with_opts(sx, MASK_RY20, 2, false, true).expect("valid");
+        let ry_y = canonical_spaced_seeds_with_opts(sy, MASK_RY20, 2, false, true).expect("valid");
+        assert!(!ry_x.is_empty());
+        assert_eq!(ry_x, ry_y);
+
+        let masked = b"acgttgcactgatcgtagctagctaaggccat";
+        let skipped =
+            canonical_spaced_seeds_with_opts(masked, MASK_RY20, 2, true, true).expect("valid");
+        assert_eq!(skipped.len(), 0);
     }
 }

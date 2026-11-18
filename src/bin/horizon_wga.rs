@@ -2,8 +2,8 @@
 
 use anyhow::{Context, Result};
 use horizon_aligner::{
-    ContigIndex, align_contig_pair_indexed_with_min_lcb, format_gfa_blocks,
-    format_gfa_paralog_tags, format_gfa_summary, format_maf_blocks, prepare_contig_index,
+    AlignConfig, ContigIndex, align_contig_pair_with_config, format_gfa_blocks,
+    format_gfa_paralog_tags, format_gfa_summary, format_maf_blocks, prepare_contig_index_opts,
     resolve_alignment_duplications, score_contig_pair_lcb, shared_seed_count,
 };
 use rayon::prelude::*;
@@ -50,7 +50,9 @@ struct CliArgs {
     resolve_dups: bool,
     min_shared_seeds: usize,
     min_top_lcb: usize,
-    rbest: bool,
+    top_k: usize,
+    respect_softmask: bool,
+    use_ry_seeds: bool,
 }
 
 fn parse_args() -> CliArgs {
@@ -61,7 +63,9 @@ fn parse_args() -> CliArgs {
     let mut resolve_dups = false;
     let mut min_shared_seeds = 8usize;
     let mut min_top_lcb = 0usize;
-    let mut rbest = false;
+    let mut top_k = 0usize;
+    let mut respect_softmask = false;
+    let mut use_ry_seeds = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -86,12 +90,30 @@ fn parse_args() -> CliArgs {
                 }
                 i += 2;
             }
+            "--top-k" if i + 1 < args.len() => {
+                if let Ok(v) = args[i + 1].parse() {
+                    top_k = v;
+                }
+                i += 2;
+            }
             "--resolve-dups" => {
                 resolve_dups = true;
                 i += 1;
             }
             "--rbest" => {
-                rbest = true;
+                top_k = 1;
+                i += 1;
+            }
+            "--respect-softmask" => {
+                respect_softmask = true;
+                i += 1;
+            }
+            "--ry-seeds" => {
+                use_ry_seeds = true;
+                i += 1;
+            }
+            "--no-ry-seeds" => {
+                use_ry_seeds = false;
                 i += 1;
             }
             _ => {
@@ -121,14 +143,17 @@ fn parse_args() -> CliArgs {
         resolve_dups,
         min_shared_seeds,
         min_top_lcb,
-        rbest,
+        top_k,
+        respect_softmask,
+        use_ry_seeds,
     }
 }
 
-fn compute_rbest_mask(
+fn compute_top_k_mask(
     target_idx: &[(String, ContigIndex)],
     query_idx: &[(String, ContigIndex)],
     min_shared_seeds: usize,
+    top_k: usize,
 ) -> Vec<Vec<bool>> {
     let scores: Vec<((usize, usize), (usize, usize))> = (0..target_idx.len())
         .into_par_iter()
@@ -144,24 +169,24 @@ fn compute_rbest_mask(
             })
         })
         .collect();
-    let mut best_y: Vec<(usize, (usize, usize))> = vec![(0, (0, 0)); target_idx.len()];
-    let mut best_x: Vec<(usize, (usize, usize))> = vec![(0, (0, 0)); query_idx.len()];
+    let mut by_x: Vec<Vec<((usize, usize), usize)>> = vec![Vec::new(); target_idx.len()];
+    let mut by_y: Vec<Vec<((usize, usize), usize)>> = vec![Vec::new(); query_idx.len()];
     for &((x_i, y_i), sc) in &scores {
-        if sc > best_y[x_i].1 {
-            best_y[x_i] = (y_i, sc);
-        }
-        if sc > best_x[y_i].1 {
-            best_x[y_i] = (x_i, sc);
+        if sc.1 >= min_shared_seeds {
+            by_x[x_i].push((sc, y_i));
+            by_y[y_i].push((sc, x_i));
         }
     }
     let mut mask = vec![vec![false; query_idx.len()]; target_idx.len()];
-    for (x_i, &(y_i, sc)) in best_y.iter().enumerate() {
-        if sc.1 >= min_shared_seeds {
+    for (x_i, list) in by_x.iter_mut().enumerate() {
+        list.sort_unstable_by_key(|a| std::cmp::Reverse(a.0));
+        for &(_, y_i) in list.iter().take(top_k) {
             mask[x_i][y_i] = true;
         }
     }
-    for (y_i, &(x_i, sc)) in best_x.iter().enumerate() {
-        if sc.1 >= min_shared_seeds {
+    for (y_i, list) in by_y.iter_mut().enumerate() {
+        list.sort_unstable_by_key(|a| std::cmp::Reverse(a.0));
+        for &(_, x_i) in list.iter().take(top_k) {
             mask[x_i][y_i] = true;
         }
     }
@@ -176,12 +201,29 @@ fn main() -> Result<()> {
 
     let idx_x: Vec<(String, ContigIndex)> = contigs_x
         .par_iter()
-        .map(|(n, s)| Ok((n.clone(), prepare_contig_index(s)?)))
+        .map(|(n, s)| {
+            Ok((
+                n.clone(),
+                prepare_contig_index_opts(s, cli.respect_softmask)?,
+            ))
+        })
         .collect::<Result<Vec<_>>>()?;
     let idx_y: Vec<(String, ContigIndex)> = contigs_y
         .par_iter()
-        .map(|(n, s)| Ok((n.clone(), prepare_contig_index(s)?)))
+        .map(|(n, s)| {
+            Ok((
+                n.clone(),
+                prepare_contig_index_opts(s, cli.respect_softmask)?,
+            ))
+        })
         .collect::<Result<Vec<_>>>()?;
+
+    let cfg = AlignConfig {
+        min_top_lcb_anchors: cli.min_top_lcb,
+        skip_softmasked: cli.respect_softmask,
+        use_ry_seeds: cli.use_ry_seeds,
+        ..AlignConfig::default()
+    };
 
     let mut total_pairs = 0usize;
     let mut total_bubbles = 0usize;
@@ -190,9 +232,8 @@ fn main() -> Result<()> {
     let mut maf_buf = String::new();
     let mut gfa_buf = String::new();
 
-    let allowed = cli
-        .rbest
-        .then(|| compute_rbest_mask(&idx_x, &idx_y, cli.min_shared_seeds));
+    let allowed = (cli.top_k > 0)
+        .then(|| compute_top_k_mask(&idx_x, &idx_y, cli.min_shared_seeds, cli.top_k));
 
     for (x_i, (nx, ix)) in idx_x.iter().enumerate() {
         for (y_i, (ny, iy)) in idx_y.iter().enumerate() {
@@ -206,7 +247,7 @@ fn main() -> Result<()> {
                 pruned_pairs += 1;
                 continue;
             }
-            let aln = align_contig_pair_indexed_with_min_lcb(ix, iy, cli.min_top_lcb)?;
+            let aln = align_contig_pair_with_config(ix, iy, &cfg)?;
             if aln.aligned_pairs.is_empty() {
                 pruned_pairs += 1;
                 continue;
