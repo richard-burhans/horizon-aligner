@@ -7,7 +7,8 @@ use horizon_aligner::{
     resolve_alignment_duplications, score_contig_pair_lcb, shared_seed_count,
 };
 use rayon::prelude::*;
-use std::fs;
+use std::fs::{self, File};
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -193,6 +194,7 @@ fn compute_top_k_mask(
     mask
 }
 
+#[allow(clippy::too_many_lines)]
 fn main() -> Result<()> {
     let cli = parse_args();
     let t0 = Instant::now();
@@ -229,8 +231,18 @@ fn main() -> Result<()> {
     let mut total_bubbles = 0usize;
     let mut pruned_pairs = 0usize;
     let mut summary_out = String::new();
-    let mut maf_buf = String::new();
-    let mut gfa_buf = String::new();
+    let mut maf_writer = cli
+        .maf_out
+        .as_ref()
+        .map(|p| File::create(p).map(BufWriter::new))
+        .transpose()
+        .context("creating MAF output")?;
+    let mut gfa_writer = cli
+        .gfa_out
+        .as_ref()
+        .map(|p| File::create(p).map(BufWriter::new))
+        .transpose()
+        .context("creating GFA output")?;
 
     let allowed = (cli.top_k > 0)
         .then(|| compute_top_k_mask(&idx_x, &idx_y, cli.min_shared_seeds, cli.top_k));
@@ -256,32 +268,34 @@ fn main() -> Result<()> {
             total_bubbles += aln.macro_bubbles + aln.internal_bubbles;
             summary_out.push_str(&format_gfa_summary(nx, ny, &aln));
 
-            if cli.maf_out.is_some() {
+            if let Some(w) = maf_writer.as_mut() {
                 let sx = &contigs_x[x_i].1;
                 let sy = &contigs_y[y_i].1;
-                maf_buf.push_str(&format_maf_blocks(nx, sx.len(), ny, sy.len(), sx, sy, &aln));
+                let text = format_maf_blocks(nx, sx.len(), ny, sy.len(), sx, sy, &aln);
+                w.write_all(text.as_bytes())?;
             }
-            if cli.gfa_out.is_some() {
-                gfa_buf.push_str(&format_gfa_blocks(nx, ny, &aln));
+            if let Some(w) = gfa_writer.as_mut() {
+                let text = format_gfa_blocks(nx, ny, &aln);
+                w.write_all(text.as_bytes())?;
             }
             if cli.resolve_dups {
                 let dups = resolve_alignment_duplications(&aln, 1000);
                 let tag_line = format_gfa_paralog_tags(nx, ny, &dups);
                 if !tag_line.is_empty() {
                     summary_out.push_str(&tag_line);
-                    if cli.gfa_out.is_some() {
-                        gfa_buf.push_str(&tag_line);
+                    if let Some(w) = gfa_writer.as_mut() {
+                        w.write_all(tag_line.as_bytes())?;
                     }
                 }
             }
         }
     }
 
-    if let Some(maf_path) = &cli.maf_out {
-        fs::write(maf_path, &maf_buf).with_context(|| format!("writing {}", maf_path.display()))?;
+    if let Some(w) = maf_writer.as_mut() {
+        w.flush()?;
     }
-    if let Some(gfa_path) = &cli.gfa_out {
-        fs::write(gfa_path, &gfa_buf).with_context(|| format!("writing {}", gfa_path.display()))?;
+    if let Some(w) = gfa_writer.as_mut() {
+        w.flush()?;
     }
 
     let elapsed = t0.elapsed().as_secs_f64();

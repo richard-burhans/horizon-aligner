@@ -1,6 +1,7 @@
 //! Banded MDL + BOCPD + KP-14 aligner with Horizon-Bubble abstention.
 
 pub mod egraph;
+pub mod hal;
 
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -932,6 +933,8 @@ pub struct ContigIndex {
 const MASK_RY20: &str = "1110110110111011011011011";
 /// Standard `LASTZ` `12-of-19` spaced-seed mask.
 pub const MASK_LASTZ12: &str = "1110100110010101111";
+/// Complementary `11-of-18` spaced-seed mask for multi-shape divergent seeding.
+pub const MASK_LASTZ11: &str = "111010011001010111";
 
 /// Configurable parameters for [`align_contig_pair_with_config`].
 #[derive(Debug, Clone)]
@@ -942,6 +945,8 @@ pub struct AlignConfig {
     pub skip_softmasked: bool,
     /// Enable transition-tolerant 1-bit `R/Y` (`MASK_RY20`) fallback seeding for divergent homologs.
     pub use_ry_seeds: bool,
+    /// Enable complementary `11-of-18` + `12-of-19` HSP-gated multi-shape seeding.
+    pub use_multi_shape_seeds: bool,
     /// Minimum anchor count for `w=10` and `R/Y` fallback LCB clustering.
     pub fallback_min_anchors: usize,
     /// Minimum genomic span (bp) for `w=10` and `R/Y` fallback LCB clustering.
@@ -964,6 +969,7 @@ impl Default for AlignConfig {
             min_top_lcb_anchors: 0,
             skip_softmasked: false,
             use_ry_seeds: false,
+            use_multi_shape_seeds: true,
             fallback_min_anchors: 4,
             fallback_min_span: 50,
             fallback_max_occ: 2,
@@ -1151,6 +1157,25 @@ pub fn find_lastz12_1transition_hits<S: std::hash::BuildHasher>(
         &OFFSETS,
         &REV_OFFSETS,
         19,
+        iy_fwd,
+        iy_rc,
+        skip_softmasked,
+    )
+}
+
+fn find_lastz11_1transition_hits<S: std::hash::BuildHasher>(
+    seq_x: &[u8],
+    iy_fwd: &HashMap<u64, Vec<usize>, S>,
+    iy_rc: &HashMap<u64, Vec<usize>, S>,
+    skip_softmasked: bool,
+) -> (AnchorPairs, AnchorPairs) {
+    const OFFSETS: [usize; 11] = [0, 1, 2, 4, 7, 8, 11, 13, 15, 16, 17];
+    const REV_OFFSETS: [usize; 11] = [0, 1, 2, 4, 6, 9, 10, 13, 15, 16, 17];
+    find_spaced_1transition_hits(
+        seq_x,
+        &OFFSETS,
+        &REV_OFFSETS,
+        18,
         iy_fwd,
         iy_rc,
         skip_softmasked,
@@ -1432,6 +1457,27 @@ pub fn align_contig_pair_with_config(
         find_lastz12_1transition_hits(seq_x, &iy_lz_fwd, &iy_lz_rc, cfg.skip_softmasked);
     append_hsp_gated_lastz12_lcbs(&mut combined_fwd, seq_x, seq_y, &hits_lz_fwd, 180);
     append_hsp_gated_lastz12_lcbs(&mut combined_rc, seq_x, seq_y_rc, &hits_lz_rc, 180);
+
+    if cfg.use_multi_shape_seeds {
+        let iy_11_fwd = canonical_spaced_seeds_with_opts(
+            seq_y,
+            MASK_LASTZ11,
+            cfg.fallback_max_occ,
+            cfg.skip_softmasked,
+            false,
+        )?;
+        let iy_11_rc = canonical_spaced_seeds_with_opts(
+            seq_y_rc,
+            MASK_LASTZ11,
+            cfg.fallback_max_occ,
+            cfg.skip_softmasked,
+            false,
+        )?;
+        let (hits_11_fwd, hits_11_rc) =
+            find_lastz11_1transition_hits(seq_x, &iy_11_fwd, &iy_11_rc, cfg.skip_softmasked);
+        append_hsp_gated_lastz12_lcbs(&mut combined_fwd, seq_x, seq_y, &hits_11_fwd, 180);
+        append_hsp_gated_lastz12_lcbs(&mut combined_rc, seq_x, seq_y_rc, &hits_11_rc, 180);
+    }
 
     // Transition-tolerant R/Y (1-bit purine/pyrimidine) fallback for divergent homologs.
     if cfg.use_ry_seeds {
@@ -1981,7 +2027,7 @@ fn emit_merged_block(
     let seg_id = format!("ms_{ref_contig}_{lo}_{hi}");
     let _ = writeln!(
         gfa_out,
-        "S\t{seg_id}\t*\tLN:i:{}\tSP:i:{}",
+        "S\t{seg_id}\t*\tLN:i:{}\tSP:i:{}\tSN:Z:{ref_contig}\tSO:i:{lo}\tSR:i:0",
         hi - lo,
         sp_rows.len() + 1
     );
