@@ -574,16 +574,170 @@ pub struct HalFileInfo {
     pub root_names: Vec<String>,
 }
 
-/// Inspect a `.hal` file on disk and extract its HDF5 superblock and v0 root member names.
+fn read_at<R: std::io::Read + std::io::Seek>(
+    r: &mut R,
+    offset: u64,
+    len: usize,
+) -> std::io::Result<Vec<u8>> {
+    r.seek(std::io::SeekFrom::Start(offset))?;
+    let mut buf = vec![0u8; len];
+    let mut filled = 0usize;
+    while filled < len {
+        let n = r.read(&mut buf[filled..])?;
+        if n == 0 {
+            break;
+        }
+        filled += n;
+    }
+    buf.truncate(filled);
+    Ok(buf)
+}
+
+fn read_v1_obj_header_seek<R: std::io::Read + std::io::Seek>(
+    r: &mut R,
+    obj_addr: u64,
+) -> std::io::Result<Option<Vec<u8>>> {
+    let prefix = read_at(r, obj_addr, 16)?;
+    if prefix.len() < 16 || prefix[0] != 1 {
+        return Ok(None);
+    }
+    let hdr_size = usize::try_from(u32::from_le_bytes([
+        prefix[8], prefix[9], prefix[10], prefix[11],
+    ]))
+    .unwrap_or(0);
+    read_at(r, obj_addr, 16 + hdr_size).map(Some)
+}
+
+fn collect_snod_names_seek<R: std::io::Read + std::io::Seek>(
+    r: &mut R,
+    snod_addr: u64,
+    heap_data: &[u8],
+    out: &mut Vec<String>,
+) -> std::io::Result<()> {
+    let hdr = read_at(r, snod_addr, 8)?;
+    if hdr.len() < 8 || &hdr[0..4] != b"SNOD" {
+        return Ok(());
+    }
+    let n_syms = usize::from(u16::from_le_bytes([hdr[6], hdr[7]]));
+    let entries_buf = read_at(r, snod_addr + 8, n_syms * 40)?;
+    for i in 0..n_syms {
+        let Some(name_off_u64) = read_u64_le(&entries_buf, i * 40) else {
+            break;
+        };
+        let Ok(name_off) = usize::try_from(name_off_u64) else {
+            continue;
+        };
+        if let Some(tail) = heap_data.get(name_off..) {
+            let end = tail.iter().position(|&b| b == 0).unwrap_or(tail.len());
+            if let Ok(s) = std::str::from_utf8(&tail[..end])
+                && !s.is_empty()
+            {
+                out.push(s.to_owned());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn walk_btree_v1_group_seek<R: std::io::Read + std::io::Seek>(
+    r: &mut R,
+    node_addr: u64,
+    heap_data: &[u8],
+    out: &mut Vec<String>,
+) -> std::io::Result<()> {
+    let hdr = read_at(r, node_addr, 24)?;
+    if hdr.len() < 24 || &hdr[0..4] != b"TREE" || hdr[4] != 0 {
+        return Ok(());
+    }
+    let node_level = hdr[5];
+    let n_entries = usize::from(u16::from_le_bytes([hdr[6], hdr[7]]));
+    let body = read_at(r, node_addr + 24, n_entries * 16)?;
+    for i in 0..n_entries {
+        let Some(child_addr) = read_u64_le(&body, i * 16 + 8) else {
+            break;
+        };
+        if node_level == 0 {
+            collect_snod_names_seek(r, child_addr, heap_data, out)?;
+        } else {
+            walk_btree_v1_group_seek(r, child_addr, heap_data, out)?;
+        }
+    }
+    Ok(())
+}
+
+/// Extract root-group member names from an HDF5 v0 `.hal` stream via `Seek` without loading the full file.
+///
+/// # Errors
+/// Returns an `std::io::Error` if seeking or reading fails.
+pub fn read_hdf5_v0_root_names_seek<R: std::io::Read + std::io::Seek>(
+    r: &mut R,
+    sb: Hdf5Superblock,
+) -> std::io::Result<Option<Vec<String>>> {
+    if sb.version > 1 || sb.offset_size != 8 || sb.length_size != 8 {
+        return Ok(None);
+    }
+    let Some(root_addr) = sb.root_group_addr else {
+        return Ok(None);
+    };
+    let Some(root_slice) = read_v1_obj_header_seek(r, root_addr)? else {
+        return Ok(None);
+    };
+    let num_msgs = usize::from(u16::from_le_bytes([root_slice[2], root_slice[3]]));
+    let mut pos = 16usize;
+    let end = root_slice.len();
+    let mut symtab_addrs: Option<(u64, u64)> = None;
+    let mut seen = 0usize;
+    while seen < num_msgs && pos + 8 <= end {
+        let mtype = u16::from_le_bytes([root_slice[pos], root_slice[pos + 1]]);
+        let msize = usize::from(u16::from_le_bytes([
+            root_slice[pos + 2],
+            root_slice[pos + 3],
+        ]));
+        if mtype == 0x0011 && msize >= 16 && pos + 8 + 16 <= end {
+            if let (Some(bt), Some(hp)) = (
+                read_u64_le(&root_slice, pos + 8),
+                read_u64_le(&root_slice, pos + 16),
+            ) {
+                symtab_addrs = Some((bt, hp));
+            }
+            break;
+        }
+        seen += 1;
+        pos += 8 + msize;
+    }
+    let Some((btree_addr, heap_addr)) = symtab_addrs else {
+        return Ok(None);
+    };
+    let heap_hdr = read_at(r, heap_addr, 32)?;
+    if heap_hdr.len() < 32 || &heap_hdr[0..4] != b"HEAP" {
+        return Ok(None);
+    }
+    let Some(data_seg_size) = read_u64_le(&heap_hdr, 8).and_then(|v| usize::try_from(v).ok())
+    else {
+        return Ok(None);
+    };
+    let Some(data_seg_addr) = read_u64_le(&heap_hdr, 24) else {
+        return Ok(None);
+    };
+    let heap_data = read_at(r, data_seg_addr, data_seg_size)?;
+    let mut names = Vec::new();
+    walk_btree_v1_group_seek(r, btree_addr, &heap_data, &mut names)?;
+    Ok(Some(names))
+}
+
+/// Inspect a `.hal` file on disk via `Seek` and extract its HDF5 superblock and v0 root member names.
 ///
 /// # Errors
 /// Returns an `std::io::Error` if the file cannot be opened or read.
 pub fn inspect_hal_genomes(path: &std::path::Path) -> std::io::Result<Option<HalFileInfo>> {
-    let bytes = std::fs::read(path)?;
-    let Some(superblock) = read_hdf5_superblock(&bytes) else {
+    use std::io::Read as _;
+    let mut f = std::fs::File::open(path)?;
+    let mut buf = [0u8; 96];
+    let n = f.read(&mut buf)?;
+    let Some(superblock) = read_hdf5_superblock(&buf[..n]) else {
         return Ok(None);
     };
-    let root_names = read_hdf5_v0_root_names(&bytes).unwrap_or_default();
+    let root_names = read_hdf5_v0_root_names_seek(&mut f, superblock)?.unwrap_or_default();
     Ok(Some(HalFileInfo {
         superblock,
         root_names,
@@ -1077,6 +1231,12 @@ mod tests {
         );
         assert_eq!(
             read_hdf5_v0_root_names(&buf),
+            Some(vec!["Gallus_gallus".to_owned()])
+        );
+        let sb = read_hdf5_superblock(&buf).expect("superblock");
+        let mut cursor = std::io::Cursor::new(&buf);
+        assert_eq!(
+            read_hdf5_v0_root_names_seek(&mut cursor, sb).expect("seek"),
             Some(vec!["Gallus_gallus".to_owned()])
         );
         assert_eq!(read_hdf5_dataspace_dims(&buf, 0x280), Some(vec![42]));
