@@ -25,6 +25,8 @@ struct CliArgs {
     respect_softmask: bool,
     use_ry_seeds: bool,
     hal_info: Option<PathBuf>,
+    min_fallback_cov: Option<f64>,
+    hsp_threshold: Option<i32>,
 }
 
 fn parse_args() -> Result<CliArgs> {
@@ -39,6 +41,8 @@ fn parse_args() -> Result<CliArgs> {
     let mut respect_softmask = false;
     let mut use_ry_seeds = false;
     let mut hal_info = None;
+    let mut min_fallback_cov = None;
+    let mut hsp_threshold = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -89,6 +93,19 @@ fn parse_args() -> Result<CliArgs> {
                 use_ry_seeds = false;
                 i += 1;
             }
+            "--min-fallback-cov" if i + 1 < args.len() => {
+                if let Ok(v) = args[i + 1].parse() {
+                    min_fallback_cov = Some(v);
+                }
+                i += 2;
+            }
+            "--hsp-threshold" if i + 1 < args.len() => {
+                if let Ok(v) = args[i + 1].parse() {
+                    hsp_threshold = Some(v);
+                }
+                i += 2;
+            }
+
             "--hal-info" if i + 1 < args.len() => {
                 hal_info = Some(PathBuf::from(&args[i + 1]));
                 i += 2;
@@ -122,6 +139,8 @@ fn parse_args() -> Result<CliArgs> {
         respect_softmask,
         use_ry_seeds,
         hal_info,
+        min_fallback_cov,
+        hsp_threshold,
     })
 }
 
@@ -175,6 +194,8 @@ fn main() -> Result<()> {
         min_top_lcb_anchors: cli.min_top_lcb,
         skip_softmasked: cli.respect_softmask,
         use_ry_seeds: cli.use_ry_seeds,
+        min_fallback_cov: cli.min_fallback_cov,
+        hsp_threshold: cli.hsp_threshold,
         ..AlignConfig::default()
     };
 

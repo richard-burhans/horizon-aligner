@@ -43,6 +43,8 @@ pub struct AlignConfig {
     pub max_ext: usize,
     /// Minimum MDL log-likelihood gain (bits) required to accept a DP gap/flank.
     pub min_delta_bits: f64,
+    pub min_fallback_cov: Option<f64>,
+    pub hsp_threshold: Option<i32>,
     /// Minimum posterior homology probability required to emit a base pair.
     pub min_post_prob: f64,
 }
@@ -60,6 +62,8 @@ impl Default for AlignConfig {
             band_w: 180,
             max_ext: 1500,
             min_delta_bits: 10.0,
+            min_fallback_cov: None,
+            hsp_threshold: None,
             min_post_prob: MIN_POST_PROB,
         }
     }
@@ -171,7 +175,24 @@ pub fn align_contig_pair_with_config(
         }
     }
     #[allow(clippy::cast_precision_loss)]
+
+    // MDL-derived default for HSP thresholds
+    let base_hsp_thresh = cfg.hsp_threshold.unwrap_or_else(|| {
+        (100.0 + (effective_min_bits * 1.5)).round() as i32
+    });
+    
+    // MDL-derived default fallback coverage threshold
+    // If the expected bit savings of the primary coverage is less than the effective min bits
+    // across the sequence, trigger fallback.
+    let min_fallback_cov = cfg.min_fallback_cov.unwrap_or_else(|| {
+        let expected_bits_per_base = 2.0; // 2 bits per nucleotide match
+        let bit_ratio = effective_min_bits / (seq_x.len().max(1) as f64 * expected_bits_per_base);
+        // Map this to a reasonable coverage threshold (e.g. 0.05 to 0.95)
+        (bit_ratio * 10.0).clamp(0.05, 0.95)
+    });
+    
     let primary_cov = (covered_bp as f64) / (seq_x.len().max(1) as f64);
+
     let filter_uncovered = |hits: &mut Vec<(usize, usize)>| {
         if covered_bp > 0 {
             hits.retain(|&(px, _)| !covered_x.get(px).copied().unwrap_or(false));
@@ -223,7 +244,7 @@ pub fn align_contig_pair_with_config(
 
     // LASTZ-style 12-of-19 + 1-transition hits gated by ungapped X-drop HSP score
     // (skip when w=12 already covers >= 85% of the target contig).
-    if primary_cov < 0.85 {
+    if primary_cov < min_fallback_cov {
         let iy_lz_fwd = canonical_spaced_seeds_with_opts(
             seq_y,
             MASK_LASTZ12,
@@ -247,19 +268,19 @@ pub fn align_contig_pair_with_config(
             seq_x,
             seq_y,
             &hits_lz_fwd,
-            180 + hsp_bonus,
+            base_hsp_thresh + hsp_bonus,
         );
         append_hsp_gated_lastz12_lcbs(
             &mut combined_rc,
             seq_x,
             seq_y_rc,
             &hits_lz_rc,
-            180 + hsp_bonus,
+            base_hsp_thresh + hsp_bonus,
         );
     }
     let t_lz1 = t_start.elapsed();
 
-    if cfg.use_multi_shape_seeds && primary_cov < 1.0 {
+    if cfg.use_multi_shape_seeds && primary_cov < min_fallback_cov {
         // Skip O(N * 264) 2-transition scan once search space exceeds ~10^9 cell lookups
         // where single-transition + AA5 + BOCPD/MDL already dominate runtime.
         if (seq_x.len() as u128) * (seq_y.len() as u128) < 1_000_000_000 {
@@ -286,14 +307,14 @@ pub fn align_contig_pair_with_config(
                 seq_x,
                 seq_y,
                 &double_trans_fwd,
-                210 + hsp_bonus,
+                base_hsp_thresh + 30 + hsp_bonus,
             );
             append_hsp_gated_lastz12_lcbs(
                 &mut combined_rc,
                 seq_x,
                 seq_y_rc,
                 &double_trans_rc,
-                210 + hsp_bonus,
+                base_hsp_thresh + 30 + hsp_bonus,
             );
         }
 
@@ -320,14 +341,14 @@ pub fn align_contig_pair_with_config(
             seq_x,
             seq_y,
             &hits_11_fwd,
-            210 + hsp_bonus,
+            base_hsp_thresh + 30 + hsp_bonus,
         );
         append_hsp_gated_lastz12_lcbs(
             &mut combined_rc,
             seq_x,
             seq_y_rc,
             &hits_11_rc,
-            210 + hsp_bonus,
+            base_hsp_thresh + 30 + hsp_bonus,
         );
 
         // Apply R/Y (1-bit) and w=10 1-transition only while random-collision density
@@ -354,14 +375,14 @@ pub fn align_contig_pair_with_config(
                 seq_x,
                 seq_y,
                 &hits_ry_fwd,
-                220 + hsp_bonus,
+                base_hsp_thresh + 40 + hsp_bonus,
             );
             append_hsp_gated_lastz12_lcbs(
                 &mut combined_rc,
                 seq_x,
                 seq_y_rc,
                 &hits_ry_rc,
-                220 + hsp_bonus,
+                base_hsp_thresh + 40 + hsp_bonus,
             );
 
             // HSP-gated w=10 (10-of-14) 1-transition seeding.
@@ -374,14 +395,14 @@ pub fn align_contig_pair_with_config(
                 seq_x,
                 seq_y,
                 &hits_w10_fwd,
-                220 + hsp_bonus,
+                base_hsp_thresh + 40 + hsp_bonus,
             );
             append_hsp_gated_lastz12_lcbs(
                 &mut combined_rc,
                 seq_x,
                 seq_y_rc,
                 &hits_w10_rc,
-                220 + hsp_bonus,
+                base_hsp_thresh + 40 + hsp_bonus,
             );
         }
 
@@ -390,8 +411,8 @@ pub fn align_contig_pair_with_config(
         let mut aa_rc = find_translated_aa5_hits(seq_x, seq_y_rc, 4, cfg.skip_softmasked);
         filter_uncovered(&mut aa_fwd);
         filter_uncovered(&mut aa_rc);
-        append_hsp_gated_aa_lcbs(&mut combined_fwd, seq_x, seq_y, &aa_fwd, 90 + aa_bonus);
-        append_hsp_gated_aa_lcbs(&mut combined_rc, seq_x, seq_y_rc, &aa_rc, 90 + aa_bonus);
+        append_hsp_gated_aa_lcbs(&mut combined_fwd, seq_x, seq_y, &aa_fwd, (base_hsp_thresh / 2) + aa_bonus);
+        append_hsp_gated_aa_lcbs(&mut combined_rc, seq_x, seq_y_rc, &aa_rc, (base_hsp_thresh / 2) + aa_bonus);
     }
 
     // Transition-tolerant R/Y (1-bit purine/pyrimidine) fallback for divergent homologs.

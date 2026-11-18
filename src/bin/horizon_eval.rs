@@ -1,7 +1,7 @@
 //! Evaluate `horizon-aligner` recall and abstention against Galaxy LASTZ `rbest_maf` on Pf vs Pv Chr1.
 
 use anyhow::{Context, Result};
-use horizon_aligner::align_contig_pair;
+use horizon_aligner::{align_contig_pair_with_config, AlignConfig, prepare_contig_index_opts};
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
@@ -87,8 +87,33 @@ fn main() -> Result<()> {
     let pv = read_named_contig(Path::new(&args[4]), target_name)?;
     let maf_all = parse_maf_pairs(Path::new(&args[5]), ref_name, target_name)?;
 
+
+    let mut min_fallback_cov = None;
+    let mut hsp_threshold = None;
+    let mut i = 6;
+    while i < args.len() {
+        if args[i] == "--min-fallback-cov" && i + 1 < args.len() {
+            min_fallback_cov = Some(args[i + 1].parse()?);
+            i += 2;
+        } else if args[i] == "--hsp-threshold" && i + 1 < args.len() {
+            hsp_threshold = Some(args[i + 1].parse()?);
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+
     let t0 = Instant::now();
-    let aln = align_contig_pair(&pf, &pv)?;
+    let idx_pf = prepare_contig_index_opts(&pf, false)?;
+    let idx_pv = prepare_contig_index_opts(&pv, false)?;
+    
+    let cfg = AlignConfig {
+        min_fallback_cov,
+        hsp_threshold,
+        ..AlignConfig::default()
+    };
+    let aln = align_contig_pair_with_config(&idx_pf, &idx_pv, &cfg)?;
+
     let elapsed = t0.elapsed().as_secs_f64();
 
     let proto_set: HashSet<(usize, usize)> = aln.aligned_pairs.iter().copied().collect();
