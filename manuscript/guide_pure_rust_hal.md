@@ -9,7 +9,7 @@ date: "2026-11-18"
 
 The Hierarchical Alignment (`HAL`) format (Hickey et al. 2013) is the standard interchange format for Progressive Cactus multi-hundred-genome alignments (`363-avian-2020.hal`, `241-mammalian-2020v2.hal`, Ensembl `sars-cov-2.hal`). Every `.hal` file is an **HDF5** container storing a Newick phylogeny and five binary datasets per genome.
 
-Normally, reading `.hal` requires linking the C `libhdf5` shared library and the C++ `hal` API, which complicates static Rust builds, cross-compilation, and Galaxy/Bioconda packaging. Horizon's `src/hal.rs` eliminates `libhdf5` entirely by implementing:
+Normally, reading `.hal` requires linking the C `libhdf5` shared library and the C++ `hal` API, which complicates static Rust builds, cross-compilation, and Galaxy/Bioconda packaging. Horizon's `src/hal/` eliminates `libhdf5` entirely by implementing:
 
 1. An in-memory hierarchical alignment model (`HalAlignment`, `HalGenome`, `HalTopSegment`, `HalBottomSegment`).
 2. A zero-dependency, streaming `Read + Seek` HDF5 `v0`/`v1` container reader (`BufReader<File>`) that never loads whole multi-gigabyte `.hal` archives into RAM.
@@ -19,7 +19,7 @@ Normally, reading `.hal` requires linking the C `libhdf5` shared library and the
 
 # 2. End-to-End Streaming Traversal (`Read + Seek`)
 
-When inspecting or extracting a genome from a large `.hal` archive, `src/hal.rs` walks five layers via targeted `seek()` calls (Figure 1):
+When inspecting or extracting a genome from a large `.hal` archive, `src/hal/` walks five layers via targeted `seek()` calls (Figure 1):
 
 ![Pure-Rust Streaming HDF5/HAL Seek Traversal](figures/fig_c3_hdf5_hal_seek.png)
 
@@ -67,11 +67,11 @@ Once `read_hdf5_v0_group_entries_seek` returns the `obj_hdr_addr` of a target da
 
 # 3. Decoding `HAL` Binary Datasets
 
-Every genome group inside a `.hal` container stores up to five datasets. `src/hal.rs` unpacks them directly from raw little-endian bytes (Figure 2):
+Every genome group inside a `.hal` container stores up to five datasets. `src/hal/` unpacks them directly from raw little-endian bytes (Figure 2):
 
 ![HAL Little-Endian Binary Record Layouts](figures/fig_g2_hal_binary_layouts.png)
 
-**Figure 2. Little-endian binary record layouts decoded by `src/hal.rs`.** Each row shows the exact byte offsets and field types unpacked from `DNA_ARRAY` (`4 bits/base`), `SEQIDX_ARRAY` (`24 B`), `TOP_ARRAY` (`33 B`), `BOTTOM_ARRAY` (`24 + 9C B`), and `SEQNAME_ARRAY` (`stride B`). Visual dictionary: colors group datasets by role—blue for sequence/names, green for sequence indices, orange for top-segment links, purple for bottom-segment links, and vermilion for strand/child flags.
+**Figure 2. Little-endian binary record layouts decoded by `src/hal/`.** Each row shows the exact byte offsets and field types unpacked from `DNA_ARRAY` (`4 bits/base`), `SEQIDX_ARRAY` (`24 B`), `TOP_ARRAY` (`33 B`), `BOTTOM_ARRAY` (`24 + 9C B`), and `SEQNAME_ARRAY` (`stride B`). Visual dictionary: colors group datasets by role—blue for sequence/names, green for sequence indices, orange for top-segment links, purple for bottom-segment links, and vermilion for strand/child flags.
 
 | Dataset | Record Width | Binary Layout (Little-Endian) | Horizon Decoder |
 | :--- | :--- | :--- | :--- |

@@ -18,7 +18,7 @@ A **Horizon Bubble** is Horizon's third option: an explicit, syntenically anchor
 
 # 2. Two Paths That Create a Horizon Bubble
 
-Horizon emits bubbles at two distinct stages of the alignment pipeline (`src/mdl.rs`, Figure 1A):
+Horizon emits bubbles at two distinct stages of the alignment pipeline (`src/mdl/`, Figure 1A):
 
 ![Horizon Bubble Anatomy and GFA/MAF Lens](figures/fig_g3_horizon_bubble_anatomy.png)
 

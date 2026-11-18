@@ -4,11 +4,11 @@ A whole-genome aligner and multi-species alignment toolkit written in Rust, comb
 
 ## Key Features
 
-- **Strand-symmetric spaced-seed & multi-shape seeding** (`src/seeding.rs`): KP-14 (`11-of-15`) primary indexing with low-complexity repeat filtering, plus transition-tolerant `12-of-19` / `11-of-18`, `w=10`, 1-bit `R/Y`, and 6-frame translated `AA5` fallback seeding in unanchored gaps.
-- **BOCPD + MDL banded alignment** (`src/bocpd.rs`, `src/mdl.rs`): Online GC/composition segmentation coupled with log-odds Viterbi DP and X-drop flank extension. Regions whose MDL bit gain falls below the search-space-scaled threshold abstain as explicit **Horizon Bubbles** rather than emitting spurious alignments.
+- **Strand-symmetric spaced-seed & multi-shape seeding** (`src/seeding/`): KP-14 (`11-of-15`) primary indexing with low-complexity repeat filtering, plus transition-tolerant `12-of-19` / `11-of-18`, `w=10`, 1-bit `R/Y`, and 6-frame translated `AA5` fallback seeding in unanchored gaps.
+- **BOCPD + MDL banded alignment** (`src/bocpd.rs`, `src/mdl/`): Online GC/composition segmentation coupled with log-odds Viterbi DP and X-drop flank extension. Regions whose MDL bit gain falls below the search-space-scaled threshold abstain as explicit **Horizon Bubbles** rather than emitting spurious alignments.
 - **Reference-guided multi-species merging** (`src/merge.rs`): Parallel projection and threading of pairwise MAFs onto a reference coordinate frame with net-style overlap resolution (`horizon_merge`).
 - **E-graph synteny & paralog collapse** (`src/egraph.rs`): Equality-saturation rules over signed block expressions to identify and tag tandem/inverted duplications (`EG:Z:` in GFA v1.1).
-- **Pure-Rust HDF5 / HAL inspection & decoding** (`src/hal.rs`): Native streaming superblock, `v1` object-header (including `0x0010` continuation messages), `TREE`/`SNOD`/`HEAP` group traversal, contiguous and zlib-deflated chunked dataset reading, and `SEQNAME_ARRAY` / `BOTTOM_ARRAY` decoding—zero `libhdf5` dependency.
+- **Pure-Rust HDF5 / HAL inspection & decoding** (`src/hal/`): Native streaming superblock, `v1` object-header (including `0x0010` continuation messages), `TREE`/`SNOD`/`HEAP` group traversal, contiguous and zlib-deflated chunked dataset reading, and `SEQNAME_ARRAY` / `BOTTOM_ARRAY` decoding—zero `libhdf5` dependency.
 
 ## Repository Structure
 
@@ -16,12 +16,12 @@ A whole-genome aligner and multi-species alignment toolkit written in Rust, comb
 src/
 ├── lib.rs              # Public API re-exports and core unit tests
 ├── bocpd.rs            # BOCPD compositional segmentation & MDL pair scoring
-├── seeding.rs          # Spaced-seed indexing, transition/AA/R-Y seeding, LIS & LCB chaining
-├── mdl.rs              # Banded MDL+BOCPD DP, X-drop extension, contig-pair pipeline
+├── seeding/            # Spaced-seed indexing, transition/AA/R-Y seeding, LIS & LCB chaining
+├── mdl/                # Banded MDL+BOCPD DP, X-drop extension, contig-pair pipeline
 ├── merge.rs            # Multi-species reference-guided MAF merging
 ├── formats.rs          # MAF v1, GFA v1.1, FASTA I/O, and e-graph paralog formatting
 ├── egraph.rs           # E-graph synteny / duplication collapse
-├── hal.rs              # Pure-Rust HDF5/HAL reader and HAL* writer
+├── hal/                # Pure-Rust HDF5/HAL reader and HDF5 v0 writer
 └── bin/
     ├── horizon_wga.rs    # Pairwise whole-genome aligner & `--hal-info` CLI
     ├── horizon_merge.rs  # Multi-species pairwise MAF -> MAF + GFA merger
@@ -34,7 +34,7 @@ manuscript/
 ├── guide_mdl_vs_hoxd70.md / .pdf    # Guide 1: Why ΔL beats HOXD70 in AT/GC extremes
 ├── guide_pure_rust_hal.md / .pdf    # Guide 2: Pure-Rust Seek HDF5/HAL reader & writer
 ├── guide_horizon_bubbles.md / .pdf  # Guide 3: What is a Horizon Bubble?
-├── guide_making_alignments.md       # Guide 4: Build genome alignments with Horizon
+├── guide_making_alignments.md / .pdf # Guide 4: Build genome alignments with Horizon
 ├── references.bib                   # BibTeX references
 ├── figures/                         # Publication figures (SVG & PNG)
 └── scripts/generate_figures.py      # Reproducible figure generator

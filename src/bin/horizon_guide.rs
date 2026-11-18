@@ -749,7 +749,38 @@ fn main() -> Result<()> {
             if seed_mafs.is_empty() || low_cov_species.is_empty() {
                 break;
             }
-            let cons_contigs = build_ancestral_consensus_contigs(hinge_contigs, &seed_mafs);
+            let mut need_contig = vec![false; hinge_contigs.len()];
+            for &k in &low_cov_species {
+                let pw_idx = sp_to_pw_idx[&k];
+                let mut cov_bp = vec![0usize; hinge_contigs.len()];
+                let ctg_map: HashMap<&str, usize> = hinge_contigs
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (n, _))| (n.as_str(), i))
+                    .collect();
+                for (r0, _) in parse_two_row_maf_blocks(&pairwise_mafs[pw_idx].1) {
+                    if r0.strand == '+'
+                        && let Some(&ci) = ctg_map.get(r0.src.as_str())
+                    {
+                        cov_bp[ci] += r0.seq.bytes().filter(|&b| b != b'-').count();
+                    }
+                }
+                for (ci, (_, seq)) in hinge_contigs.iter().enumerate() {
+                    if !seq.is_empty() && cov_bp[ci] * 5 < seq.len() * 4 {
+                        need_contig[ci] = true;
+                    }
+                }
+            }
+            let all_cons = build_ancestral_consensus_contigs(hinge_contigs, &seed_mafs);
+            let cons_contigs: ContigList = all_cons
+                .into_iter()
+                .enumerate()
+                .filter(|&(ci, _)| need_contig[ci])
+                .map(|(_, c)| c)
+                .collect();
+            if cons_contigs.is_empty() {
+                break;
+            }
             let cons_indices: Vec<(String, ContigIndex)> = cons_contigs
                 .par_iter()
                 .map(|(n, s)| Ok((n.clone(), prepare_contig_index_opts(s, respect_softmask)?)))

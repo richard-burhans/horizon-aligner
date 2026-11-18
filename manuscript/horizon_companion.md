@@ -12,13 +12,13 @@ This companion document provides the data-format specifications, mathematical de
 | Module / Binary | Responsibility |
 | :--- | :--- |
 | `src/lib.rs` | Public API re-exports and shared alignment configuration |
-| `src/seeding.rs` | `KP-14` Eisenstein hashing, `LASTZ`/`RY`/`W` masks, 6-frame AA seeds, `is_low_complexity_window`, `LIS` chaining, LCB clustering, uncovered-gap fallback |
+| `src/seeding/` | `KP-14` Eisenstein hashing, `LASTZ`/`RY`/`W` masks, 6-frame AA seeds, `is_low_complexity_window`, `LIS` chaining, LCB clustering, uncovered-gap fallback |
 | `src/bocpd.rs` | Beta-Bernoulli Bayesian Online Changepoint Detection (`bocpd_gc_profile`) |
-| `src/mdl.rs` | Flat `BandGrid`, three-state MDL forward-backward DP, search-space scaling, conformal gate, X-drop flank extension |
+| `src/mdl/` | Flat `BandGrid`, three-state MDL forward-backward DP, search-space scaling, conformal gate, X-drop flank extension |
 | `src/merge.rs` | `O(N log N)` sweep-line `interval_match_score` netting, `thread_interval_columns`, transitive rescue |
 | `src/formats.rs` | `MAF`, reference-anchored `rGFA`, and bidirectional `GFA` ↔ `MAF` lens round-trips |
 | `src/egraph.rs` | Congruence-closed equality saturation for tandem duplications and nested inversions |
-| `src/hal.rs` | Pure-Rust `Seek`-based HDF5 `v0`/`v1` parser and `HAL` binary array decoders |
+| `src/hal/` | Pure-Rust `Seek`-based HDF5 `v0`/`v1` parser and `HAL` binary array decoders |
 | `src/bin/` | `horizon_wga`, `horizon_merge`, `horizon_guide`, `horizon_bench`, `horizon_hal` |
 
 ---
@@ -53,9 +53,9 @@ Graph outputs (`horizon_wga --gfa` and `horizon_merge`) use GFA v1.1 / `rGFA` co
   2. **PUTGET:** `get(putback(A', C)) == A'`.
   3. **Constant Complement:** `# HB:Z:` bubbles, `# EG:Z:` paralogs, and non-reference blocks are preserved unchanged across round-trips.
 
-## 2.3 Pure-Rust `Seek`-Based HDF5 and `HAL` Binary Layout (`src/hal.rs`)
+## 2.3 Pure-Rust `Seek`-Based HDF5 and `HAL` Binary Layout (`src/hal/`)
 
-`HAL` files (Hickey et al. 2013) are HDF5 containers storing a phylogenetic tree and per-genome sequence/segment tables. Reading multi-gigabyte `HAL` archives into RAM before parsing fails on large vertebrate panels (`363-avian`, `241-mammalian`). `src/hal.rs` therefore implements a zero-`libhdf5`, streaming `Read + Seek` HDF5 `v0`/`v1` reader (`BufReader<File>`):
+`HAL` files (Hickey et al. 2013) are HDF5 containers storing a phylogenetic tree and per-genome sequence/segment tables. Reading multi-gigabyte `HAL` archives into RAM before parsing fails on large vertebrate panels (`363-avian`, `241-mammalian`). `src/hal/` therefore implements a zero-`libhdf5`, streaming `Read + Seek` HDF5 `v0`/`v1` reader (`BufReader<File>`):
 
 ![Pure-Rust Streaming HDF5/HAL Seek Traversal](figures/fig_c3_hdf5_hal_seek.png)
 
@@ -82,7 +82,7 @@ Graph outputs (`horizon_wga --gfa` and `horizon_merge`) use GFA v1.1 / `rGFA` co
 
 # 3. Mathematical and Algorithmic Foundations
 
-## 3.1 Strand-Symmetric `KP-14` Eisenstein Seeding and Repeat Filtering (`src/seeding.rs`)
+## 3.1 Strand-Symmetric `KP-14` Eisenstein Seeding and Repeat Filtering (`src/seeding/`)
 
 To avoid canonicalizing forward and reverse-complement *k*-mers separately, Horizon encodes nucleotides over the quadratic extension field **F**_{q²} (*q* = 2⁶¹ − 1) using sixth-root Eisenstein units:
 
@@ -117,7 +117,7 @@ where the Beta-Bernoulli predictive probability `π(x_t = 1 | r) = (α_0 + s_r) 
 
 **Figure C2. Online BOCPD tracking across an isochore boundary drives calibrated MDL abstention.** **A.** Local A+T share (`P(W)`) estimated online by Beta-Bernoulli BOCPD resets cleanly at an abrupt `19%` → `45%` GC boundary (`t ≈ 220 bp`), whereas a fixed `HOXD70` prior (`52.5%` A+T) miscalibrates the `~81%`-AT left isochore. **B.** Three-state MDL column posteriors `P(M_ij | X, Y)` remain near `0.90–0.97` across conserved flanks and collapse below the `0.15` floor inside an unalignable loop (`310–410 bp`), triggering an explicit Horizon Bubble (`ΔL = −8.4 bits < λ̂`). Visual dictionary: blue shows BOCPD `P(W)`, orange marks the changepoint reset, green shows MDL column posteriors, and shaded vermilion marks the abstained Horizon Bubble.
 
-## 3.3 Continuous Search-Space MDL Scaling and `BandGrid` (`src/mdl.rs`)
+## 3.3 Continuous Search-Space MDL Scaling and `BandGrid` (`src/mdl/`)
 
 For each candidate anchor or inter-anchor gap (`X` of length `N`, `Y` of length `M`), Horizon evaluates a three-state Minimum Description Length pair-HMM (`M` match/mismatch, `I` insertion, `D` deletion) in log-space (`logplus`), parameterized by the local BOCPD base frequencies:
 
@@ -146,7 +146,7 @@ where `j − i + W ∈ [0, 2W]` maps the main diagonal `j = i` to column `W` in 
 
 **Figure C3. Flat `BandGrid` diagonal memory layout and congruence-closed e-graph paralog collapse.** **A.** `BandGrid` maps diagonal coordinates `(i, j)` with `|j − i| ≤ W` into a contiguous `Vec<f64>` of stride `2W + 1` (`W = 2`, stride `5` shown), placing the main diagonal at offset `W` (`2`). **B.** E-graph equality saturation applies `inv(inv(A)) ↔ A` and congruence closure to merge `seq(inv(inv(A)), A)` with `seq(A, A)` before collapsing tandem duplications (`seq(A, A) → dup(A)`) at minimum parsimony cost. Visual dictionary: dark blue marks the main diagonal `j = i`, light blue marks off-diagonal band cells, and green marks the extracted minimum-cost e-graph expression.
 
-## 3.4 Conformal Risk Control and Horizon Bubbles (`src/mdl.rs`)
+## 3.4 Conformal Risk Control and Horizon Bubbles (`src/mdl/`)
 
 Horizon treats alignment emission as a calibrated statistical decision. Using Conformal Risk Control (Angelopoulos et al. 2024) at risk level `α = 0.07` (`n_cal = 15`), any block or gap whose bit savings falls below `λ̂ = 10.0` bits (or the search-space floor `λ_eff`)—or whose column posterior drops below `0.15`—is withheld from base-level alignment and emitted as a **Horizon Bubble**.
 

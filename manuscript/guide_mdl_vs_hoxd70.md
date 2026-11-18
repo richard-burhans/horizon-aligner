@@ -43,7 +43,7 @@ A common workaround is to recompute a single organism-specific matrix (such as `
 
 # 3. Horizon's Solution: BOCPD + Two-Part MDL (`ΔL`)
 
-Instead of hardcoding `q_a`, Horizon treats alignment as a **two-part Minimum Description Length (MDL) compression race** driven by local online composition tracking (`src/bocpd.rs`, `src/mdl.rs`).
+Instead of hardcoding `q_a`, Horizon treats alignment as a **two-part Minimum Description Length (MDL) compression race** driven by local online composition tracking (`src/bocpd.rs`, `src/mdl/`).
 
 ## 3.1 Step 1: Online Weak/Strong Tracking (`bocpd_gc_profile`)
 
@@ -80,7 +80,7 @@ Why does `ΔL` neutralize AT-rich false positives automatically? Look at the per
 
 ## 3.3 Step 3: Search-Space Scaling and Conformal Abstention
 
-To prevent overfitting to short test blocks, Horizon never uses magic per-species thresholds. Instead, `src/mdl.rs` scales the minimum bit-savings floor continuously with the Karlin–Altschul search space of the two sequences (`N = len(X)`, `M = len(Y)`):
+To prevent overfitting to short test blocks, Horizon never uses magic per-species thresholds. Instead, `src/mdl/` scales the minimum bit-savings floor continuously with the Karlin–Altschul search space of the two sequences (`N = len(X)`, `M = len(Y)`):
 
 ```text
 search_space_bits = 0.55 · log₂(max(N, 1) · max(M, 1))
