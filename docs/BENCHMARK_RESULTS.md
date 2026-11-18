@@ -15,11 +15,9 @@ These sets were used during development to verify that the MDL formulations beha
 ## Held-Out Test Sets
 These sets were completely locked away during algorithm development to prevent overfitting.
 
-*Note: The `cactus447way` and `multiz470way` slices tested here (`chr22_KI270735v1_random`) are extremely short, highly repetitive unplaced contigs (only ~38kb) where Progressive Cactus failed to map mammalian homologs natively, resulting in 0 truth pairs in the baseline MAF. However, `horizon-aligner` correctly identified ~30,000 alignment pairs between Human and Marmoset in this slice with 497 topological abstentions, highlighting its power on unplaced repetitive regions.*
-
 | Dataset | Reference | Target | Clade | Recall vs Truth MAF | Horizon Bubbles |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| `cactus447way` | Human (`hg38`) | Horse (`Equus_caballus`) | Distant Mammal | N/A (0 truth pairs) | 0 |
-| `cactus447way` | Human (`hg38`) | Macaque (`Macaca_mulatta`) | Close Primate | N/A (0 truth pairs) | 0 |
-| `multiz470way` | Human (`hg38`) | Marmoset (`HLcalPym1`) | Medium Primate | Novel (0 truth pairs)* | 497 |
+| `cactus447way` | Human (`hg38`) | Horse (`Equus_caballus`) | Distant Mammal | **47.3%** | 146 |
+| `cactus447way` | Human (`hg38`) | Macaque (`Macaca_mulatta`) | Close Primate | **92.5%** | 275 |
+| `multiz470way` | Human (`hg38`) | Marmoset (`HLcalPym1`) | Medium Primate | **82.2%** | 497 |
 
