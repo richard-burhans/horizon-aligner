@@ -17,26 +17,30 @@ type ContigList = Vec<(String, Vec<u8>)>;
 type IndexedSpecies = (String, ContigList, Vec<(String, ContigIndex)>);
 
 fn select_central_hinge(species: &[IndexedSpecies]) -> usize {
-    let mut best_idx = 0usize;
-    let mut best_score = 0usize;
-    for (i, (_, _, idx_i)) in species.iter().enumerate() {
-        let mut total = 0usize;
-        for (j, (_, _, idx_j)) in species.iter().enumerate() {
-            if i == j {
-                continue;
-            }
-            for (_, ix) in idx_i {
-                for (_, iy) in idx_j {
-                    total += shared_seed_count(ix, iy);
-                }
-            }
-        }
-        if total > best_score {
-            best_score = total;
-            best_idx = i;
-        }
-    }
-    best_idx
+    (0..species.len())
+        .into_par_iter()
+        .map(|i| {
+            let idx_i = &species[i].2;
+            let total: usize = (0..species.len())
+                .into_par_iter()
+                .filter(|&j| j != i)
+                .map(|j| {
+                    let idx_j = &species[j].2;
+                    idx_i
+                        .par_iter()
+                        .map(|(_, ix)| {
+                            idx_j
+                                .iter()
+                                .map(|(_, iy)| shared_seed_count(ix, iy))
+                                .sum::<usize>()
+                        })
+                        .sum::<usize>()
+                })
+                .sum();
+            (total, std::cmp::Reverse(i))
+        })
+        .max()
+        .map_or(0, |(_, std::cmp::Reverse(i))| i)
 }
 
 type HalBlock = (usize, usize, usize, bool);
@@ -442,12 +446,164 @@ fn emit_rescued_runs(
     }
 }
 
+fn maf_ref_coverage(hinge_contigs: &ContigList, maf_text: &str) -> f64 {
+    let total_bp: usize = hinge_contigs.iter().map(|(_, s)| s.len()).sum();
+    if total_bp == 0 {
+        return 0.0;
+    }
+    let ctg_map: HashMap<&str, usize> = hinge_contigs
+        .iter()
+        .enumerate()
+        .map(|(i, (n, _))| (n.as_str(), i))
+        .collect();
+    let mut covered: Vec<Vec<bool>> = hinge_contigs
+        .iter()
+        .map(|(_, s)| vec![false; s.len()])
+        .collect();
+    for (r0, _) in parse_two_row_maf_blocks(maf_text) {
+        if let Some(&ci) = ctg_map.get(r0.src.as_str()) {
+            let r0_size = r0.seq.bytes().filter(|&b| b != b'-').count();
+            let end = (r0.start + r0_size).min(covered[ci].len());
+            for flag in &mut covered[ci][r0.start.min(end)..end] {
+                *flag = true;
+            }
+        }
+    }
+    let cov_bp: usize = covered
+        .iter()
+        .map(|v| v.iter().filter(|&&b| b).count())
+        .sum();
+    #[allow(clippy::cast_precision_loss)]
+    let frac = (cov_bp as f64) / (total_bp as f64);
+    frac
+}
+
+fn base_to_idx(b: u8) -> Option<usize> {
+    match b.to_ascii_uppercase() {
+        b'A' => Some(0),
+        b'C' => Some(1),
+        b'G' => Some(2),
+        b'T' => Some(3),
+        _ => None,
+    }
+}
+
+fn build_ancestral_consensus_contigs(
+    hinge_contigs: &ContigList,
+    high_cov_mafs: &[&str],
+) -> ContigList {
+    const BASES: [u8; 4] = *b"ACGT";
+    let ctg_map: HashMap<&str, usize> = hinge_contigs
+        .iter()
+        .enumerate()
+        .map(|(i, (n, _))| (n.as_str(), i))
+        .collect();
+    let mut counts: Vec<Vec<[u32; 4]>> = hinge_contigs
+        .iter()
+        .map(|(_, seq)| {
+            seq.iter()
+                .map(|&b| {
+                    let mut c = [0u32; 4];
+                    if let Some(bi) = base_to_idx(b) {
+                        c[bi] = 1;
+                    }
+                    c
+                })
+                .collect()
+        })
+        .collect();
+
+    for maf_text in high_cov_mafs {
+        for (r0, r1) in parse_two_row_maf_blocks(maf_text) {
+            if r0.strand != '+' {
+                continue;
+            }
+            let Some(&ci) = ctg_map.get(r0.src.as_str()) else {
+                continue;
+            };
+            let mut rp = r0.start;
+            for (rc, qc) in r0.seq.bytes().zip(r1.seq.bytes()) {
+                if rc != b'-' {
+                    if qc != b'-'
+                        && rp < counts[ci].len()
+                        && let Some(bi) = base_to_idx(qc)
+                    {
+                        counts[ci][rp][bi] += 1;
+                    }
+                    rp += 1;
+                }
+            }
+        }
+    }
+
+    hinge_contigs
+        .iter()
+        .enumerate()
+        .map(|(ci, (name, ref_seq))| {
+            let mut cons = Vec::with_capacity(ref_seq.len());
+            for (pos, &rb) in ref_seq.iter().enumerate() {
+                let c = counts[ci][pos];
+                let mut best_b = rb;
+                let mut best_cnt = 0u32;
+                for (bi, &cnt) in c.iter().enumerate() {
+                    if cnt > best_cnt {
+                        best_cnt = cnt;
+                        best_b = BASES[bi];
+                    }
+                }
+                cons.push(best_b);
+            }
+            (name.clone(), cons)
+        })
+        .collect()
+}
+
+fn remap_consensus_maf_to_hinge(hinge_contigs: &ContigList, cons_maf: &str) -> String {
+    let ctg_map: HashMap<&str, &[u8]> = hinge_contigs
+        .iter()
+        .map(|(n, s)| (n.as_str(), s.as_slice()))
+        .collect();
+    let mut out = String::new();
+    for (r0, r1) in parse_two_row_maf_blocks(cons_maf) {
+        let Some(&ref_seq) = ctg_map.get(r0.src.as_str()) else {
+            continue;
+        };
+        let mut remapped_r0 = String::with_capacity(r0.seq.len());
+        let mut rp = r0.start;
+        for ch in r0.seq.bytes() {
+            if ch == b'-' {
+                remapped_r0.push('-');
+            } else {
+                let rb = ref_seq.get(rp).copied().unwrap_or(ch);
+                remapped_r0.push(char::from(rb));
+                rp += 1;
+            }
+        }
+        let r0_size = r0.seq.bytes().filter(|&b| b != b'-').count();
+        let r1_size = r1.seq.bytes().filter(|&b| b != b'-').count();
+        let _ = writeln!(out, "a score=1.0");
+        let _ = writeln!(
+            out,
+            "s {} {} {} {} {} {}",
+            r0.src, r0.start, r0_size, r0.strand, r0.src_size, remapped_r0
+        );
+        let _ = writeln!(
+            out,
+            "s {} {} {} {} {} {}",
+            r1.src, r1.start, r1_size, r1.strand, r1.src_size, r1.seq
+        );
+        out.push('\n');
+    }
+    out
+}
+
 #[allow(clippy::too_many_lines)]
 fn main() -> Result<()> {
     let raw_args: Vec<String> = std::env::args().skip(1).collect();
     let mut progressive = false;
     let mut respect_softmask = false;
-    let mut top_k = 0usize;
+    let mut write_hal = false;
+    let mut top_k_opt: Option<usize> = None;
     let mut pos = Vec::new();
     let mut arg_i = 0usize;
     while arg_i < raw_args.len() {
@@ -460,13 +616,21 @@ fn main() -> Result<()> {
                 respect_softmask = true;
                 arg_i += 1;
             }
+            "--hal" => {
+                write_hal = true;
+                arg_i += 1;
+            }
             "--rbest" => {
-                top_k = 1;
+                top_k_opt = Some(1);
+                arg_i += 1;
+            }
+            "--all-pairs" => {
+                top_k_opt = Some(0);
                 arg_i += 1;
             }
             "--top-k" if arg_i + 1 < raw_args.len() => {
                 if let Ok(v) = raw_args[arg_i + 1].parse() {
-                    top_k = v;
+                    top_k_opt = Some(v);
                 }
                 arg_i += 2;
             }
@@ -478,12 +642,13 @@ fn main() -> Result<()> {
     }
     if pos.len() < 4 {
         bail!(
-            "usage: horizon_guide [--progressive] [--respect-softmask] [--rbest | --top-k K] <out_prefix> <max_contigs> <sp1=fa1> <sp2=fa2>..."
+            "usage: horizon_guide [--progressive] [--respect-softmask] [--hal] [--rbest | --top-k K | --all-pairs] <out_prefix> <max_contigs> <sp1=fa1> <sp2=fa2>..."
         );
     }
     let t0 = Instant::now();
     let out_prefix = &pos[0];
     let max_contigs: usize = pos[1].parse().context("parsing max_contigs")?;
+    let top_k = top_k_opt.unwrap_or(usize::from(max_contigs != 1));
 
     let mut specs: Vec<(String, PathBuf)> = Vec::new();
     for spec in &pos[2..] {
@@ -498,7 +663,7 @@ fn main() -> Result<()> {
         .map(|(sp, path)| {
             let contigs = read_fasta_contigs(path, max_contigs)?;
             let idx = contigs
-                .iter()
+                .par_iter()
                 .map(|(n, s)| Ok((n.clone(), prepare_contig_index_opts(s, respect_softmask)?)))
                 .collect::<Result<Vec<_>>>()?;
             Ok((sp.clone(), contigs, idx))
@@ -550,19 +715,24 @@ fn main() -> Result<()> {
                 continue;
             }
             let best_j = (0..indexed.len())
+                .into_par_iter()
                 .filter(|&j| j != i && j != hinge_idx)
-                .max_by_key(|&j| {
-                    indexed[i]
+                .map(|j| {
+                    let sc: usize = indexed[i]
                         .2
-                        .iter()
-                        .flat_map(|(_, ix)| {
+                        .par_iter()
+                        .map(|(_, ix)| {
                             indexed[j]
                                 .2
                                 .iter()
-                                .map(move |(_, iy)| shared_seed_count(ix, iy))
+                                .map(|(_, iy)| shared_seed_count(ix, iy))
+                                .sum::<usize>()
                         })
-                        .sum::<usize>()
-                });
+                        .sum();
+                    (sc, j)
+                })
+                .max()
+                .map(|(_, j)| j);
             if let Some(j) = best_j {
                 let pair_key = (i.min(j), i.max(j));
                 if !aligned_pairs.insert(pair_key) {
@@ -609,6 +779,46 @@ fn main() -> Result<()> {
         for (pw_idx, rescued_maf) in rescues {
             pairwise_mafs[pw_idx].1.push_str(&rescued_maf);
         }
+
+        // Ancestral consensus rescue for distant outgroups (< 50% hinge coverage).
+        let covs: Vec<(usize, f64)> = (0..indexed.len())
+            .filter(|&i| i != hinge_idx)
+            .map(|i| {
+                let pw = sp_to_pw_idx[&i];
+                (i, maf_ref_coverage(hinge_contigs, &pairwise_mafs[pw].1))
+            })
+            .collect();
+        let high_cov_mafs: Vec<&str> = covs
+            .iter()
+            .filter(|&&(_, c)| c >= 0.50)
+            .map(|&(i, _)| pairwise_mafs[sp_to_pw_idx[&i]].1.as_str())
+            .collect();
+        let low_cov_species: Vec<usize> = covs
+            .iter()
+            .filter(|&&(_, c)| c < 0.50)
+            .map(|&(i, _)| i)
+            .collect();
+        if !high_cov_mafs.is_empty() && !low_cov_species.is_empty() {
+            let cons_contigs = build_ancestral_consensus_contigs(hinge_contigs, &high_cov_mafs);
+            let cons_indices: Vec<(String, ContigIndex)> = cons_contigs
+                .par_iter()
+                .map(|(n, s)| Ok((n.clone(), prepare_contig_index_opts(s, respect_softmask)?)))
+                .collect::<Result<Vec<_>>>()?;
+            for k in low_cov_species {
+                let (cons_maf, _) = align_species_pair(
+                    &cons_contigs,
+                    &cons_indices,
+                    &indexed[k].1,
+                    &indexed[k].2,
+                    &cfg,
+                    top_k,
+                )?;
+                let remapped = remap_consensus_maf_to_hinge(hinge_contigs, &cons_maf);
+                if !remapped.is_empty() {
+                    pairwise_mafs[sp_to_pw_idx[&k]].1.push_str(&remapped);
+                }
+            }
+        }
     }
 
     let hal = HalAlignment::from_star_blocks(
@@ -621,6 +831,9 @@ fn main() -> Result<()> {
         merge_pairwise_mafs(hinge_sp, &pairwise_mafs, 1000);
     fs::write(format!("{out_prefix}.maf"), merged_maf)?;
     fs::write(format!("{out_prefix}.gfa"), merged_gfa)?;
+    if write_hal {
+        hal.write_hdf5_hal(std::path::Path::new(&format!("{out_prefix}.hal")))?;
+    }
     println!(
         "hinge={} species={} hal_tree={} hal_bottom_segs={} total_blocks={} multi_species_blocks={} elapsed_s={:.4}",
         hinge_sp,

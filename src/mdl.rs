@@ -702,45 +702,62 @@ pub fn align_contig_pair_with_config(
         cfg.fallback_min_span,
     );
 
-    // LASTZ-style 12-of-19 + 1-transition hits gated by ungapped X-drop HSP score.
-    let iy_lz_fwd = canonical_spaced_seeds_with_opts(
-        seq_y,
-        MASK_LASTZ12,
-        cfg.fallback_max_occ,
-        cfg.skip_softmasked,
-        false,
-    )?;
-    let iy_lz_rc = canonical_spaced_seeds_with_opts(
-        seq_y_rc,
-        MASK_LASTZ12,
-        cfg.fallback_max_occ,
-        cfg.skip_softmasked,
-        false,
-    )?;
-    let (mut hits_lz_fwd, mut hits_lz_rc) =
-        find_lastz12_1transition_hits(seq_x, &iy_lz_fwd, &iy_lz_rc, cfg.skip_softmasked);
-    filter_uncovered(&mut hits_lz_fwd);
-    filter_uncovered(&mut hits_lz_rc);
-    append_hsp_gated_lastz12_lcbs(
-        &mut combined_fwd,
-        seq_x,
-        seq_y,
-        &hits_lz_fwd,
-        180 + hsp_bonus,
-    );
-    append_hsp_gated_lastz12_lcbs(
-        &mut combined_rc,
-        seq_x,
-        seq_y_rc,
-        &hits_lz_rc,
-        180 + hsp_bonus,
-    );
+    // LASTZ-style 12-of-19 + 1-transition hits gated by ungapped X-drop HSP score
+    // (skip when w=12 already covers >= 85% of the target contig).
+    if primary_cov < 0.85 {
+        let iy_lz_fwd = canonical_spaced_seeds_with_opts(
+            seq_y,
+            MASK_LASTZ12,
+            cfg.fallback_max_occ,
+            cfg.skip_softmasked,
+            false,
+        )?;
+        let iy_lz_rc = canonical_spaced_seeds_with_opts(
+            seq_y_rc,
+            MASK_LASTZ12,
+            cfg.fallback_max_occ,
+            cfg.skip_softmasked,
+            false,
+        )?;
+        let (mut hits_lz_fwd, mut hits_lz_rc) =
+            find_lastz12_1transition_hits(seq_x, &iy_lz_fwd, &iy_lz_rc, cfg.skip_softmasked);
+        filter_uncovered(&mut hits_lz_fwd);
+        filter_uncovered(&mut hits_lz_rc);
+        append_hsp_gated_lastz12_lcbs(
+            &mut combined_fwd,
+            seq_x,
+            seq_y,
+            &hits_lz_fwd,
+            180 + hsp_bonus,
+        );
+        append_hsp_gated_lastz12_lcbs(
+            &mut combined_rc,
+            seq_x,
+            seq_y_rc,
+            &hits_lz_rc,
+            180 + hsp_bonus,
+        );
+    }
     let t_lz1 = t_start.elapsed();
 
     if cfg.use_multi_shape_seeds && primary_cov < 0.35 {
         // Skip O(N * 264) 2-transition scan once search space exceeds ~10^9 cell lookups
         // where single-transition + AA5 + BOCPD/MDL already dominate runtime.
         if (seq_x.len() as u128) * (seq_y.len() as u128) < 1_000_000_000 {
+            let iy_lz_fwd = canonical_spaced_seeds_with_opts(
+                seq_y,
+                MASK_LASTZ12,
+                cfg.fallback_max_occ,
+                cfg.skip_softmasked,
+                false,
+            )?;
+            let iy_lz_rc = canonical_spaced_seeds_with_opts(
+                seq_y_rc,
+                MASK_LASTZ12,
+                cfg.fallback_max_occ,
+                cfg.skip_softmasked,
+                false,
+            )?;
             let (mut double_trans_fwd, mut double_trans_rc) =
                 find_lastz12_2transition_hits(seq_x, &iy_lz_fwd, &iy_lz_rc, cfg.skip_softmasked);
             filter_uncovered(&mut double_trans_fwd);
