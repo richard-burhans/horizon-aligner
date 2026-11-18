@@ -1,0 +1,64 @@
+<svg width="600" height="400" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    text { font-family: Arial, Helvetica, sans-serif; font-size: 10px; }
+    .box { fill: white; stroke: #333333; stroke-width: 1.5px; rx: 4px; }
+    .arrow { stroke: #333333; stroke-width: 1.5px; fill: none; marker-end: url(#arrowhead); }
+    .label { font-size: 8px; fill: #555555; }
+  </style>
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#333333"/>
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="10" y="20" font-weight="bold" font-size="12px">Figure 1. The Horizon Alignment Pipeline</text>
+
+  <!-- Phase 1 -->
+  <rect x="50" y="40" width="120" height="30" class="box" />
+  <text x="110" y="59" text-anchor="middle">FASTA Inputs</text>
+  
+  <path d="M110,70 L110,90" class="arrow" />
+  
+  <rect x="50" y="90" width="120" height="30" class="box" />
+  <text x="110" y="109" text-anchor="middle">Target Indexing</text>
+
+  <path d="M110,120 L110,140" class="arrow" />
+
+  <rect x="50" y="140" width="120" height="30" class="box" />
+  <text x="110" y="159" text-anchor="middle">Spaced Seeding</text>
+
+  <!-- Branches -->
+  <path d="M110,170 L110,210" class="arrow" />
+  <text x="115" y="190" class="label">Primary 11-of-15</text>
+
+  <path d="M170,155 L240,155 L240,190" class="arrow" />
+  <text x="245" y="175" class="label">Fallback (RY20 / AA)</text>
+
+  <!-- Phase 2 & 3 -->
+  <rect x="50" y="210" width="220" height="30" class="box" />
+  <text x="160" y="229" text-anchor="middle">Ungapped Extension &amp; LCB Chaining</text>
+
+  <path d="M160,240 L160,270" class="arrow" />
+
+  <!-- Phase 4 -->
+  <rect x="50" y="270" width="220" height="30" class="box" />
+  <text x="160" y="289" text-anchor="middle">Banded MDL+BOCPD Gapped Alignment</text>
+
+  <!-- Bubble outputs -->
+  <path d="M160,300 L160,330" class="arrow" />
+  <text x="165" y="320" class="label">Bit-savings &ge; min_delta</text>
+
+  <path d="M50,285 L30,285 L30,345 L50,345" class="arrow" />
+  <text x="35" y="310" class="label" transform="rotate(-90 35,310)">Abstention</text>
+
+  <!-- Phase 5 -->
+  <rect x="50" y="330" width="220" height="30" class="box" />
+  <text x="160" y="349" text-anchor="middle">Paralog Resolution (E-Graph)</text>
+
+  <path d="M160,360 L160,380" class="arrow" />
+  
+  <rect x="50" y="380" width="220" height="20" fill="none" stroke="none" />
+  <text x="160" y="394" text-anchor="middle" font-weight="bold">MAF / GFA Output</text>
+
+</svg>
