@@ -944,6 +944,8 @@ pub struct AlignConfig {
     pub fallback_min_anchors: usize,
     /// Minimum genomic span (bp) for `w=10` and `R/Y` fallback LCB clustering.
     pub fallback_min_span: usize,
+    /// Maximum seed occurrence count per contig for `w=10` / `R/Y` fallback seeding.
+    pub fallback_max_occ: usize,
     /// Half-band width for banded MDL+BOCPD DP.
     pub band_w: usize,
     /// Maximum X-drop extension distance (bp) at LCB flanks.
@@ -962,6 +964,7 @@ impl Default for AlignConfig {
             use_ry_seeds: false,
             fallback_min_anchors: 4,
             fallback_min_span: 50,
+            fallback_max_occ: 2,
             band_w: 180,
             max_ext: 1500,
             min_delta_bits: 10.0,
@@ -1087,10 +1090,14 @@ fn append_nonoverlapping_lcbs(
     min_anchors: usize,
     min_span: usize,
 ) {
-    for lcb in cluster_strand_lcbs(hits, 1800, 200, min_anchors, min_span, 250.0) {
+    let mut candidates = cluster_strand_lcbs(hits, 1800, 200, min_anchors, min_span, 250.0);
+    // Tight 2-hit diagonal pass (LASTZ-style): 2 nearby hits within 120bp and <=25bp drift.
+    candidates.extend(cluster_strand_lcbs(hits, 120, 25, 2, 16, 120.0));
+    for lcb in candidates {
         let (sx, ex) = (lcb[0].0, lcb[lcb.len() - 1].0);
         if !existing
             .iter()
+            .chain(target.iter())
             .any(|c| sx <= c[c.len() - 1].0 && ex >= c[0].0)
         {
             target.push(lcb);
@@ -1179,11 +1186,27 @@ pub fn align_contig_pair_with_config(
     }
 
     // Sparse-exon fallback: w=10 exact seeds in intervals not covered by w=12 LCBs.
-    let ix10 = canonical_spaced_seeds_with_opts(seq_x, MASK_W10, 2, cfg.skip_softmasked, false)?;
-    let iy10_fwd =
-        canonical_spaced_seeds_with_opts(seq_y, MASK_W10, 2, cfg.skip_softmasked, false)?;
-    let iy10_rc =
-        canonical_spaced_seeds_with_opts(seq_y_rc, MASK_W10, 2, cfg.skip_softmasked, false)?;
+    let ix10 = canonical_spaced_seeds_with_opts(
+        seq_x,
+        MASK_W10,
+        cfg.fallback_max_occ,
+        cfg.skip_softmasked,
+        false,
+    )?;
+    let iy10_fwd = canonical_spaced_seeds_with_opts(
+        seq_y,
+        MASK_W10,
+        cfg.fallback_max_occ,
+        cfg.skip_softmasked,
+        false,
+    )?;
+    let iy10_rc = canonical_spaced_seeds_with_opts(
+        seq_y_rc,
+        MASK_W10,
+        cfg.fallback_max_occ,
+        cfg.skip_softmasked,
+        false,
+    )?;
     let (hits10_fwd, hits10_rc) = intersect_seed_maps(&ix10, &iy10_fwd, &iy10_rc);
     let mut combined_fwd = raw_fwd.clone();
     let mut combined_rc = raw_rc.clone();
@@ -1927,6 +1950,12 @@ pub fn format_maf_blocks(
     }
 
     for (blk, is_rev) in partition_colinear_blocks(&aln.aligned_pairs) {
+        if blk
+            .iter()
+            .any(|&(x, y)| x >= seq_x.len() || y >= seq_y.len())
+        {
+            continue;
+        }
         let x0 = blk[0].0;
         let x_end = blk[blk.len() - 1].0 + 1;
         let mut ax = String::with_capacity(blk.len() + 8);
