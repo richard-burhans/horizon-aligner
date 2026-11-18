@@ -1,5 +1,7 @@
 //! Banded MDL + BOCPD + KP-14 aligner with Horizon-Bubble abstention.
 
+pub mod egraph;
+
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
@@ -7,6 +9,8 @@ use thiserror::Error;
 
 /// Canonical KP-14 spaced-seed mask (span 15, weight 12).
 pub const MASK_KP14: &str = "111011011011011";
+/// Medium-weight spaced-seed mask (span 14, weight 10) for sparse cross-clade regions.
+pub const MASK_W10: &str = "11011011011011";
 /// Secondary local rescue mask (span 15, weight 9).
 pub const MASK_W9: &str = "110101101011011";
 
@@ -14,7 +18,7 @@ const NEG_INF: f64 = -1e18;
 const GAP_OPEN_BITS: f64 = -4.5;
 const GAP_EXTEND_BITS: f64 = -0.8;
 const IDENTITY_PRIOR: f64 = 0.65;
-const MIN_POST_PROB: f64 = 0.35;
+const MIN_POST_PROB: f64 = 0.15;
 
 /// Errors returned by sequence validation or alignment routines.
 #[derive(Debug, Error)]
@@ -645,12 +649,16 @@ pub fn local_w9_subchain(
     max_diag_diff: usize,
     max_step_bp: usize,
 ) -> Result<Vec<(usize, usize)>, AlignError> {
-    let ix = canonical_spaced_seeds(sub_x, mask, 1)?;
-    let iy = canonical_spaced_seeds(sub_y, mask, 1)?;
+    let ix = canonical_spaced_seeds(sub_x, mask, 2)?;
+    let iy = canonical_spaced_seeds(sub_y, mask, 2)?;
     let mut hits = Vec::new();
-    for (k, px) in &ix {
-        if let Some(py) = iy.get(k) {
-            hits.push((px[0], py[0]));
+    for (k, pxs) in &ix {
+        if let Some(pys) = iy.get(k) {
+            for &px in pxs {
+                for &py in pys {
+                    hits.push((px, py));
+                }
+            }
         }
     }
     let chain = lis_chain(&hits);
@@ -940,8 +948,8 @@ pub fn align_contig_pair_indexed(
     idx_y: &ContigIndex,
 ) -> Result<ContigAlignment, AlignError> {
     let span = MASK_KP14.len();
-    let max_gap_bp = 1600;
-    let max_local_rescue_bp = 25_000;
+    let max_gap_bp = 2400;
+    let max_local_rescue_bp = 40_000;
     let seq_x = &idx_x.seq;
     let seq_y = &idx_y.seq;
     let seq_y_rc = &idx_y.seq_rc;
@@ -970,14 +978,54 @@ pub fn align_contig_pair_indexed(
         }
     }
 
-    let lcbs_fwd = merge_colinear_lcbs(
-        &cluster_strand_lcbs(&hits_fwd, 3500, 350, 8, 100, 350.0),
-        max_local_rescue_bp,
-    );
-    let lcbs_rc = merge_colinear_lcbs(
-        &cluster_strand_lcbs(&hits_rc, 3500, 350, 8, 100, 350.0),
-        max_local_rescue_bp,
-    );
+    let raw_fwd = cluster_strand_lcbs(&hits_fwd, 3500, 350, 8, 100, 450.0);
+    let raw_rc = cluster_strand_lcbs(&hits_rc, 3500, 350, 8, 100, 450.0);
+
+    // Sparse-exon fallback: find w=10 LCBs in intervals not covered by unmerged w=12 LCBs.
+    let ix10 = canonical_spaced_seeds(seq_x, MASK_W10, 2)?;
+    let iy10_fwd = canonical_spaced_seeds(seq_y, MASK_W10, 2)?;
+    let iy10_rc = canonical_spaced_seeds(seq_y_rc, MASK_W10, 2)?;
+    let mut hits10_fwd = Vec::new();
+    let mut hits10_rc = Vec::new();
+    for (k, pxs) in &ix10 {
+        if let Some(pys) = iy10_fwd.get(k) {
+            for &px in pxs {
+                for &py in pys {
+                    hits10_fwd.push((px, py));
+                }
+            }
+        }
+        if let Some(pys) = iy10_rc.get(k) {
+            for &px in pxs {
+                for &py in pys {
+                    hits10_rc.push((px, py));
+                }
+            }
+        }
+    }
+    let mut combined_fwd = raw_fwd.clone();
+    for lcb in cluster_strand_lcbs(&hits10_fwd, 1500, 150, 6, 80, 250.0) {
+        let (sx, ex) = (lcb[0].0, lcb[lcb.len() - 1].0);
+        if !raw_fwd
+            .iter()
+            .any(|c| sx <= c[c.len() - 1].0 && ex >= c[0].0)
+        {
+            combined_fwd.push(lcb);
+        }
+    }
+    let mut combined_rc = raw_rc.clone();
+    for lcb in cluster_strand_lcbs(&hits10_rc, 1500, 150, 6, 80, 250.0) {
+        let (sx, ex) = (lcb[0].0, lcb[lcb.len() - 1].0);
+        if !raw_rc
+            .iter()
+            .any(|c| sx <= c[c.len() - 1].0 && ex >= c[0].0)
+        {
+            combined_rc.push(lcb);
+        }
+    }
+
+    let lcbs_fwd = merge_colinear_lcbs(&combined_fwd, max_local_rescue_bp);
+    let lcbs_rc = merge_colinear_lcbs(&combined_rc, max_local_rescue_bp);
 
     let mut pair_set: HashSet<(usize, usize)> = HashSet::new();
     let mut dp_jobs: Vec<(bool, usize, usize, usize, usize)> = Vec::new();
@@ -988,7 +1036,7 @@ pub fn align_contig_pair_indexed(
         (false, &lcbs_fwd, seq_y.as_slice()),
         (true, &lcbs_rc, seq_y_rc.as_slice()),
     ] {
-        // Inter-LCB rescue pass.
+        // Inter-LCB sparse-region rescue using w=10 spaced seeds (with 2-hit w=9 fallback).
         let mut rescued_inter = Vec::new();
         for w in lcb_list.windows(2) {
             let x0 = w[0][w[0].len() - 1].0 + span;
@@ -997,13 +1045,33 @@ pub fn align_contig_pair_indexed(
             let y1 = w[1][0].1;
             if x1 > x0
                 && y1 > y0
-                && (100..=60_000).contains(&(x1 - x0))
-                && (100..=60_000).contains(&(y1 - y0))
+                && (100..=120_000).contains(&(x1 - x0))
+                && (100..=120_000).contains(&(y1 - y0))
             {
-                let sub =
-                    local_w9_subchain(&seq_x[x0..x1], &y_work[y0..y1], x0, y0, MASK_W9, 120, 1200)?;
-                if sub.len() >= 4 {
-                    rescued_inter.push(sub);
+                let sub10 = local_w9_subchain(
+                    &seq_x[x0..x1],
+                    &y_work[y0..y1],
+                    x0,
+                    y0,
+                    MASK_W10,
+                    200,
+                    1800,
+                )?;
+                if sub10.len() >= 3 {
+                    rescued_inter.push(sub10);
+                } else {
+                    let sub9 = local_w9_subchain(
+                        &seq_x[x0..x1],
+                        &y_work[y0..y1],
+                        x0,
+                        y0,
+                        MASK_W9,
+                        120,
+                        1200,
+                    )?;
+                    if sub9.len() >= 4 {
+                        rescued_inter.push(sub9);
+                    }
                 }
             }
         }
@@ -1099,7 +1167,7 @@ pub fn align_contig_pair_indexed(
         .par_iter()
         .map(|&(is_rc, x0, x1, y0, y1)| {
             let y_work = if is_rc { seq_y_rc } else { seq_y };
-            let res = banded_mdl_gap(&seq_x[x0..x1], &y_work[y0..y1], 64, 10.0);
+            let res = banded_mdl_gap(&seq_x[x0..x1], &y_work[y0..y1], 180, 10.0);
             (is_rc, x0, y0, res)
         })
         .collect();
@@ -1121,7 +1189,7 @@ pub fn align_contig_pair_indexed(
         .par_iter()
         .map(|&(is_rc, x0, x1, y0, y1, rev)| {
             let y_work = if is_rc { seq_y_rc } else { seq_y };
-            let pairs = mdl_xdrop_extend(&seq_x[x0..x1], &y_work[y0..y1], x0, y0, rev, 600, 24);
+            let pairs = mdl_xdrop_extend(&seq_x[x0..x1], &y_work[y0..y1], x0, y0, rev, 1500, 40);
             (is_rc, pairs)
         })
         .collect();
@@ -1157,6 +1225,112 @@ pub fn format_gfa_summary(name_x: &str, name_y: &str, aln: &ContigAlignment) -> 
         aln.lcbs_fwd,
         aln.lcbs_rc
     );
+    out
+}
+
+/// Group aligned `(x, y)` pairs into colinear MAF blocks and emit standard MAF v1 text.
+#[must_use]
+#[allow(clippy::too_many_arguments)]
+pub fn format_maf_blocks(
+    name_x: &str,
+    len_x: usize,
+    name_y: &str,
+    len_y: usize,
+    seq_x: &[u8],
+    seq_y: &[u8],
+    aln: &ContigAlignment,
+) -> String {
+    let mut out = String::from("##maf version=1 scoring=horizon_mdl\n");
+    if aln.aligned_pairs.is_empty() {
+        return out;
+    }
+
+    // Partition sorted aligned_pairs into colinear runs (allowing small <=20bp indels).
+    let mut blocks: Vec<Vec<(usize, usize)>> = Vec::new();
+    let mut cur: Vec<(usize, usize)> = Vec::new();
+    for &(x, y) in &aln.aligned_pairs {
+        if let Some(&(px, py)) = cur.last() {
+            let dx = x.saturating_sub(px);
+            let same_fwd = y > py && (y - py) <= 20 && dx <= 20;
+            let same_rev = py > y && (py - y) <= 20 && dx <= 20;
+            if same_fwd || same_rev {
+                cur.push((x, y));
+                continue;
+            }
+        }
+        if !cur.is_empty() {
+            blocks.push(std::mem::take(&mut cur));
+        }
+        cur.push((x, y));
+    }
+    if !cur.is_empty() {
+        blocks.push(cur);
+    }
+
+    for blk in blocks {
+        if blk.len() < 12 {
+            continue;
+        }
+        let is_rev = blk.len() >= 2 && blk[blk.len() - 1].1 < blk[0].1;
+        let x0 = blk[0].0;
+        let x_end = blk[blk.len() - 1].0 + 1;
+        let mut ax = String::with_capacity(blk.len() + 8);
+        let mut ay = String::with_capacity(blk.len() + 8);
+
+        let mut prev_x = blk[0].0;
+        let mut prev_y = blk[0].1;
+        ax.push(seq_x[prev_x].to_ascii_uppercase() as char);
+        let first_y = seq_y[prev_y].to_ascii_uppercase();
+        ay.push(if is_rev {
+            revcomp(&[first_y])[0] as char
+        } else {
+            first_y as char
+        });
+
+        for &(x, y) in blk.iter().skip(1) {
+            for &bx in &seq_x[(prev_x + 1)..x] {
+                ax.push(bx.to_ascii_uppercase() as char);
+                ay.push('-');
+            }
+            if is_rev {
+                for &by in seq_y[(y + 1)..prev_y].iter().rev() {
+                    ax.push('-');
+                    ay.push(revcomp(&[by])[0] as char);
+                }
+            } else {
+                for &by in &seq_y[(prev_y + 1)..y] {
+                    ax.push('-');
+                    ay.push(by.to_ascii_uppercase() as char);
+                }
+            }
+            ax.push(seq_x[x].to_ascii_uppercase() as char);
+            let by = seq_y[y].to_ascii_uppercase();
+            ay.push(if is_rev {
+                revcomp(&[by])[0] as char
+            } else {
+                by as char
+            });
+            prev_x = x;
+            prev_y = y;
+        }
+
+        let (y_start, y_span, y_strand) = if is_rev {
+            let y_lo = blk[blk.len() - 1].1;
+            let y_hi = blk[0].1 + 1;
+            (len_y - y_hi, y_hi - y_lo, '-')
+        } else {
+            let y_lo = blk[0].1;
+            let y_hi = blk[blk.len() - 1].1 + 1;
+            (y_lo, y_hi - y_lo, '+')
+        };
+
+        let _ = writeln!(out, "a score={}.0", blk.len());
+        let _ = writeln!(out, "s {name_x} {x0} {} + {len_x} {ax}", x_end - x0);
+        let _ = writeln!(
+            out,
+            "s {name_y} {y_start} {y_span} {y_strand} {len_y} {ay}\n"
+        );
+    }
     out
 }
 
@@ -1342,5 +1516,22 @@ mod tests {
         let iy_diff = prepare_contig_index(sy_diff).expect("valid");
         assert!(shared_seed_count(&ix, &iy_same) >= 10);
         assert_eq!(shared_seed_count(&ix, &iy_diff), 0);
+    }
+
+    #[test]
+    fn maf_formatter_emits_valid_blocks() {
+        let sx = b"ACGTACGTACGTACGT";
+        let sy = b"ACGTACGTACGTACGT";
+        let aln = ContigAlignment {
+            aligned_pairs: (0..16).map(|i| (i, i)).collect(),
+            lcbs_fwd: 1,
+            lcbs_rc: 0,
+            macro_bubbles: 0,
+            internal_bubbles: 0,
+        };
+        let maf = format_maf_blocks("chr1", 16, "chr2", 16, sx, sy, &aln);
+        assert!(maf.starts_with("##maf version=1"));
+        assert!(maf.contains("s chr1 0 16 + 16 ACGTACGTACGTACGT"));
+        assert!(maf.contains("s chr2 0 16 + 16 ACGTACGTACGTACGT"));
     }
 }
