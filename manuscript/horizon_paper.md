@@ -100,9 +100,7 @@ Three limitations define our immediate roadmap. First, while de novo precision r
 
 # References {.unnumbered}
 
-Full BibTeX entries for all cited works are maintained in [references.bib](references.bib).
-
-- **Adams RP & MacKay DJC** (2007). Bayesian online changepoint detection. *arXiv:0710.3742*.
+- **Adams RP & MacKay DJC** (2007). Bayesian online changepoint detection. *arXiv preprint* `arXiv:0710.3742`.
 - **Allison L, Wallace CS, Yee CN** (1992). Finite-state models in the alignment of macromolecules. *Journal of Molecular Evolution*, 35:77–89.
 - **Angelopoulos AN, Bates S, Fisch A, Lei L, Schuster T** (2024). Conformal risk control. *ICLR 2024* (`arXiv:2208.02814`).
 - **Armstrong J, Hickey G, Diekhans M, et al.** (2020). Progressive Cactus is a multiple-genome aligner for the thousand-genome era. *Nature*, 587:246–251.
