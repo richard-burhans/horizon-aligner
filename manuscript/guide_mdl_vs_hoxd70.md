@@ -25,7 +25,11 @@ Now apply that same matrix without recalibration to *Plasmodium falciparum*, who
 2 · 0.4025² ≈ 0.324   (32.4% random identity)
 ```
 
-More than **one in three** columns matches by pure chance. Under `HOXD70`'s `+91` match reward, random `80%`-AT DNA accumulates a positive expected score per column. Once positive drift exceeds the affine gap-open penalty, Viterbi dynamic programming happily strings together random AT-rich intervals into long, confident-looking alignments (`0.872` false-positive rate on unalignable `18%`-GC synthetic pairs).
+More than **one in three** columns matches by pure chance (`32.4%` A/T collisions plus `1.9%` G/C collisions = `34.3%` total random identity). Under `HOXD70`'s `+91` match reward, random `80%`-AT DNA accumulates local positive excursions that outrun affine gap penalties, causing Viterbi dynamic programming to string together random AT-rich intervals into long, confident-looking alignments (`0.872` false-positive rate on unalignable `18%`-GC synthetic pairs).
+
+![Random Collision Surge vs. Adaptive Null Information](figures/fig_g1_hoxd70_vs_mdl_gc.png)
+
+**Figure 1. Fixed log-odds matrices fail as random AT collisions surge, whereas MDL scales match weights automatically.** **A.** Total random identical-base collision probability (vermilion) rises from `25.1%` at `47.5%` GC to `34.3%` at `19.5%` GC, while Horizon's adaptive A/T self-information `−log₂(q_A)` (blue dashed-dotted) decreases smoothly from `1.93` to `1.30` bits. **B.** In an `81%`-AT isochore (`q_A = q_T = 0.405`, `q_G = q_C = 0.095`), `HOXD70` keeps `A–A` (`+91`) and `G–G` (`+100`) nearly equal, whereas MDL weights rare `G–G` matches (`3.40` bits) nearly three times higher than common `A–A` matches (`1.30` bits). Visual dictionary: vermilion shows random collision rate, blue shows MDL information content in bits, and gray shows normalized `HOXD70` match scores.
 
 ---
 
@@ -51,7 +55,7 @@ Before aligning any pair, `bocpd_gc_profile` scans the binary weak/strong hydrog
 
 ![BOCPD Isocore Tracking and MDL Conformal Abstention](figures/fig_c1_bocpd_mdl_trace.png)
 
-**Figure 1. Online BOCPD tracking across an isochore boundary drives calibrated MDL abstention.** **A.** Local A+T share (`P(W)`) estimated by `bocpd_gc_profile` resets cleanly at an abrupt `19%` → `45%` GC boundary (`t ≈ 220 bp`), whereas `HOXD70`'s fixed `52.5%` A+T prior miscalibrates the `~81%`-AT left isochore. **B.** Three-state MDL column posteriors `P(M_ij | X, Y)` stay near `0.90–0.97` across conserved flanks and collapse below the `0.15` floor inside an unalignable loop (`310–410 bp`), triggering an explicit Horizon Bubble (`ΔL = −8.4 bits < λ̂`). Visual dictionary: blue shows BOCPD `P(W)`, orange marks the changepoint reset, green shows MDL column posteriors, and shaded vermilion marks the abstained Horizon Bubble.
+**Figure 2. Online BOCPD tracking across an isochore boundary drives calibrated MDL abstention.** **A.** Local A+T share (`P(W)`) estimated by `bocpd_gc_profile` resets cleanly at an abrupt `19%` → `45%` GC boundary (`t ≈ 220 bp`), whereas `HOXD70`'s fixed `52.5%` A+T prior miscalibrates the `~81%`-AT left isochore. **B.** Three-state MDL column posteriors `P(M_ij | X, Y)` stay near `0.90–0.97` across conserved flanks and collapse below the `0.15` floor inside an unalignable loop (`310–410 bp`), triggering an explicit Horizon Bubble (`ΔL = −8.4 bits < λ̂`). Visual dictionary: blue shows BOCPD `P(W)`, orange marks the changepoint reset, green shows MDL column posteriors, and shaded vermilion marks the abstained Horizon Bubble.
 
 ## 3.2 Step 2: Compression Race in Bits (`banded_mdl_gap`)
 
@@ -94,7 +98,7 @@ The strongest test against overfitting is running the **exact same binary and pa
 
 ![Calibrated Abstention and Whole-Genome Speedup](figures/fig3_abstention_speedup.png)
 
-**Figure 2. Conformal abstention separates true intraspecific homology from low-signal cross-clade noise without retuning.** **A.** Share of columns retained (blue) versus abstained as Horizon Bubbles (vermilion) across intraspecific *Cannabis sativa* (`99.95%` retained), *P. falciparum* × *P. vivax* MDL-supported `LASTZ` pairs (`54.4%` retained), and MDL-rejected `LASTZ` pairs (`87.7%` abstained). **B.** Whole-genome wall-clock runtime on *P. malariae* × *P. brasilianum* (`14 × 45` contigs): Galaxy `Growler UCSC pair` (`859.9 min`) versus `horizon_wga` (`17.12 min`, `50.2×` speedup).
+**Figure 3. Conformal abstention separates true intraspecific homology from low-signal cross-clade noise without retuning.** **A.** Share of columns retained (blue) versus abstained as Horizon Bubbles (vermilion) across intraspecific *Cannabis sativa* (`99.95%` retained), *P. falciparum* × *P. vivax* MDL-supported `LASTZ` pairs (`54.4%` retained), and MDL-rejected `LASTZ` pairs (`87.7%` abstained). **B.** Whole-genome wall-clock runtime on *P. malariae* × *P. brasilianum* (`14 × 45` contigs): Galaxy `Growler UCSC pair` (`859.9 min`) versus `horizon_wga` (`17.12 min`, `50.2×` speedup).
 
 - **Synthetic `18%`-GC random pair:** `HOXD70` aligns `87.2%` of bases falsely. Horizon aligns `0.000`.
 - **Real *P. falciparum* × *P. vivax* Chromosome 1 (`21.3` percentage-point GC gap):** `20.7%` (`24,748 / 119,582`) of `LASTZ` `HoxD55` columns fail the `10`-bit MDL test. End-to-end `horizon_wga` abstains on `87.7%` of those low-signal columns.

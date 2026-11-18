@@ -68,7 +68,11 @@ Once `read_hdf5_v0_group_entries_seek` returns the `obj_hdr_addr` of a target da
 
 # 3. Decoding `HAL` Binary Datasets
 
-Every genome group inside a `.hal` container stores up to five datasets. `src/hal.rs` unpacks them directly from raw little-endian bytes:
+Every genome group inside a `.hal` container stores up to five datasets. `src/hal.rs` unpacks them directly from raw little-endian bytes (Figure 2):
+
+![HAL Little-Endian Binary Record Layouts](figures/fig_g2_hal_binary_layouts.png)
+
+**Figure 2. Little-endian binary record layouts decoded by `src/hal.rs`.** Each row shows the exact byte offsets and field types unpacked from `DNA_ARRAY` (`4 bits/base`), `SEQIDX_ARRAY` (`24 B`), `TOP_ARRAY` (`33 B`), `BOTTOM_ARRAY` (`24 + 9C B`), and `SEQNAME_ARRAY` (`stride B`). Visual dictionary: colors group datasets by role—blue for sequence/names, green for sequence indices, orange for top-segment links, purple for bottom-segment links, and vermilion for strand/child flags.
 
 | Dataset | Record Width | Binary Layout (Little-Endian) | Horizon Decoder |
 | :--- | :--- | :--- | :--- |

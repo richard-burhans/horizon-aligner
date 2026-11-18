@@ -449,6 +449,128 @@ def make_fig_c3_hdf5_hal_seek() -> None:
     save_both(fig, "fig_c3_hdf5_hal_seek")
 
 
+def make_fig_g1_hoxd70_vs_mdl_gc() -> None:
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10.8, 4.1), gridspec_kw={"width_ratios": [1.15, 1.0]})
+
+    gc = np.linspace(0.12, 0.65, 200)
+    at = 1.0 - gc
+    q_a = q_t = at / 2.0
+    q_c = q_g = gc / 2.0
+
+    # Random identical-base collision probability: q_A^2 + q_T^2 + q_C^2 + q_G^2
+    p_collide = (q_a**2 + q_t**2 + q_c**2 + q_g**2) * 100.0
+    # Per-base null surprise of A/T in bits: -log2(q_A)
+    info_at = -np.log2(q_a)
+
+    ax1.axvspan(15, 25, color="#FDEEE8", alpha=0.65, label="Plasmodium regime (18–22% GC)")
+    ax1.axvspan(42, 50, color="#EDF6FC", alpha=0.65, label="Vertebrate / Cannabis (45–48% GC)")
+    l1 = ax1.plot(gc * 100, p_collide, color=OI_VERMILION, lw=2.5, label="Random base-collision rate (%)")
+    ax1.axhline(25.0, color=OI_GRAY, lw=1.0, ls="--", alpha=0.7)
+    p_195 = p_collide[np.argmin(np.abs(gc - 0.195))]
+    p_475 = p_collide[np.argmin(np.abs(gc - 0.475))]
+    ax1.scatter([19.5, 47.5], [p_195, p_475], color=OI_VERMILION, s=42, zorder=5)
+    ax1.annotate("34.3% random identity\n(32.4% A/T, HOXD70 false = 0.872)", xy=(19.5, p_195), xytext=(24.5, 35.8),
+                 fontsize=7.7, fontweight="bold", color=OI_VERMILION,
+                 arrowprops=dict(arrowstyle="-|>", color=OI_VERMILION, lw=1.1))
+    ax1.set_xlabel("Genome GC Content (%)")
+    ax1.set_ylabel("Random Identical-Base Collision (%)", color=OI_VERMILION)
+    ax1.tick_params(axis="y", labelcolor=OI_VERMILION)
+    ax1.set_xlim(12, 65)
+    ax1.set_ylim(22, 41)
+    ax1.set_title("A. Random Collision Surge vs. Adaptive Null Bits", loc="left")
+    ax1.grid(linestyle=":", alpha=0.4)
+
+    ax1b = ax1.twinx()
+    ax1b.spines["top"].set_visible(False)
+    l2 = ax1b.plot(gc * 100, info_at, color=OI_BLUE, lw=2.5, ls="-.", label="MDL A/T self-information (−log₂ q_A bits)")
+    ax1b.set_ylabel("A/T Information Content (bits)", color=OI_BLUE)
+    ax1b.tick_params(axis="y", labelcolor=OI_BLUE)
+    ax1b.set_ylim(1.0, 2.6)
+
+    lines = l1 + l2
+    labels = [ln.get_label() for ln in lines]
+    ax1.legend(lines, labels, loc="upper right", fontsize=7.5, framealpha=0.92)
+
+    # Panel B: Per-base information reward at 81% AT (q_A=q_T=0.405, q_G=q_C=0.095)
+    bases = ["A–A / T–T\n(81% AT null)", "G–G / C–C\n(81% AT null)"]
+    x = np.arange(len(bases))
+    w = 0.34
+    hoxd_norm = [0.91, 1.00]
+    mdl_bits = [-np.log2(0.405), -np.log2(0.095)]
+
+    b1 = ax2.bar(x - w / 2, hoxd_norm, width=w, color=OI_GRAY, edgecolor=OI_BLACK, linewidth=0.7, label="HOXD70 (+91 / +100, normalized)")
+    b2 = ax2.bar(x + w / 2, mdl_bits, width=w, color=OI_BLUE, edgecolor=OI_BLACK, linewidth=0.7, label="Horizon MDL info (−log₂ q_b bits)")
+    for rect, fmt in [(b1[0], "+91"), (b1[1], "+100"), (b2[0], f"{mdl_bits[0]:.2f} b"), (b2[1], f"{mdl_bits[1]:.2f} b")]:
+        ax2.text(rect.get_x() + rect.get_width() / 2, rect.get_height() + 0.08, fmt,
+                 ha="center", va="bottom", fontsize=8.2, fontweight="bold", color=OI_BLACK)
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(bases, fontsize=8.5)
+    ax2.set_ylabel("Match Weight (HOXD70 norm. / Bits)")
+    ax2.set_ylim(0, 4.1)
+    ax2.set_title("B. Self-Calibrating Match Weights (81% AT)", loc="left")
+    ax2.grid(axis="y", linestyle=":", alpha=0.4)
+    ax2.legend(loc="upper left", fontsize=7.8, framealpha=0.92)
+
+    plt.tight_layout(w_pad=2.0)
+    save_both(fig, "fig_g1_hoxd70_vs_mdl_gc")
+
+
+def make_fig_g2_hal_binary_layouts() -> None:
+    fig, ax = plt.subplots(figsize=(10.8, 4.6))
+    ax.set_xlim(0, 12.0)
+    ax.set_ylim(0, 5.4)
+    ax.axis("off")
+
+    def row_fields(y, title, fields, total_label):
+        ax.text(0.15, y + 0.54, title, fontsize=8.8, fontweight="bold", color=OI_BLACK, va="bottom")
+        ax.text(11.85, y + 0.54, total_label, fontsize=8.0, fontweight="bold", color=OI_GRAY, va="bottom", ha="right")
+        cur_x = 0.15
+        total_w = 11.7
+        sum_rel = sum(f[0] for f in fields)
+        for rel_w, label, fc, ec in fields:
+            w = total_w * (rel_w / sum_rel)
+            rect = mpatches.FancyBboxPatch((cur_x, y), w - 0.05, 0.46, boxstyle="round,pad=0.02,rounding_size=0.06",
+                                           facecolor=fc, edgecolor=ec, linewidth=1.1)
+            ax.add_patch(rect)
+            ax.text(cur_x + (w - 0.05) / 2, y + 0.23, label, ha="center", va="center", fontsize=7.4, color=OI_BLACK, fontweight="bold")
+            cur_x += w
+
+    row_fields(4.3, "DNA_ARRAY (decode_hal_dna)", [
+        (1, "high nibble (4b)\nbase 2k", "#EDF6FC", OI_BLUE),
+        (1, "low nibble (4b)\nbase 2k+1", "#D8ECFA", OI_BLUE),
+        (2.5, "0..3 = a,c,g,t   |   8..11 = A,C,G,T   |   4 = n   |   else N", "#F8FAFC", OI_GRAY),
+    ], "4 bits / base (packed u8)")
+
+    row_fields(3.3, "SEQIDX_ARRAY (decode_hal_seq_index)", [
+        (1, "start: u64\n[0..8)", "#EAF7F2", OI_GREEN),
+        (1, "top_offset: u64\n[8..16)", "#D6F0E5", OI_GREEN),
+        (1, "bottom_offset: u64\n[16..24)", "#EAF7F2", OI_GREEN),
+    ], "24 bytes / sequence")
+
+    row_fields(2.3, "TOP_ARRAY (decode_hal_top_array)", [
+        (1, "genome_idx: i64\n[0..8)", "#FFF7E6", OI_ORANGE),
+        (1, "bottom_idx: i64\n[8..16)", "#FDEFD2", OI_ORANGE),
+        (1, "paralogy_idx: i64\n[16..24)", "#FFF7E6", OI_ORANGE),
+        (1, "parent_idx: i64\n[24..32)", "#FDEFD2", OI_ORANGE),
+        (0.55, "rev: u8\n[32]", "#FDEEE8", OI_VERMILION),
+    ], "33 bytes / segment")
+
+    row_fields(1.3, "BOTTOM_ARRAY (decode_hal_bottom_array)", [
+        (1, "start: i64\n[0..8)", "#F7EEF4", OI_PURPLE),
+        (1, "len: u64\n[8..16)", "#EFE0EA", OI_PURPLE),
+        (1, "top_parse: i64\n[16..24)", "#F7EEF4", OI_PURPLE),
+        (1.6, "child_0..C-1: (child_idx: i64, rev: u8)\n9 bytes × C children", "#FDEEE8", OI_VERMILION),
+    ], "24 + 9C bytes / segment")
+
+    row_fields(0.3, "SEQNAME_ARRAY (decode_hal_seq_names)", [
+        (3, "fixed-width UTF-8 / ASCII contig name (trimmed at first 0x00 byte)", "#EDF6FC", OI_BLUE),
+        (1, "0x00 padding...", "#F8FAFC", OI_GRAY),
+    ], "stride bytes / sequence")
+
+    ax.set_title("HAL Little-Endian Binary Record Layouts Decoded by src/hal.rs", loc="left", pad=6, fontsize=10.5)
+    save_both(fig, "fig_g2_hal_binary_layouts")
+
+
 if __name__ == "__main__":
     make_fig1_architecture()
     make_fig2_benchmarks()
@@ -457,4 +579,6 @@ if __name__ == "__main__":
     make_fig_c1_bocpd_mdl_trace()
     make_fig_c2_bandgrid_egraph()
     make_fig_c3_hdf5_hal_seek()
-    print(f"Generated 7 figures (.png + .svg) in {OUT_DIR}")
+    make_fig_g1_hoxd70_vs_mdl_gc()
+    make_fig_g2_hal_binary_layouts()
+    print(f"Generated 9 figures (.png + .svg) in {OUT_DIR}")
