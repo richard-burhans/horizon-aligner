@@ -112,32 +112,41 @@ def make_fig1_architecture() -> None:
 
 
 def make_fig2_benchmarks() -> None:
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10.5, 4.3), gridspec_kw={"width_ratios": [1.35, 1.0]})
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11.2, 4.7), gridspec_kw={"width_ratios": [1.45, 1.0]})
 
     # Panel A: Recall vs Precision across external suites
-    # Format: (label, recall, precision, regime_color, dx, dy)
+    # Format: (label, recall, precision, regime_color, dx, dy, ha)
     points = [
-        ("470-way primates (n=6)", 83.7, 98.4, OI_BLUE, -28, -12),
-        ("Pf × Pr Chr1 / WG", 85.6, 98.3, OI_BLUE, -32, 6),
-        ("100-way chrM (panTro4)", 88.9, 99.2, OI_BLUE, -45, -14),
-        ("sars-cov-2.hal (SARS-1)", 76.8, 98.4, OI_BLUE, -55, 6),
-        ("cactus447way primates", 74.4, 93.1, OI_SKY, -35, 7),
-        ("27_sauropsids birds (n=4)", 71.0, 83.2, OI_GREEN, 6, -4),
-        ("92_mammals EPO (n=6)", 67.2, 90.2, OI_GREEN, -42, -13),
-        ("100-way chrM (galGal4)", 65.6, 88.6, OI_GREEN, -42, 6),
-        ("Pf × Pv Chr1 (--top-k 4)", 50.6, 79.5, OI_ORANGE, 6, -4),
-        ("sars-cov-2.hal (MERS/OC43)", 40.7, 67.9, OI_VERMILION, 6, -4),
-        ("cactus447way Laurasiatheria", 37.1, 75.9, OI_VERMILION, 6, 5),
-        ("hg38 5-way promoters", 22.6, 49.3, OI_PURPLE, 6, 3),
+        ("470-way primates (n=6)", 83.7, 98.4, OI_BLUE, -82, -14, "right"),
+        ("Pf × Pr Chr1 / WG", 85.6, 98.3, OI_BLUE, -10, 16, "center"),
+        ("100-way chrM (panTro4)", 88.9, 99.2, OI_BLUE, 10, -14, "left"),
+        ("sars-cov-2.hal (SARS-1)", 76.8, 98.4, OI_BLUE, -14, 12, "right"),
+        ("cactus447way primates", 74.4, 93.1, OI_SKY, 12, -4, "left"),
+        ("92_mammals EPO (n=6)", 67.2, 90.2, OI_GREEN, -14, 6, "right"),
+        ("100-way chrM (galGal4)", 65.6, 88.6, OI_GREEN, -14, -10, "right"),
+        ("27_sauropsids birds (n=4)", 71.0, 83.2, OI_GREEN, 10, -4, "left"),
+        ("Pf × Pv Chr1 (--top-k 4)", 50.6, 79.5, OI_ORANGE, 10, -2, "left"),
+        ("sars-cov-2.hal (MERS/OC43)", 40.7, 67.9, OI_VERMILION, 10, -4, "left"),
+        ("cactus447way Laurasiatheria", 37.1, 75.9, OI_VERMILION, 10, 4, "left"),
+        ("hg38 5-way promoters", 22.6, 49.3, OI_PURPLE, 10, 2, "left"),
     ]
 
-    for label, rec, prec, col, dx, dy in points:
-        ax1.scatter(rec, prec, color=col, s=58, edgecolor="white", linewidth=0.8, zorder=4)
-        ax1.annotate(label, (rec, prec), xytext=(dx, dy), textcoords="offset points",
-                     fontsize=7.6, color=OI_BLACK)
+    for label, rec, prec, col, dx, dy, ha in points:
+        ax1.scatter(rec, prec, color=col, s=56, edgecolor="white", linewidth=0.8, zorder=4)
+        ax1.annotate(
+            label,
+            (rec, prec),
+            xytext=(dx, dy),
+            textcoords="offset points",
+            ha=ha,
+            va="center",
+            fontsize=7.5,
+            color=OI_BLACK,
+            arrowprops=dict(arrowstyle="-", color="#9CA3AF", lw=0.65, shrinkA=2, shrinkB=4),
+        )
 
-    ax1.set_xlim(15, 100)
-    ax1.set_ylim(40, 104)
+    ax1.set_xlim(10, 108)
+    ax1.set_ylim(42, 108)
     ax1.set_xlabel("Base-Pair Recall vs. Reference Alignment (%)")
     ax1.set_ylabel("Base-Pair Precision (%)")
     ax1.set_title("A. De Novo Pairwise Accuracy Across 7 External Suites", loc="left")
@@ -151,8 +160,8 @@ def make_fig2_benchmarks() -> None:
         mpatches.Patch(color=OI_VERMILION, label="Distant (Laurasiatheria / CoVs)"),
         mpatches.Patch(color=OI_PURPLE, label="Ultra-short 1 kb promoters"),
     ]
-    ax1.legend(handles=legend_handles, loc="lower right", frameon=True, framealpha=0.92,
-               fontsize=7.2, edgecolor="#CBD5E0")
+    ax1.legend(handles=legend_handles, loc="lower right", frameon=True, framealpha=0.94,
+               fontsize=7.3, edgecolor="#CBD5E0")
 
     # Panel B: horizon_merge multi-species scaling
     suites = [
@@ -180,54 +189,55 @@ def make_fig2_benchmarks() -> None:
 
 
 def make_fig3_abstention_speedup() -> None:
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10.0, 3.8))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10.6, 4.1))
 
     # Panel A: Epistemic abstention & out-of-domain preservation
     categories = [
-        "Cannabis cs10×Cherry_Pie\n(45.5% GC, n=418,663 cols)",
-        "Pf×Pv LASTZ MDL-supported\n(n=88,597 pairs)",
-        "Pf×Pv LASTZ MDL-rejected\n(n=20,968 pairs)",
+        "Cannabis\ncs10 × Cherry_Pie\n(45.5% GC, n=418,663)",
+        "Pf × Pv LASTZ\nMDL-supported\n(n=88,597 pairs)",
+        "Pf × Pv LASTZ\nMDL-rejected\n(n=20,968 pairs)",
     ]
     kept = [99.95, 54.4, 12.3]
     abstained = [0.05, 45.6, 87.7]
     x = np.arange(len(categories))
-    w = 0.52
+    w = 0.50
 
     ax1.bar(x, kept, width=w, color=OI_BLUE, label="Aligned / Retained (%)")
     ax1.bar(x, abstained, width=w, bottom=kept, color=OI_VERMILION, alpha=0.85, label="Abstained / Horizon Bubble (%)")
     ax1.set_xticks(x)
-    ax1.set_xticklabels(categories, fontsize=7.8)
-    ax1.set_ylim(0, 112)
+    ax1.set_xticklabels(categories, fontsize=7.9)
+    ax1.set_ylim(0, 122)
     ax1.set_ylabel("Share of Reference Columns / Pairs (%)")
     ax1.set_title("A. Calibrated Abstention vs. True-Alignment Retention", loc="left")
     for i, (k, a) in enumerate(zip(kept, abstained)):
         ax1.text(i, k / 2, f"{k:.1f}%" if k < 99 else f"{k:.2f}%", ha="center", va="center",
-                 color="white", fontweight="bold", fontsize=8.2)
+                 color="white", fontweight="bold", fontsize=8.3)
         if a > 10:
             ax1.text(i, k + a / 2, f"{a:.1f}%", ha="center", va="center",
-                     color="white", fontweight="bold", fontsize=8.2)
-    ax1.legend(loc="upper right", frameon=True, framealpha=0.92, fontsize=7.5, edgecolor="#CBD5E0")
+                     color="white", fontweight="bold", fontsize=8.3)
+    ax1.legend(loc="upper center", ncol=2, frameon=True, framealpha=0.94,
+               fontsize=7.5, edgecolor="#CBD5E0")
 
     # Panel B: Whole-genome runtime speedup on slowest Plasmodium pair (Pm x Pb)
     pipelines = ["Galaxy Growler\n(KegAlign + LASTZ)\n[859.9 min]", "horizon_wga\n(14 × 45 contigs)\n[17.12 min]"]
     mins = [859.9, 17.12]
     colors = [OI_GRAY, OI_GREEN]
-    bars = ax2.bar(np.arange(2), mins, width=0.46, color=colors, edgecolor=OI_BLACK, linewidth=0.7)
+    bars = ax2.bar(np.arange(2), mins, width=0.44, color=colors, edgecolor=OI_BLACK, linewidth=0.7)
     ax2.set_xticks(np.arange(2))
     ax2.set_xticklabels(pipelines, fontsize=8.5)
     ax2.set_ylim(0, 980)
     ax2.set_ylabel("Whole-Genome Wall-Clock Runtime (min)")
     ax2.set_title("B. P. malariae × P. brasilianum Speedup (50.2×)", loc="left")
     for bar, m in zip(bars, mins):
-        ax2.text(bar.get_x() + bar.get_width() / 2, m + 20, f"{m:.1f} min",
+        ax2.text(bar.get_x() + bar.get_width() / 2, m + 18, f"{m:.1f} min",
                  ha="center", va="bottom", fontsize=8.8, fontweight="bold", color=OI_BLACK)
     ax2.annotate("50.2× faster\n(89.07M aligned pairs,\n536,041 Horizon Bubbles)",
-                 xy=(1, 40), xytext=(0.45, 500),
+                 xy=(0.94, 72), xytext=(0.38, 490),
                  arrowprops=dict(arrowstyle="-|>", color=OI_GREEN, lw=1.4),
                  fontsize=8.2, fontweight="bold", color=OI_GREEN,
-                 bbox=dict(boxstyle="round,pad=0.3", fc="#EAF7F2", ec=OI_GREEN, lw=0.9))
+                 bbox=dict(boxstyle="round,pad=0.32", fc="#EAF7F2", ec=OI_GREEN, lw=0.9))
 
-    plt.tight_layout(w_pad=2.2)
+    plt.tight_layout(w_pad=2.5)
     save_both(fig, "fig3_abstention_speedup")
 
 
