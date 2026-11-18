@@ -491,6 +491,31 @@ pub fn read_hdf5_v0_root_names(bytes: &[u8]) -> Option<Vec<String>> {
     Some(names)
 }
 
+/// Summary of an HDF5 `.hal` file read natively in pure Rust.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HalFileInfo {
+    /// Parsed HDF5 superblock metadata.
+    pub superblock: Hdf5Superblock,
+    /// Root-group member names (genomes and `Meta`/`Phylogeny` groups) for HDF5 v0 files.
+    pub root_names: Vec<String>,
+}
+
+/// Inspect a `.hal` file on disk and extract its HDF5 superblock and v0 root member names.
+///
+/// # Errors
+/// Returns an `std::io::Error` if the file cannot be opened or read.
+pub fn inspect_hal_genomes(path: &std::path::Path) -> std::io::Result<Option<HalFileInfo>> {
+    let bytes = std::fs::read(path)?;
+    let Some(superblock) = read_hdf5_superblock(&bytes) else {
+        return Ok(None);
+    };
+    let root_names = read_hdf5_v0_root_names(&bytes).unwrap_or_default();
+    Ok(Some(HalFileInfo {
+        superblock,
+        root_names,
+    }))
+}
+
 /// Read contiguous dataset bytes from an HDF5 v1 object header (`DataLayout` `0x0008`, class `1`).
 #[must_use]
 pub fn read_hdf5_v0_contiguous_data(bytes: &[u8], obj_addr: usize) -> Option<&[u8]> {

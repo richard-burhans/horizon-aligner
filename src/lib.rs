@@ -1327,16 +1327,16 @@ fn index_aa_spaced_4of6_frames(
     max_occ: usize,
     skip_softmasked: bool,
 ) -> HashMap<u32, Vec<usize>> {
-    // Reduced 9-group biochemical alphabet spaced 6-of-8 mask ("11101101", 24 bp span).
-    const AA_OFFSETS: [usize; 6] = [0, 1, 2, 4, 5, 7];
+    // Reduced 9-group biochemical alphabet spaced 5-of-6 mask ("111011", 18 bp span).
+    const AA_OFFSETS: [usize; 5] = [0, 1, 2, 4, 5];
     let mut map: HashMap<u32, Vec<usize>> = HashMap::new();
     let mut counts: HashMap<u32, usize> = HashMap::new();
     for frame in 0..3 {
-        if seq.len() < frame + 24 {
+        if seq.len() < frame + 18 {
             continue;
         }
         let mut pos = frame;
-        while pos + 24 <= seq.len() {
+        while pos + 18 <= seq.len() {
             let mut key = 0_u32;
             let mut valid = true;
             for &c in &AA_OFFSETS {
@@ -1829,9 +1829,9 @@ pub fn align_contig_pair_with_config(
         append_hsp_gated_lastz12_lcbs(&mut combined_fwd, seq_x, seq_y, &hits_w10_fwd, 220);
         append_hsp_gated_lastz12_lcbs(&mut combined_rc, seq_x, seq_y_rc, &hits_w10_rc, 220);
 
-        // Amino-acid HSP-gated 6-frame translated spaced 4-of-6 seeding for divergent coding homologs.
-        let aa_fwd = find_translated_aa5_hits(seq_x, seq_y, 2, cfg.skip_softmasked);
-        let aa_rc = find_translated_aa5_hits(seq_x, seq_y_rc, 2, cfg.skip_softmasked);
+        // Amino-acid HSP-gated 6-frame translated spaced 5-of-6 seeding for divergent coding homologs.
+        let aa_fwd = find_translated_aa5_hits(seq_x, seq_y, 4, cfg.skip_softmasked);
+        let aa_rc = find_translated_aa5_hits(seq_x, seq_y_rc, 4, cfg.skip_softmasked);
         append_hsp_gated_aa_lcbs(&mut combined_fwd, seq_x, seq_y, &aa_fwd, 90);
         append_hsp_gated_aa_lcbs(&mut combined_rc, seq_x, seq_y_rc, &aa_rc, 90);
     }
@@ -1936,7 +1936,12 @@ pub fn align_contig_pair_with_config(
                     200,
                     1800,
                 )?;
-                if sub10.len() >= 3 {
+                let min_sub10 = if x1 - x0 <= 2500 && y1 - y0 <= 2500 {
+                    2
+                } else {
+                    3
+                };
+                if sub10.len() >= min_sub10 {
                     rescued_inter.push(sub10);
                 } else {
                     let sub9 = local_w9_subchain(

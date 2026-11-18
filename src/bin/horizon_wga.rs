@@ -54,6 +54,7 @@ struct CliArgs {
     top_k: usize,
     respect_softmask: bool,
     use_ry_seeds: bool,
+    hal_info: Option<PathBuf>,
 }
 
 fn parse_args() -> CliArgs {
@@ -67,6 +68,7 @@ fn parse_args() -> CliArgs {
     let mut top_k = 0usize;
     let mut respect_softmask = false;
     let mut use_ry_seeds = false;
+    let mut hal_info = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -117,6 +119,10 @@ fn parse_args() -> CliArgs {
                 use_ry_seeds = false;
                 i += 1;
             }
+            "--hal-info" if i + 1 < args.len() => {
+                hal_info = Some(PathBuf::from(&args[i + 1]));
+                i += 2;
+            }
             _ => {
                 pos.push(args[i].clone());
                 i += 1;
@@ -147,6 +153,7 @@ fn parse_args() -> CliArgs {
         top_k,
         respect_softmask,
         use_ry_seeds,
+        hal_info,
     }
 }
 
@@ -197,6 +204,26 @@ fn compute_top_k_mask(
 #[allow(clippy::too_many_lines)]
 fn main() -> Result<()> {
     let cli = parse_args();
+    if let Some(hal_path) = &cli.hal_info {
+        let info = horizon_aligner::hal::inspect_hal_genomes(hal_path)
+            .with_context(|| format!("inspecting {}", hal_path.display()))?
+            .with_context(|| format!("{} is not a valid HDF5 HAL file", hal_path.display()))?;
+        println!(
+            "hal_file={} hdf5_v={} offset_bytes={} len_bytes={} root_members={}",
+            hal_path.display(),
+            info.superblock.version,
+            info.superblock.offset_size,
+            info.superblock.length_size,
+            info.root_names.len()
+        );
+        if !info.root_names.is_empty() {
+            println!(
+                "sample_members={}",
+                info.root_names[..info.root_names.len().min(10)].join(",")
+            );
+        }
+        return Ok(());
+    }
     let t0 = Instant::now();
     let contigs_x = read_fasta_contigs(&cli.fa_x, cli.max_contigs)?;
     let contigs_y = read_fasta_contigs(&cli.fa_y, cli.max_contigs)?;
