@@ -29,11 +29,13 @@ src/
     ├── bench_chr1.rs     # Pairwise chromosome benchmark harness
     └── eval_pf_pv.rs     # Pairwise MAF recall/precision evaluator
 manuscript/
-├── horizon_paper.md / .pdf      # Main manuscript
-├── horizon_companion.md / .pdf  # Mathematical & data-structure companion
-├── references.bib               # BibTeX references
-├── figures/                     # Publication figures (SVG & PNG)
-└── scripts/generate_figures.py  # Reproducible figure generator
+├── horizon_paper.md / .pdf          # Main manuscript
+├── horizon_companion.md / .pdf      # Mathematical & data-structure companion
+├── guide_mdl_vs_hoxd70.md / .pdf    # Guide 1: Why ΔL beats HOXD70 in AT/GC extremes
+├── guide_pure_rust_hal.md / .pdf    # Guide 2: Pure-Rust Seek HDF5/HAL reader & writer
+├── references.bib                   # BibTeX references
+├── figures/                         # Publication figures (SVG & PNG)
+└── scripts/generate_figures.py      # Reproducible figure generator
 ```
 
 ## Build & Test
@@ -81,4 +83,6 @@ target/release/horizon_merge <ref_species> <out.maf> <out.gfa> <pair1.maf> [pair
 ## Documentation
 
 - [Manuscript (Markdown)](manuscript/horizon_paper.md) | [PDF](manuscript/horizon_paper.pdf)
-- [Companion Background & Algorithms (Markdown)](manuscript/horizon_companion.md) | [PDF](manuscript/horizon_companion.pdf)
+- [Technical Companion: Data Formats, Derivations & Worked Trace (Markdown)](manuscript/horizon_companion.md) | [PDF](manuscript/horizon_companion.pdf)
+- [Guide 1: Why Bit-Savings (ΔL) Outperforms HOXD70 in Compositionally Extreme Genomes (Markdown)](manuscript/guide_mdl_vs_hoxd70.md) | [PDF](manuscript/guide_mdl_vs_hoxd70.pdf)
+- [Guide 2: Reading and Streaming HAL Alignments in Pure Rust Without libhdf5 (Markdown)](manuscript/guide_pure_rust_hal.md) | [PDF](manuscript/guide_pure_rust_hal.pdf)
