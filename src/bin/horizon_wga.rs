@@ -47,6 +47,7 @@ struct CliArgs {
     maf_out: Option<PathBuf>,
     gfa_out: Option<PathBuf>,
     resolve_dups: bool,
+    min_shared_seeds: usize,
 }
 
 fn parse_args() -> CliArgs {
@@ -55,6 +56,7 @@ fn parse_args() -> CliArgs {
     let mut maf_out = None;
     let mut gfa_out = None;
     let mut resolve_dups = false;
+    let mut min_shared_seeds = 8usize;
 
     let mut i = 0;
     while i < args.len() {
@@ -65,6 +67,12 @@ fn parse_args() -> CliArgs {
             }
             "--gfa" if i + 1 < args.len() => {
                 gfa_out = Some(PathBuf::from(&args[i + 1]));
+                i += 2;
+            }
+            "--min-shared-seeds" if i + 1 < args.len() => {
+                if let Ok(v) = args[i + 1].parse() {
+                    min_shared_seeds = v;
+                }
                 i += 2;
             }
             "--resolve-dups" => {
@@ -96,6 +104,7 @@ fn parse_args() -> CliArgs {
         maf_out,
         gfa_out,
         resolve_dups,
+        min_shared_seeds,
     }
 }
 
@@ -116,13 +125,15 @@ fn main() -> Result<()> {
 
     let mut total_pairs = 0usize;
     let mut total_bubbles = 0usize;
+    let mut pruned_pairs = 0usize;
     let mut summary_out = String::new();
     let mut maf_buf = String::new();
     let mut gfa_buf = String::new();
 
     for (x_i, (nx, ix)) in idx_x.iter().enumerate() {
         for (y_i, (ny, iy)) in idx_y.iter().enumerate() {
-            if shared_seed_count(ix, iy) < 8 {
+            if shared_seed_count(ix, iy) < cli.min_shared_seeds {
+                pruned_pairs += 1;
                 continue;
             }
             let aln = align_contig_pair_indexed(ix, iy)?;
@@ -167,9 +178,10 @@ fn main() -> Result<()> {
 
     let elapsed = t0.elapsed().as_secs_f64();
     println!(
-        "contigs_x={} contigs_y={} aligned_pairs={} total_bubbles={} elapsed_s={:.4}",
+        "contigs_x={} contigs_y={} pruned_pairs={} aligned_pairs={} total_bubbles={} elapsed_s={:.4}",
         contigs_x.len(),
         contigs_y.len(),
+        pruned_pairs,
         total_pairs,
         total_bubbles,
         elapsed
