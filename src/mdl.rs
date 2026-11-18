@@ -604,7 +604,10 @@ pub fn align_contig_pair_with_config(
     let seq_y_rc = &idx_y.seq_rc;
     let pv_len = seq_y.len();
 
+    let profile = std::env::var_os("HORIZON_PROFILE").is_some();
+    let t_start = std::time::Instant::now();
     let (raw_fwd, raw_rc) = find_w12_raw_lcbs(idx_x, idx_y);
+    let t_w12 = t_start.elapsed();
 
     // Early exit when caller requests a minimum w=12 LCB anchor threshold.
     let top_lcb_anchors = raw_fwd
@@ -622,6 +625,37 @@ pub fn align_contig_pair_with_config(
             internal_bubbles: 0,
         });
     }
+
+    let large_space = seq_x.len() >= 100_000 && seq_y.len() >= 100_000;
+    let hsp_bonus = if large_space { 90 } else { 0 };
+    let aa_bonus = if large_space { 40 } else { 0 };
+    #[allow(clippy::cast_precision_loss)]
+    let search_space_bits = ((seq_x.len().max(1) as f64) * (seq_y.len().max(1) as f64))
+        .log2()
+        .max(10.0);
+    let effective_min_bits = cfg.min_delta_bits.max(0.55 * search_space_bits);
+
+    let mut covered_x = vec![false; seq_x.len()];
+    let mut covered_bp = 0usize;
+    for lcb in raw_fwd.iter().chain(raw_rc.iter()) {
+        if let (Some(first), Some(last)) = (lcb.first(), lcb.last()) {
+            let s = first.0.min(seq_x.len());
+            let e = (last.0 + span).min(seq_x.len());
+            for flag in &mut covered_x[s..e] {
+                if !*flag {
+                    *flag = true;
+                    covered_bp += 1;
+                }
+            }
+        }
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let primary_cov = (covered_bp as f64) / (seq_x.len().max(1) as f64);
+    let filter_uncovered = |hits: &mut Vec<(usize, usize)>| {
+        if covered_bp > 0 {
+            hits.retain(|&(px, _)| !covered_x.get(px).copied().unwrap_or(false));
+        }
+    };
 
     // Sparse-exon fallback: w=10 exact seeds in intervals not covered by w=12 LCBs.
     let ix10 = canonical_spaced_seeds_with_opts(
@@ -645,7 +679,10 @@ pub fn align_contig_pair_with_config(
         cfg.skip_softmasked,
         false,
     )?;
-    let (hits10_fwd, hits10_rc) = intersect_seed_maps(&ix10, &iy10_fwd, &iy10_rc);
+    let (mut hits10_fwd, mut hits10_rc) = intersect_seed_maps(&ix10, &iy10_fwd, &iy10_rc);
+    let t_w10 = t_start.elapsed();
+    filter_uncovered(&mut hits10_fwd);
+    filter_uncovered(&mut hits10_rc);
     let mut combined_fwd = raw_fwd.clone();
     let mut combined_rc = raw_rc.clone();
     append_nonoverlapping_lcbs(
@@ -663,7 +700,7 @@ pub fn align_contig_pair_with_config(
         cfg.fallback_min_span,
     );
 
-    // LASTZ-style 12-of-19 + 1-transition hits gated by ungapped X-drop HSP score (>=180).
+    // LASTZ-style 12-of-19 + 1-transition hits gated by ungapped X-drop HSP score.
     let iy_lz_fwd = canonical_spaced_seeds_with_opts(
         seq_y,
         MASK_LASTZ12,
@@ -678,16 +715,47 @@ pub fn align_contig_pair_with_config(
         cfg.skip_softmasked,
         false,
     )?;
-    let (hits_lz_fwd, hits_lz_rc) =
+    let (mut hits_lz_fwd, mut hits_lz_rc) =
         find_lastz12_1transition_hits(seq_x, &iy_lz_fwd, &iy_lz_rc, cfg.skip_softmasked);
-    append_hsp_gated_lastz12_lcbs(&mut combined_fwd, seq_x, seq_y, &hits_lz_fwd, 180);
-    append_hsp_gated_lastz12_lcbs(&mut combined_rc, seq_x, seq_y_rc, &hits_lz_rc, 180);
+    filter_uncovered(&mut hits_lz_fwd);
+    filter_uncovered(&mut hits_lz_rc);
+    append_hsp_gated_lastz12_lcbs(
+        &mut combined_fwd,
+        seq_x,
+        seq_y,
+        &hits_lz_fwd,
+        180 + hsp_bonus,
+    );
+    append_hsp_gated_lastz12_lcbs(
+        &mut combined_rc,
+        seq_x,
+        seq_y_rc,
+        &hits_lz_rc,
+        180 + hsp_bonus,
+    );
+    let t_lz1 = t_start.elapsed();
 
-    if cfg.use_multi_shape_seeds {
-        let (double_trans_fwd, double_trans_rc) =
-            find_lastz12_2transition_hits(seq_x, &iy_lz_fwd, &iy_lz_rc, cfg.skip_softmasked);
-        append_hsp_gated_lastz12_lcbs(&mut combined_fwd, seq_x, seq_y, &double_trans_fwd, 210);
-        append_hsp_gated_lastz12_lcbs(&mut combined_rc, seq_x, seq_y_rc, &double_trans_rc, 210);
+    if cfg.use_multi_shape_seeds && !(primary_cov >= 0.35 && seq_x.len() >= 50_000) {
+        if !large_space {
+            let (mut double_trans_fwd, mut double_trans_rc) =
+                find_lastz12_2transition_hits(seq_x, &iy_lz_fwd, &iy_lz_rc, cfg.skip_softmasked);
+            filter_uncovered(&mut double_trans_fwd);
+            filter_uncovered(&mut double_trans_rc);
+            append_hsp_gated_lastz12_lcbs(
+                &mut combined_fwd,
+                seq_x,
+                seq_y,
+                &double_trans_fwd,
+                210 + hsp_bonus,
+            );
+            append_hsp_gated_lastz12_lcbs(
+                &mut combined_rc,
+                seq_x,
+                seq_y_rc,
+                &double_trans_rc,
+                210 + hsp_bonus,
+            );
+        }
 
         let iy_11_fwd = canonical_spaced_seeds_with_opts(
             seq_y,
@@ -703,33 +771,85 @@ pub fn align_contig_pair_with_config(
             cfg.skip_softmasked,
             false,
         )?;
-        let (hits_11_fwd, hits_11_rc) =
+        let (mut hits_11_fwd, mut hits_11_rc) =
             find_lastz11_1transition_hits(seq_x, &iy_11_fwd, &iy_11_rc, cfg.skip_softmasked);
-        append_hsp_gated_lastz12_lcbs(&mut combined_fwd, seq_x, seq_y, &hits_11_fwd, 210);
-        append_hsp_gated_lastz12_lcbs(&mut combined_rc, seq_x, seq_y_rc, &hits_11_rc, 210);
+        filter_uncovered(&mut hits_11_fwd);
+        filter_uncovered(&mut hits_11_rc);
+        append_hsp_gated_lastz12_lcbs(
+            &mut combined_fwd,
+            seq_x,
+            seq_y,
+            &hits_11_fwd,
+            210 + hsp_bonus,
+        );
+        append_hsp_gated_lastz12_lcbs(
+            &mut combined_rc,
+            seq_x,
+            seq_y_rc,
+            &hits_11_rc,
+            210 + hsp_bonus,
+        );
 
-        // HSP-gated 1-bit purine/pyrimidine (R/Y) seeding for multi-transition divergent homologs.
-        let ix_ry =
-            canonical_spaced_seeds_with_opts(seq_x, MASK_RY20, 2, cfg.skip_softmasked, true)?;
-        let iy_ry_fwd =
-            canonical_spaced_seeds_with_opts(seq_y, MASK_RY20, 2, cfg.skip_softmasked, true)?;
-        let iy_ry_rc =
-            canonical_spaced_seeds_with_opts(seq_y_rc, MASK_RY20, 2, cfg.skip_softmasked, true)?;
-        let (hits_ry_fwd, hits_ry_rc) = intersect_seed_maps(&ix_ry, &iy_ry_fwd, &iy_ry_rc);
-        append_hsp_gated_lastz12_lcbs(&mut combined_fwd, seq_x, seq_y, &hits_ry_fwd, 220);
-        append_hsp_gated_lastz12_lcbs(&mut combined_rc, seq_x, seq_y_rc, &hits_ry_rc, 220);
+        if !large_space {
+            // HSP-gated 1-bit purine/pyrimidine (R/Y) seeding for multi-transition divergent homologs.
+            let ix_ry =
+                canonical_spaced_seeds_with_opts(seq_x, MASK_RY20, 2, cfg.skip_softmasked, true)?;
+            let iy_ry_fwd =
+                canonical_spaced_seeds_with_opts(seq_y, MASK_RY20, 2, cfg.skip_softmasked, true)?;
+            let iy_ry_rc = canonical_spaced_seeds_with_opts(
+                seq_y_rc,
+                MASK_RY20,
+                2,
+                cfg.skip_softmasked,
+                true,
+            )?;
+            let (mut hits_ry_fwd, mut hits_ry_rc) =
+                intersect_seed_maps(&ix_ry, &iy_ry_fwd, &iy_ry_rc);
+            filter_uncovered(&mut hits_ry_fwd);
+            filter_uncovered(&mut hits_ry_rc);
+            append_hsp_gated_lastz12_lcbs(
+                &mut combined_fwd,
+                seq_x,
+                seq_y,
+                &hits_ry_fwd,
+                220 + hsp_bonus,
+            );
+            append_hsp_gated_lastz12_lcbs(
+                &mut combined_rc,
+                seq_x,
+                seq_y_rc,
+                &hits_ry_rc,
+                220 + hsp_bonus,
+            );
 
-        // HSP-gated w=10 (10-of-14) 1-transition seeding.
-        let (hits_w10_fwd, hits_w10_rc) =
-            find_w10_1transition_hits(seq_x, &iy10_fwd, &iy10_rc, cfg.skip_softmasked);
-        append_hsp_gated_lastz12_lcbs(&mut combined_fwd, seq_x, seq_y, &hits_w10_fwd, 220);
-        append_hsp_gated_lastz12_lcbs(&mut combined_rc, seq_x, seq_y_rc, &hits_w10_rc, 220);
+            // HSP-gated w=10 (10-of-14) 1-transition seeding.
+            let (mut hits_w10_fwd, mut hits_w10_rc) =
+                find_w10_1transition_hits(seq_x, &iy10_fwd, &iy10_rc, cfg.skip_softmasked);
+            filter_uncovered(&mut hits_w10_fwd);
+            filter_uncovered(&mut hits_w10_rc);
+            append_hsp_gated_lastz12_lcbs(
+                &mut combined_fwd,
+                seq_x,
+                seq_y,
+                &hits_w10_fwd,
+                220 + hsp_bonus,
+            );
+            append_hsp_gated_lastz12_lcbs(
+                &mut combined_rc,
+                seq_x,
+                seq_y_rc,
+                &hits_w10_rc,
+                220 + hsp_bonus,
+            );
+        }
 
         // Amino-acid HSP-gated 6-frame translated spaced 5-of-6 seeding for divergent coding homologs.
-        let aa_fwd = find_translated_aa5_hits(seq_x, seq_y, 4, cfg.skip_softmasked);
-        let aa_rc = find_translated_aa5_hits(seq_x, seq_y_rc, 4, cfg.skip_softmasked);
-        append_hsp_gated_aa_lcbs(&mut combined_fwd, seq_x, seq_y, &aa_fwd, 90);
-        append_hsp_gated_aa_lcbs(&mut combined_rc, seq_x, seq_y_rc, &aa_rc, 90);
+        let mut aa_fwd = find_translated_aa5_hits(seq_x, seq_y, 4, cfg.skip_softmasked);
+        let mut aa_rc = find_translated_aa5_hits(seq_x, seq_y_rc, 4, cfg.skip_softmasked);
+        filter_uncovered(&mut aa_fwd);
+        filter_uncovered(&mut aa_rc);
+        append_hsp_gated_aa_lcbs(&mut combined_fwd, seq_x, seq_y, &aa_fwd, 90 + aa_bonus);
+        append_hsp_gated_aa_lcbs(&mut combined_rc, seq_x, seq_y_rc, &aa_rc, 90 + aa_bonus);
     }
 
     // Transition-tolerant R/Y (1-bit purine/pyrimidine) fallback for divergent homologs.
@@ -761,6 +881,7 @@ pub fn align_contig_pair_with_config(
 
     let lcbs_fwd = merge_colinear_lcbs(&combined_fwd, max_local_rescue_bp);
     let lcbs_rc = merge_colinear_lcbs(&combined_rc, max_local_rescue_bp);
+    let t_seed_end = t_start.elapsed();
 
     let mut pair_set: HashSet<(usize, usize)> = HashSet::new();
     let mut dp_jobs: Vec<(bool, usize, usize, usize, usize)> = Vec::new();
@@ -820,8 +941,8 @@ pub fn align_contig_pair_with_config(
             let y1 = w[1][0].1;
             if x1 > x0
                 && y1 > y0
-                && (100..=120_000).contains(&(x1 - x0))
-                && (100..=120_000).contains(&(y1 - y0))
+                && (100..=25_000).contains(&(x1 - x0))
+                && (100..=25_000).contains(&(y1 - y0))
             {
                 let sub10 = local_w9_subchain(
                     &seq_x[x0..x1],
@@ -857,6 +978,31 @@ pub fn align_contig_pair_with_config(
         }
 
         for lcb in lcb_list.iter().chain(&rescued_inter) {
+            if large_space && lcb.len() < 8 {
+                let mut matches = 0usize;
+                let mut mismatches = 0usize;
+                let mut last_end_x = 0usize;
+                for &(ax, ay) in lcb {
+                    for off in 0..span {
+                        let px = ax + off;
+                        let py = ay + off;
+                        if px < last_end_x || px >= seq_x.len() || py >= pv_len {
+                            continue;
+                        }
+                        if seq_x[px].eq_ignore_ascii_case(&y_work[py]) {
+                            matches += 1;
+                        } else {
+                            mismatches += 1;
+                        }
+                    }
+                    last_end_x = (ax + span).max(last_end_x);
+                }
+                #[allow(clippy::cast_precision_loss)]
+                let net_bits = 1.6 * (matches as f64) - 2.4 * (mismatches as f64);
+                if net_bits < effective_min_bits {
+                    continue;
+                }
+            }
             let mut all_anchors = Vec::with_capacity(lcb.len() * 2);
             all_anchors.push(lcb[0]);
             for w in lcb.windows(2) {
@@ -888,6 +1034,9 @@ pub fn align_contig_pair_with_config(
 
             for &(ax, ay) in &all_anchors {
                 for off in 0..span {
+                    if ax + off >= seq_x.len() || ay + off >= pv_len {
+                        break;
+                    }
                     let py = if is_rc {
                         pv_len - 1 - (ay + off)
                     } else {
@@ -943,11 +1092,17 @@ pub fn align_contig_pair_with_config(
     }
 
     // Run banded MDL DP gaps in parallel via rayon.
+    let t_dp_start = std::time::Instant::now();
     let dp_results: Vec<(bool, usize, usize, GapResult)> = dp_jobs
         .par_iter()
         .map(|&(is_rc, x0, x1, y0, y1)| {
             let y_work = if is_rc { seq_y_rc } else { seq_y };
-            let res = banded_mdl_gap(&seq_x[x0..x1], &y_work[y0..y1], 180, 10.0);
+            let res = banded_mdl_gap(
+                &seq_x[x0..x1],
+                &y_work[y0..y1],
+                cfg.band_w,
+                effective_min_bits,
+            );
             (is_rc, x0, y0, res)
         })
         .collect();
@@ -965,11 +1120,21 @@ pub fn align_contig_pair_with_config(
         }
     }
 
+    let t_dp = t_dp_start.elapsed();
+    let t_xd_start = std::time::Instant::now();
     let xdrop_results: Vec<(bool, Vec<(usize, usize)>)> = xdrop_jobs
         .par_iter()
         .map(|&(is_rc, x0, x1, y0, y1, rev)| {
             let y_work = if is_rc { seq_y_rc } else { seq_y };
-            let pairs = mdl_xdrop_extend(&seq_x[x0..x1], &y_work[y0..y1], x0, y0, rev, 1500, 40);
+            let pairs = mdl_xdrop_extend(
+                &seq_x[x0..x1],
+                &y_work[y0..y1],
+                x0,
+                y0,
+                rev,
+                cfg.max_ext,
+                40,
+            );
             (is_rc, pairs)
         })
         .collect();
@@ -979,6 +1144,26 @@ pub fn align_contig_pair_with_config(
             let y_orig = if is_rc { pv_len - 1 - py } else { py };
             pair_set.insert((px, y_orig));
         }
+    }
+
+    let t_xd = t_xd_start.elapsed();
+    if profile {
+        eprintln!(
+            "[profile] w12={:.2}s (fwd={},rc={},cov={:.1}%) w10={:.2}s lz1={:.2}s seed_end={:.2}s (lcbs={}+{}) dp={:.2}s (jobs={}) xdrop={:.2}s (jobs={})",
+            t_w12.as_secs_f64(),
+            raw_fwd.len(),
+            raw_rc.len(),
+            primary_cov * 100.0,
+            t_w10.saturating_sub(t_w12).as_secs_f64(),
+            t_lz1.saturating_sub(t_w10).as_secs_f64(),
+            t_seed_end.saturating_sub(t_lz1).as_secs_f64(),
+            lcbs_fwd.len(),
+            lcbs_rc.len(),
+            t_dp.as_secs_f64(),
+            dp_jobs.len(),
+            t_xd.as_secs_f64(),
+            xdrop_jobs.len(),
+        );
     }
 
     let mut aligned_pairs: Vec<(usize, usize)> = pair_set.into_iter().collect();

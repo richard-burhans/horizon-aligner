@@ -1280,4 +1280,32 @@ mod tests {
             vec![(100, 50, -1, vec![(5, false), (-1, true)])]
         );
     }
+
+    #[test]
+    #[ignore = "requires HORIZON_TEST_HAL=/path/to/file.hal"]
+    fn real_hal_decode_from_env() {
+        let path = std::env::var("HORIZON_TEST_HAL").expect("set HORIZON_TEST_HAL");
+        let bytes = std::fs::read(&path).expect("read hal file");
+        let sb = read_hdf5_superblock(&bytes).expect("superblock");
+        let root_addr = usize::try_from(sb.root_group_addr.expect("root addr")).expect("usize");
+        let root = read_hdf5_v0_group_entries(&bytes, root_addr).expect("root entries");
+        assert_ne!(root.len(), 0);
+        let first_genome = root
+            .iter()
+            .find(|e| e.name != "Meta" && e.name != "Phylogeny")
+            .expect("genome group");
+        let g_addr = usize::try_from(first_genome.object_header_addr).expect("usize");
+        let g_entries = read_hdf5_v0_group_entries(&bytes, g_addr).expect("genome entries");
+        let seqname_obj = g_entries
+            .iter()
+            .find(|e| e.name == "SEQNAME_ARRAY")
+            .expect("SEQNAME_ARRAY");
+        let sn_addr = usize::try_from(seqname_obj.object_header_addr).expect("usize");
+        let sn_dims = read_hdf5_dataspace_dims(&bytes, sn_addr).expect("SEQNAME dims");
+        let sn_stride = read_hdf5_datatype_size(&bytes, sn_addr).expect("SEQNAME stride");
+        let sn_raw = read_hdf5_v0_dataset_bytes(&bytes, sn_addr).expect("SEQNAME bytes");
+        let names = decode_hal_seq_names(&sn_raw, sn_stride);
+        assert_eq!(names.len(), usize::try_from(sn_dims[0]).expect("len"));
+        assert_ne!(names[0], "");
+    }
 }

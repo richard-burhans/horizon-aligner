@@ -16,6 +16,19 @@ pub const MASK_LASTZ12: &str = "1110100110010101111";
 /// Complementary `11-of-18` spaced-seed mask for multi-shape divergent seeding.
 pub const MASK_LASTZ11: &str = "111010011001010111";
 
+#[inline]
+fn is_low_complexity_window(sub: &[u8]) -> bool {
+    let mut counts = [0usize; 4];
+    for &b in sub {
+        if let Some(idx) = base_to_idx(b) {
+            counts[idx] += 1;
+        }
+    }
+    let max_c = counts[0].max(counts[1]).max(counts[2]).max(counts[3]);
+    let distinct = counts.iter().filter(|&&c| c > 0).count();
+    max_c * 4 >= sub.len() * 3 || (sub.len() >= 14 && distinct <= 2)
+}
+
 /// Extract canonical strand-symmetric spaced-seed positions with at most `max_occ` hits.
 ///
 /// # Errors
@@ -86,6 +99,9 @@ fn canonical_spaced_seeds_impl(
 
     for i in 0..=(seq.len() - span) {
         let sub = &seq[i..i + span];
+        if span >= 12 && is_low_complexity_window(sub) {
+            continue;
+        }
         let mut fwd = 0_u64;
         let mut rc = 0_u64;
         let mut valid = true;
@@ -351,9 +367,11 @@ pub fn prepare_contig_index_opts(
             other => other,
         })
         .collect();
-    let seeds_fwd = canonical_spaced_seeds_with_opts(seq, MASK_KP14, 2, skip_softmasked, false)?;
+    let max_occ = if seq.len() >= 100_000 { 2 } else { 4 };
+    let seeds_fwd =
+        canonical_spaced_seeds_with_opts(seq, MASK_KP14, max_occ, skip_softmasked, false)?;
     let seeds_rc =
-        canonical_spaced_seeds_with_opts(&seq_rc_case, MASK_KP14, 2, skip_softmasked, false)?;
+        canonical_spaced_seeds_with_opts(&seq_rc_case, MASK_KP14, max_occ, skip_softmasked, false)?;
     Ok(ContigIndex {
         seq: seq.to_vec(),
         seq_rc: revcomp(seq),
@@ -917,19 +935,31 @@ pub(crate) fn append_hsp_gated_lastz12_lcbs(
     hits: &[(usize, usize)],
     min_hsp_score: i32,
 ) {
+    let large_space = seq_x.len().saturating_mul(seq_y.len()) >= 100_000_000;
+    let strong_margin = if large_space { 80 } else { 15 };
+    let tight_min_anchors = if large_space { 3 } else { 2 };
+    let tight_min_span = if large_space { 20 } else { 16 };
     let mut filtered_hits: Vec<(usize, usize)> = Vec::new();
     let mut strong_hsps: Vec<Vec<(usize, usize)>> = Vec::new();
     for &(px, py) in hits {
         if let Some((lx, ly, rx, ry, sc)) = extend_ungapped_hsp(seq_x, seq_y, px, py, min_hsp_score)
         {
             filtered_hits.push((px, py));
-            if sc >= min_hsp_score + 15 && rx >= lx + 18 && ry >= ly + 18 {
+            if !large_space && sc >= min_hsp_score + strong_margin && rx >= lx + 18 && ry >= ly + 18
+            {
                 strong_hsps.push(vec![(lx, ly), (rx - 12, ry - 12)]);
             }
         }
     }
     let mut candidates = cluster_strand_lcbs(&filtered_hits, 1800, 200, 3, 30, 250.0);
-    candidates.extend(cluster_strand_lcbs(&filtered_hits, 150, 25, 2, 16, 150.0));
+    candidates.extend(cluster_strand_lcbs(
+        &filtered_hits,
+        150,
+        25,
+        tight_min_anchors,
+        tight_min_span,
+        150.0,
+    ));
     candidates.extend(strong_hsps);
     for lcb in candidates {
         let (sx, ex) = (lcb[0].0, lcb[lcb.len() - 1].0);
@@ -945,8 +975,28 @@ pub(crate) fn append_hsp_gated_lastz12_lcbs(
 pub(crate) fn find_w12_raw_lcbs(idx_x: &ContigIndex, idx_y: &ContigIndex) -> (LcbList, LcbList) {
     let (hits_fwd, hits_rc) =
         intersect_seed_maps(&idx_x.seeds_fwd, &idx_y.seeds_fwd, &idx_y.seeds_rc);
-    let raw_fwd = cluster_strand_lcbs(&hits_fwd, 3500, 350, 8, 100, 450.0);
-    let raw_rc = cluster_strand_lcbs(&hits_rc, 3500, 350, 8, 100, 450.0);
+    let large_space = idx_x.seq.len().saturating_mul(idx_y.seq.len()) >= 100_000_000;
+    let (max_gap, max_drift, min_anchors, min_span, max_step) = if large_space {
+        (2000, 200, 8, 80, 180.0)
+    } else {
+        (3500, 350, 6, 60, 450.0)
+    };
+    let raw_fwd = cluster_strand_lcbs(
+        &hits_fwd,
+        max_gap,
+        max_drift,
+        min_anchors,
+        min_span,
+        max_step,
+    );
+    let raw_rc = cluster_strand_lcbs(
+        &hits_rc,
+        max_gap,
+        max_drift,
+        min_anchors,
+        min_span,
+        max_step,
+    );
     (raw_fwd, raw_rc)
 }
 
