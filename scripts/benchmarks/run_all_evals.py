@@ -5,11 +5,11 @@ import sys
 import argparse
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-ALIGNER_DIR = ROOT / "horizon-aligner"
-BENCH_DIR = ROOT / "data" / "benchmarks"
+ROOT = Path(__file__).resolve().parents[2]
+ALIGNER_DIR = ROOT
+BENCH_DIR = ROOT.parent / "data" / "benchmarks"
 FASTA_DIR = BENCH_DIR / "fastas"
-EXTRACT_SCRIPT = ROOT / "scripts" / "extract_fasta_from_maf.py"
+EXTRACT_SCRIPT = ROOT / "scripts" / "benchmarks" / "extract_fasta_from_maf.py"
 
 def run_cmd(cmd: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess:
     print(f"\n> {' '.join(cmd)}")
@@ -66,13 +66,13 @@ def run_testing(extra_args):
     print("\n--- RUNNING HELD-OUT TESTING DATASETS ---")
     print("These datasets MUST NOT be used for tuning parameters to prevent overfitting.")
     # Dataset 1: cactus447way (Human vs Horse - Distant Mammal)
-    evaluate_pair("cactus447way", BENCH_DIR / "chr22_KI270735v1_random.maf.gz", "hg38", "Equus_caballus", extra_args)
+    evaluate_pair("cactus447way", BENCH_DIR / "cactus447way_chr22_random.maf.gz", "hg38", "Equus_caballus", extra_args)
 
     # Dataset 2: cactus447way (Human vs Macaque - Close Primate)
-    evaluate_pair("cactus447way", BENCH_DIR / "chr22_KI270735v1_random.maf.gz", "hg38", "Macaca_mulatta", extra_args)
+    evaluate_pair("cactus447way", BENCH_DIR / "cactus447way_chr22_random.maf.gz", "hg38", "Macaca_mulatta", extra_args)
 
     # Dataset 5: multiz470way (Human vs Marmoset - Medium Primate)
-    evaluate_pair("multiz470way", BENCH_DIR / "chr22_KI270735v1_random.maf", "hg38", "HLcalPym1", extra_args)
+    evaluate_pair("multiz470way", BENCH_DIR / "multiz470way_chr22_random.maf", "hg38", "HLcalPym1", extra_args)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate Horizon Aligner")

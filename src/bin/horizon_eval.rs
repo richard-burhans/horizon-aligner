@@ -126,11 +126,13 @@ fn main() -> Result<()> {
     
     #[allow(clippy::cast_precision_loss)]
     let recall = (overlap as f64) / (maf_all.len().max(1) as f64);
+    let precision = (overlap as f64) / (proto_set.len().max(1) as f64);
     println!(
-        "elapsed={elapsed:.3}s proto_pairs={} maf_pairs={} overlap={overlap} raw_maf_recall={:.1}% bubbles={}",
+        "elapsed={elapsed:.3}s proto_pairs={} maf_pairs={} overlap={overlap} raw_maf_recall={:.1}% raw_maf_precision={:.1}% bubbles={}",
         proto_set.len(),
         maf_all.len(),
         recall * 100.0,
+        precision * 100.0,
         aln.macro_bubbles + aln.internal_bubbles
     );
     Ok(())
