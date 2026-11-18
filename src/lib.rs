@@ -1083,7 +1083,8 @@ fn intersect_seed_maps(
     (hits_fwd, hits_rc)
 }
 
-fn find_spaced_1transition_hits<S: std::hash::BuildHasher>(
+#[allow(clippy::too_many_arguments)]
+fn find_spaced_transition_hits<S: std::hash::BuildHasher>(
     seq_x: &[u8],
     offsets: &[usize],
     rev_offsets: &[usize],
@@ -1091,6 +1092,8 @@ fn find_spaced_1transition_hits<S: std::hash::BuildHasher>(
     iy_fwd: &HashMap<u64, Vec<usize>, S>,
     iy_rc: &HashMap<u64, Vec<usize>, S>,
     skip_softmasked: bool,
+    min_transitions: usize,
+    max_transitions: usize,
 ) -> (AnchorPairs, AnchorPairs) {
     if seq_x.len() < span {
         return (Vec::new(), Vec::new());
@@ -1098,7 +1101,7 @@ fn find_spaced_1transition_hits<S: std::hash::BuildHasher>(
     let w = offsets.len();
     let mut hits_fwd = Vec::new();
     let mut hits_rc = Vec::new();
-    let mut keys = Vec::with_capacity(w + 1);
+    let mut keys = Vec::with_capacity(w * w / 2 + w + 1);
     for i in 0..=(seq_x.len() - span) {
         let sub = &seq_x[i..i + span];
         let mut fwd = 0_u64;
@@ -1120,11 +1123,26 @@ fn find_spaced_1transition_hits<S: std::hash::BuildHasher>(
             continue;
         }
         keys.clear();
-        keys.push(fwd.min(rc));
-        for b in 0..w {
-            let mf = fwd ^ (2_u64 << (2 * (w - 1 - b)));
-            let mr = rc ^ (2_u64 << (2 * b));
-            keys.push(mf.min(mr));
+        if min_transitions == 0 {
+            keys.push(fwd.min(rc));
+        }
+        if min_transitions <= 1 && max_transitions >= 1 {
+            for b in 0..w {
+                let mf = fwd ^ (2_u64 << (2 * (w - 1 - b)));
+                let mr = rc ^ (2_u64 << (2 * b));
+                keys.push(mf.min(mr));
+            }
+        }
+        if max_transitions >= 2 {
+            for a in 0..w {
+                let ma_f = fwd ^ (2_u64 << (2 * (w - 1 - a)));
+                let ma_r = rc ^ (2_u64 << (2 * a));
+                for b in (a + 1)..w {
+                    let mf = ma_f ^ (2_u64 << (2 * (w - 1 - b)));
+                    let mr = ma_r ^ (2_u64 << (2 * b));
+                    keys.push(mf.min(mr));
+                }
+            }
         }
         for &key in &keys {
             if let Some(pys) = iy_fwd.get(&key) {
@@ -1142,6 +1160,9 @@ fn find_spaced_1transition_hits<S: std::hash::BuildHasher>(
     (hits_fwd, hits_rc)
 }
 
+const LASTZ12_OFFSETS: [usize; 12] = [0, 1, 2, 4, 7, 8, 11, 13, 15, 16, 17, 18];
+const LASTZ12_REV_OFFSETS: [usize; 12] = [0, 1, 2, 3, 5, 7, 10, 11, 14, 16, 17, 18];
+
 /// Find `12-of-19` (`MASK_LASTZ12`) seed hits including 1-transition (`A<->G`, `C<->T`) neighbors.
 #[must_use]
 pub fn find_lastz12_1transition_hits<S: std::hash::BuildHasher>(
@@ -1150,16 +1171,37 @@ pub fn find_lastz12_1transition_hits<S: std::hash::BuildHasher>(
     iy_rc: &HashMap<u64, Vec<usize>, S>,
     skip_softmasked: bool,
 ) -> (AnchorPairs, AnchorPairs) {
-    const OFFSETS: [usize; 12] = [0, 1, 2, 4, 7, 8, 11, 13, 15, 16, 17, 18];
-    const REV_OFFSETS: [usize; 12] = [0, 1, 2, 3, 5, 7, 10, 11, 14, 16, 17, 18];
-    find_spaced_1transition_hits(
+    find_spaced_transition_hits(
         seq_x,
-        &OFFSETS,
-        &REV_OFFSETS,
+        &LASTZ12_OFFSETS,
+        &LASTZ12_REV_OFFSETS,
         19,
         iy_fwd,
         iy_rc,
         skip_softmasked,
+        0,
+        1,
+    )
+}
+
+/// Find `12-of-19` (`MASK_LASTZ12`) seed hits with 2 simultaneous transitions (`A<->G`, `C<->T`).
+#[must_use]
+pub fn find_lastz12_2transition_hits<S: std::hash::BuildHasher>(
+    seq_x: &[u8],
+    iy_fwd: &HashMap<u64, Vec<usize>, S>,
+    iy_rc: &HashMap<u64, Vec<usize>, S>,
+    skip_softmasked: bool,
+) -> (AnchorPairs, AnchorPairs) {
+    find_spaced_transition_hits(
+        seq_x,
+        &LASTZ12_OFFSETS,
+        &LASTZ12_REV_OFFSETS,
+        19,
+        iy_fwd,
+        iy_rc,
+        skip_softmasked,
+        2,
+        2,
     )
 }
 
@@ -1171,7 +1213,7 @@ fn find_lastz11_1transition_hits<S: std::hash::BuildHasher>(
 ) -> (AnchorPairs, AnchorPairs) {
     const OFFSETS: [usize; 11] = [0, 1, 2, 4, 7, 8, 11, 13, 15, 16, 17];
     const REV_OFFSETS: [usize; 11] = [0, 1, 2, 4, 6, 9, 10, 13, 15, 16, 17];
-    find_spaced_1transition_hits(
+    find_spaced_transition_hits(
         seq_x,
         &OFFSETS,
         &REV_OFFSETS,
@@ -1179,6 +1221,8 @@ fn find_lastz11_1transition_hits<S: std::hash::BuildHasher>(
         iy_fwd,
         iy_rc,
         skip_softmasked,
+        0,
+        1,
     )
 }
 
@@ -1459,6 +1503,11 @@ pub fn align_contig_pair_with_config(
     append_hsp_gated_lastz12_lcbs(&mut combined_rc, seq_x, seq_y_rc, &hits_lz_rc, 180);
 
     if cfg.use_multi_shape_seeds {
+        let (double_trans_fwd, double_trans_rc) =
+            find_lastz12_2transition_hits(seq_x, &iy_lz_fwd, &iy_lz_rc, cfg.skip_softmasked);
+        append_hsp_gated_lastz12_lcbs(&mut combined_fwd, seq_x, seq_y, &double_trans_fwd, 210);
+        append_hsp_gated_lastz12_lcbs(&mut combined_rc, seq_x, seq_y_rc, &double_trans_rc, 210);
+
         let iy_11_fwd = canonical_spaced_seeds_with_opts(
             seq_y,
             MASK_LASTZ11,
@@ -1475,8 +1524,8 @@ pub fn align_contig_pair_with_config(
         )?;
         let (hits_11_fwd, hits_11_rc) =
             find_lastz11_1transition_hits(seq_x, &iy_11_fwd, &iy_11_rc, cfg.skip_softmasked);
-        append_hsp_gated_lastz12_lcbs(&mut combined_fwd, seq_x, seq_y, &hits_11_fwd, 180);
-        append_hsp_gated_lastz12_lcbs(&mut combined_rc, seq_x, seq_y_rc, &hits_11_rc, 180);
+        append_hsp_gated_lastz12_lcbs(&mut combined_fwd, seq_x, seq_y, &hits_11_fwd, 210);
+        append_hsp_gated_lastz12_lcbs(&mut combined_rc, seq_x, seq_y_rc, &hits_11_rc, 210);
     }
 
     // Transition-tolerant R/Y (1-bit purine/pyrimidine) fallback for divergent homologs.
@@ -2587,5 +2636,18 @@ mod tests {
         let iy_rc = canonical_spaced_seeds(&revcomp(sy), MASK_LASTZ12, 2).expect("valid");
         let (fwd, _) = find_lastz12_1transition_hits(sx, &iy_fwd, &iy_rc, false);
         assert!(fwd.contains(&(0, 0)), "expected (0, 0) in {fwd:?}");
+    }
+
+    #[test]
+    fn lastz12_2transition_recovers_double_transition_hit() {
+        let sx = b"ACGTTGCACTGATCGTAGCTAGCTAAGGCCAT";
+        // Positions 1 (C->T) and 11 (A->G) both have transitions; 1-transition misses, 2-transition recovers (0, 0).
+        let sy = b"ATGTTGCACTGGTCGTAGCTAGCTAAGGCCAT";
+        let iy_fwd = canonical_spaced_seeds(sy, MASK_LASTZ12, 2).expect("valid");
+        let iy_rc = canonical_spaced_seeds(&revcomp(sy), MASK_LASTZ12, 2).expect("valid");
+        let (fwd1, _) = find_lastz12_1transition_hits(sx, &iy_fwd, &iy_rc, false);
+        assert!(!fwd1.contains(&(0, 0)), "1-transition should miss (0, 0)");
+        let (fwd2, _) = find_lastz12_2transition_hits(sx, &iy_fwd, &iy_rc, false);
+        assert!(fwd2.contains(&(0, 0)), "expected (0, 0) in {fwd2:?}");
     }
 }
