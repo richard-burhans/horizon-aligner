@@ -377,7 +377,21 @@ fn read_u64_le(bytes: &[u8], off: usize) -> Option<u64> {
     ))
 }
 
-fn collect_snod_names(bytes: &[u8], snod_addr: usize, heap_data: &[u8], out: &mut Vec<String>) {
+/// A child entry inside an HDF5 v0 group (`SymbolTable` + `TREE`/`SNOD` + `HEAP`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hdf5GroupEntry {
+    /// Member name in the group.
+    pub name: String,
+    /// File byte offset of the member's HDF5 object header.
+    pub object_header_addr: u64,
+}
+
+fn collect_snod_entries(
+    bytes: &[u8],
+    snod_addr: usize,
+    heap_data: &[u8],
+    out: &mut Vec<Hdf5GroupEntry>,
+) {
     if bytes.get(snod_addr..snod_addr + 4) != Some(b"SNOD") {
         return;
     }
@@ -392,6 +406,9 @@ fn collect_snod_names(bytes: &[u8], snod_addr: usize, heap_data: &[u8], out: &mu
         let Some(name_off_u64) = read_u64_le(bytes, entry_off) else {
             break;
         };
+        let Some(obj_addr) = read_u64_le(bytes, entry_off + 8) else {
+            break;
+        };
         let Ok(name_off) = usize::try_from(name_off_u64) else {
             continue;
         };
@@ -400,13 +417,21 @@ fn collect_snod_names(bytes: &[u8], snod_addr: usize, heap_data: &[u8], out: &mu
             if let Ok(s) = std::str::from_utf8(&tail[..end])
                 && !s.is_empty()
             {
-                out.push(s.to_owned());
+                out.push(Hdf5GroupEntry {
+                    name: s.to_owned(),
+                    object_header_addr: obj_addr,
+                });
             }
         }
     }
 }
 
-fn walk_btree_v1_group(bytes: &[u8], node_addr: usize, heap_data: &[u8], out: &mut Vec<String>) {
+fn walk_btree_v1_group_entries(
+    bytes: &[u8],
+    node_addr: usize,
+    heap_data: &[u8],
+    out: &mut Vec<Hdf5GroupEntry>,
+) {
     if bytes.get(node_addr..node_addr + 4) != Some(b"TREE") {
         return;
     }
@@ -432,47 +457,44 @@ fn walk_btree_v1_group(bytes: &[u8], node_addr: usize, heap_data: &[u8], out: &m
             continue;
         };
         if node_level == 0 {
-            collect_snod_names(bytes, child_addr, heap_data, out);
+            collect_snod_entries(bytes, child_addr, heap_data, out);
         } else {
-            walk_btree_v1_group(bytes, child_addr, heap_data, out);
+            walk_btree_v1_group_entries(bytes, child_addr, heap_data, out);
         }
     }
 }
 
-/// Extract root-group member names from an HDF5 v0 `.hal` file via its `SymbolTable` (`0x0011`),
-/// `HEAP` local heap, and `TREE`/`SNOD` B-tree v1 nodes.
+/// Extract child member entries `(name, object_header_addr)` from any HDF5 v0 group object header.
 #[must_use]
-pub fn read_hdf5_v0_root_names(bytes: &[u8]) -> Option<Vec<String>> {
-    let sb = read_hdf5_superblock(bytes)?;
-    if sb.version > 1 || sb.offset_size != 8 || sb.length_size != 8 {
+pub fn read_hdf5_v0_group_entries(
+    bytes: &[u8],
+    group_obj_addr: usize,
+) -> Option<Vec<Hdf5GroupEntry>> {
+    let group_slice = bytes.get(group_obj_addr..)?;
+    if group_slice.len() < 16 || group_slice[0] != 1 {
         return None;
     }
-    let root_addr = usize::try_from(sb.root_group_addr?).ok()?;
-    let root_slice = bytes.get(root_addr..)?;
-    if root_slice.len() < 16 || root_slice[0] != 1 {
-        return None;
-    }
-    let num_msgs = usize::from(u16::from_le_bytes([root_slice[2], root_slice[3]]));
+    let num_msgs = usize::from(u16::from_le_bytes([group_slice[2], group_slice[3]]));
     let hdr_size = usize::try_from(u32::from_le_bytes([
-        root_slice[8],
-        root_slice[9],
-        root_slice[10],
-        root_slice[11],
+        group_slice[8],
+        group_slice[9],
+        group_slice[10],
+        group_slice[11],
     ]))
     .ok()?;
     let mut pos = 16usize;
-    let end = (16 + hdr_size).min(root_slice.len());
+    let end = (16 + hdr_size).min(group_slice.len());
     let mut symtab_addrs: Option<(usize, usize)> = None;
     let mut seen = 0usize;
     while seen < num_msgs && pos + 8 <= end {
-        let mtype = u16::from_le_bytes([root_slice[pos], root_slice[pos + 1]]);
+        let mtype = u16::from_le_bytes([group_slice[pos], group_slice[pos + 1]]);
         let msize = usize::from(u16::from_le_bytes([
-            root_slice[pos + 2],
-            root_slice[pos + 3],
+            group_slice[pos + 2],
+            group_slice[pos + 3],
         ]));
         if mtype == 0x0011 && msize >= 16 && pos + 8 + 16 <= end {
-            let btree_addr = usize::try_from(read_u64_le(root_slice, pos + 8)?).ok()?;
-            let heap_addr = usize::try_from(read_u64_le(root_slice, pos + 16)?).ok()?;
+            let btree_addr = usize::try_from(read_u64_le(group_slice, pos + 8)?).ok()?;
+            let heap_addr = usize::try_from(read_u64_le(group_slice, pos + 16)?).ok()?;
             symtab_addrs = Some((btree_addr, heap_addr));
             break;
         }
@@ -486,9 +508,61 @@ pub fn read_hdf5_v0_root_names(bytes: &[u8]) -> Option<Vec<String>> {
     let data_seg_size = usize::try_from(read_u64_le(bytes, heap_addr + 8)?).ok()?;
     let data_seg_addr = usize::try_from(read_u64_le(bytes, heap_addr + 24)?).ok()?;
     let heap_data = bytes.get(data_seg_addr..data_seg_addr + data_seg_size)?;
-    let mut names = Vec::new();
-    walk_btree_v1_group(bytes, btree_addr, heap_data, &mut names);
-    Some(names)
+    let mut entries = Vec::new();
+    walk_btree_v1_group_entries(bytes, btree_addr, heap_data, &mut entries);
+    Some(entries)
+}
+
+/// Extract root-group member names from an HDF5 v0 `.hal` file via its `SymbolTable` (`0x0011`),
+/// `HEAP` local heap, and `TREE`/`SNOD` B-tree v1 nodes.
+#[must_use]
+pub fn read_hdf5_v0_root_names(bytes: &[u8]) -> Option<Vec<String>> {
+    let sb = read_hdf5_superblock(bytes)?;
+    if sb.version > 1 || sb.offset_size != 8 || sb.length_size != 8 {
+        return None;
+    }
+    let root_addr = usize::try_from(sb.root_group_addr?).ok()?;
+    let entries = read_hdf5_v0_group_entries(bytes, root_addr)?;
+    Some(entries.into_iter().map(|e| e.name).collect())
+}
+
+/// Parse HDF5 `Dataspace` (`0x0001`) dimension sizes from an object header (`v1`).
+#[must_use]
+pub fn read_hdf5_dataspace_dims(bytes: &[u8], obj_addr: usize) -> Option<Vec<u64>> {
+    let slice = bytes.get(obj_addr..)?;
+    if slice.len() < 16 || slice[0] != 1 {
+        return None;
+    }
+    let num_msgs = usize::from(u16::from_le_bytes([slice[2], slice[3]]));
+    let hdr_size = usize::try_from(u32::from_le_bytes([
+        slice[8], slice[9], slice[10], slice[11],
+    ]))
+    .ok()?;
+    let mut pos = 16usize;
+    let end = (16 + hdr_size).min(slice.len());
+    let mut seen = 0usize;
+    while seen < num_msgs && pos + 8 <= end {
+        let mtype = u16::from_le_bytes([slice[pos], slice[pos + 1]]);
+        let msize = usize::from(u16::from_le_bytes([slice[pos + 2], slice[pos + 3]]));
+        if mtype == 0x0001 && msize >= 4 && pos + 8 + msize <= end {
+            let body = &slice[pos + 8..pos + 8 + msize];
+            let ds_ver = body[0];
+            let rank = usize::from(body[1]);
+            let dims_off = match ds_ver {
+                1 => 8usize,
+                2 => 4usize,
+                _ => return None,
+            };
+            let mut dims = Vec::with_capacity(rank);
+            for d in 0..rank {
+                dims.push(read_u64_le(body, dims_off + d * 8)?);
+            }
+            return Some(dims);
+        }
+        seen += 1;
+        pos += 8 + msize;
+    }
+    None
 }
 
 /// Summary of an HDF5 `.hal` file read natively in pure Rust.
@@ -631,6 +705,173 @@ pub fn read_hdf5_v0_chunk_addrs(bytes: &[u8], obj_addr: usize) -> Option<Vec<Hdf
     None
 }
 
+/// Check whether an HDF5 v1 object header enables the deflate (`id == 1`) filter in `FilterPipeline` (`0x000B`).
+#[must_use]
+pub fn is_hdf5_deflated(bytes: &[u8], obj_addr: usize) -> bool {
+    let Some(slice) = bytes.get(obj_addr..) else {
+        return false;
+    };
+    if slice.len() < 16 || slice[0] != 1 {
+        return false;
+    }
+    let num_msgs = usize::from(u16::from_le_bytes([slice[2], slice[3]]));
+    let Ok(hdr_size) = usize::try_from(u32::from_le_bytes([
+        slice[8], slice[9], slice[10], slice[11],
+    ])) else {
+        return false;
+    };
+    let mut pos = 16usize;
+    let end = (16 + hdr_size).min(slice.len());
+    let mut seen = 0usize;
+    while seen < num_msgs && pos + 8 <= end {
+        let mtype = u16::from_le_bytes([slice[pos], slice[pos + 1]]);
+        let msize = usize::from(u16::from_le_bytes([slice[pos + 2], slice[pos + 3]]));
+        if mtype == 0x000B && msize >= 4 && pos + 8 + msize <= end {
+            let body = &slice[pos + 8..pos + 8 + msize];
+            let ver = body[0];
+            let n_filters = usize::from(body[1]);
+            let mut fpos = match ver {
+                1 => 8usize,
+                2 => 2usize,
+                _ => return false,
+            };
+            for _ in 0..n_filters {
+                if fpos + 2 > body.len() {
+                    break;
+                }
+                let filter_id = u16::from_le_bytes([body[fpos], body[fpos + 1]]);
+                if filter_id == 1 {
+                    return true;
+                }
+                if ver == 1 && fpos + 8 <= body.len() {
+                    let name_len =
+                        usize::from(u16::from_le_bytes([body[fpos + 2], body[fpos + 3]]));
+                    let n_client =
+                        usize::from(u16::from_le_bytes([body[fpos + 6], body[fpos + 7]]));
+                    let padded_name = (name_len + 7) & !7;
+                    let padded_client = ((n_client * 4) + 7) & !7;
+                    fpos += 8 + padded_name + padded_client;
+                } else if ver == 2 && fpos + 6 <= body.len() {
+                    let flags = u16::from_le_bytes([body[fpos + 2], body[fpos + 3]]);
+                    let n_client =
+                        usize::from(u16::from_le_bytes([body[fpos + 4], body[fpos + 5]]));
+                    let name_len = if filter_id >= 256 && fpos + 8 <= body.len() {
+                        usize::from(u16::from_le_bytes([body[fpos + 6], body[fpos + 7]])) + 2
+                    } else {
+                        0
+                    };
+                    let _ = flags;
+                    fpos += 6 + name_len + n_client * 4;
+                } else {
+                    break;
+                }
+            }
+        }
+        seen += 1;
+        pos += 8 + msize;
+    }
+    false
+}
+
+/// Read element byte size from an HDF5 `Datatype` (`0x0003`) message in an object header (`v1`).
+#[must_use]
+pub fn read_hdf5_datatype_size(bytes: &[u8], obj_addr: usize) -> Option<usize> {
+    let slice = bytes.get(obj_addr..)?;
+    if slice.len() < 16 || slice[0] != 1 {
+        return None;
+    }
+    let num_msgs = usize::from(u16::from_le_bytes([slice[2], slice[3]]));
+    let hdr_size = usize::try_from(u32::from_le_bytes([
+        slice[8], slice[9], slice[10], slice[11],
+    ]))
+    .ok()?;
+    let mut pos = 16usize;
+    let end = (16 + hdr_size).min(slice.len());
+    let mut seen = 0usize;
+    while seen < num_msgs && pos + 8 <= end {
+        let mtype = u16::from_le_bytes([slice[pos], slice[pos + 1]]);
+        let msize = usize::from(u16::from_le_bytes([slice[pos + 2], slice[pos + 3]]));
+        if mtype == 0x0003 && msize >= 8 && pos + 8 + msize <= end {
+            let sz = u32::from_le_bytes([
+                slice[pos + 12],
+                slice[pos + 13],
+                slice[pos + 14],
+                slice[pos + 15],
+            ]);
+            return usize::try_from(sz).ok();
+        }
+        seen += 1;
+        pos += 8 + msize;
+    }
+    None
+}
+
+/// Read raw dataset bytes from an HDF5 v0 dataset object header, supporting both contiguous
+/// (`DataLayout` class `1`) and chunked (`DataLayout` class `2`, optionally zlib-deflated) storage.
+#[must_use]
+pub fn read_hdf5_v0_dataset_bytes(bytes: &[u8], obj_addr: usize) -> Option<Vec<u8>> {
+    if let Some(contig) = read_hdf5_v0_contiguous_data(bytes, obj_addr) {
+        return Some(contig.to_vec());
+    }
+    let chunks = read_hdf5_v0_chunk_addrs(bytes, obj_addr)?;
+    let deflated = is_hdf5_deflated(bytes, obj_addr);
+    let mut out = Vec::new();
+    for ch in chunks {
+        let start = usize::try_from(ch.addr).ok()?;
+        let len = usize::try_from(ch.size).ok()?;
+        let raw_chunk = bytes.get(start..start + len)?;
+        if deflated {
+            use std::io::Read as _;
+            let mut dec = flate2::read::ZlibDecoder::new(raw_chunk);
+            dec.read_to_end(&mut out).ok()?;
+        } else {
+            out.extend_from_slice(raw_chunk);
+        }
+    }
+    Some(out)
+}
+
+/// Decode HAL `SEQNAME_ARRAY` fixed-width null-terminated strings.
+#[must_use]
+pub fn decode_hal_seq_names(raw: &[u8], stride: usize) -> Vec<String> {
+    if stride == 0 {
+        return Vec::new();
+    }
+    raw.chunks_exact(stride)
+        .map(|slot| {
+            let end = slot.iter().position(|&b| b == 0).unwrap_or(slot.len());
+            String::from_utf8_lossy(&slot[..end]).into_owned()
+        })
+        .collect()
+}
+
+/// Decoded HAL `BOTTOM_ARRAY` record: `(start_idx, length, top_parse_idx, child_links)`.
+pub type HalBottomRecord = (i64, u64, i64, Vec<(i64, bool)>);
+
+/// Decode HAL `BOTTOM_ARRAY` packed records (`24 + 9 * num_children` bytes per segment).
+#[must_use]
+pub fn decode_hal_bottom_array(raw: &[u8], num_children: usize) -> Vec<HalBottomRecord> {
+    let rec_size = 24 + 9 * num_children;
+    if rec_size == 0 {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(raw.len() / rec_size);
+    for rec in raw.chunks_exact(rec_size) {
+        let start = i64::from_le_bytes(rec[0..8].try_into().unwrap_or([0; 8]));
+        let length = u64::from_le_bytes(rec[8..16].try_into().unwrap_or([0; 8]));
+        let top_parse = i64::from_le_bytes(rec[16..24].try_into().unwrap_or([0; 8]));
+        let mut children = Vec::with_capacity(num_children);
+        for c in 0..num_children {
+            let off = 24 + c * 9;
+            let child_idx = i64::from_le_bytes(rec[off..off + 8].try_into().unwrap_or([0; 8]));
+            let rev = rec[off + 8] != 0;
+            children.push((child_idx, rev));
+        }
+        out.push((start, length, top_parse, children));
+    }
+    out
+}
+
 /// Decode HAL `SEQIDX_ARRAY` 24-byte records `(start, top_offset, bottom_offset)`.
 #[must_use]
 pub fn decode_hal_seq_index(raw: &[u8]) -> Vec<(u64, u64, u64)> {
@@ -771,5 +1012,148 @@ mod tests {
         top.extend_from_slice(&1_i64.to_le_bytes());
         top.push(1);
         assert_eq!(decode_hal_top_array(&top), vec![(10, -1, -1, 1, true)]);
+    }
+
+    #[test]
+    fn hdf5_v0_group_entries_and_dataspace_parse() {
+        // Construct a minimal synthetic HDF5 v0 buffer with:
+        // - Root group object header (v1) at offset 0x60 pointing to TREE@0x100, HEAP@0x180
+        // - HEAP at 0x180 with data segment at 0x1c0 containing "Gallus_gallus\0"
+        // - TREE (type=0, level=0, n_entries=1) at 0x100 pointing to SNOD@0x200
+        // - SNOD (n_syms=1) at 0x200 with name_off=0 and obj_hdr_addr=0x280
+        // - Dataset object header (v1) at 0x280 with Dataspace message (0x0001, v1, rank=1, dim=42)
+        let mut buf = vec![0u8; 0x300];
+        buf[..8].copy_from_slice(&HDF5_SIGNATURE);
+        buf[8] = 0; // v0
+        buf[13] = 8; // offset_size
+        buf[14] = 8; // length_size
+        buf[64..72].copy_from_slice(&0x60_u64.to_le_bytes());
+
+        // Root group v1 object header at 0x60
+        buf[0x60] = 1; // version 1
+        buf[0x62..0x64].copy_from_slice(&1_u16.to_le_bytes()); // num_msgs = 1
+        buf[0x68..0x6c].copy_from_slice(&24_u32.to_le_bytes()); // hdr_size = 24
+        buf[0x70..0x72].copy_from_slice(&0x0011_u16.to_le_bytes()); // SymbolTable
+        buf[0x72..0x74].copy_from_slice(&16_u16.to_le_bytes());
+        buf[0x78..0x80].copy_from_slice(&0x100_u64.to_le_bytes()); // btree_addr
+        buf[0x80..0x88].copy_from_slice(&0x180_u64.to_le_bytes()); // heap_addr
+
+        // TREE at 0x100
+        buf[0x100..0x104].copy_from_slice(b"TREE");
+        buf[0x104] = 0; // group
+        buf[0x105] = 0; // level 0
+        buf[0x106..0x108].copy_from_slice(&1_u16.to_le_bytes());
+        buf[0x100 + 24 + 8..0x100 + 24 + 16].copy_from_slice(&0x200_u64.to_le_bytes());
+
+        // HEAP at 0x180
+        buf[0x180..0x184].copy_from_slice(b"HEAP");
+        buf[0x188..0x190].copy_from_slice(&32_u64.to_le_bytes()); // data_seg_size
+        buf[0x198..0x1a0].copy_from_slice(&0x1c0_u64.to_le_bytes()); // data_seg_addr
+        buf[0x1c0..0x1c0 + 14].copy_from_slice(b"Gallus_gallus\0");
+
+        // SNOD at 0x200
+        buf[0x200..0x204].copy_from_slice(b"SNOD");
+        buf[0x206..0x208].copy_from_slice(&1_u16.to_le_bytes());
+        buf[0x208..0x210].copy_from_slice(&0_u64.to_le_bytes()); // name_off
+        buf[0x210..0x218].copy_from_slice(&0x280_u64.to_le_bytes()); // obj_hdr_addr
+
+        // Dataset v1 object header at 0x280 with Dataspace (0x0001)
+        buf[0x280] = 1;
+        buf[0x282..0x284].copy_from_slice(&1_u16.to_le_bytes());
+        buf[0x288..0x28c].copy_from_slice(&24_u32.to_le_bytes());
+        buf[0x290..0x292].copy_from_slice(&0x0001_u16.to_le_bytes()); // Dataspace
+        buf[0x292..0x294].copy_from_slice(&16_u16.to_le_bytes());
+        buf[0x298] = 1; // ds_ver = 1
+        buf[0x299] = 1; // rank = 1
+        buf[0x2a0..0x2a8].copy_from_slice(&42_u64.to_le_bytes()); // dim[0] = 42
+
+        let entries = read_hdf5_v0_group_entries(&buf, 0x60).expect("group entries");
+        assert_eq!(
+            entries,
+            vec![Hdf5GroupEntry {
+                name: "Gallus_gallus".to_owned(),
+                object_header_addr: 0x280,
+            }]
+        );
+        assert_eq!(
+            read_hdf5_v0_root_names(&buf),
+            Some(vec!["Gallus_gallus".to_owned()])
+        );
+        assert_eq!(read_hdf5_dataspace_dims(&buf, 0x280), Some(vec![42]));
+    }
+
+    #[test]
+    fn hdf5_deflated_chunk_and_hal_bottom_seqname_decode() {
+        use std::io::Write as _;
+        let payload = b"ACGTACGTACGTACGT";
+        let mut enc = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        enc.write_all(payload).expect("zlib encode");
+        let compressed = enc.finish().expect("zlib finish");
+
+        // Synthetic HDF5 v1 object header at 0x20 with:
+        // - Datatype (0x0003) size = 16
+        // - FilterPipeline (0x000B) v2 with 1 filter (id=1 deflate)
+        // - DataLayout (0x0008) v3 class=2 (chunked, ndim=1) pointing to TREE@0x100
+        let mut buf = vec![0u8; 0x300];
+        buf[0x20] = 1; // v1 obj header
+        buf[0x22..0x24].copy_from_slice(&3_u16.to_le_bytes());
+        buf[0x28..0x2c].copy_from_slice(&64_u32.to_le_bytes());
+
+        // Msg 1: Datatype (0x0003), size=8
+        let mut p = 0x30;
+        buf[p..p + 2].copy_from_slice(&0x0003_u16.to_le_bytes());
+        buf[p + 2..p + 4].copy_from_slice(&8_u16.to_le_bytes());
+        buf[p + 12..p + 16].copy_from_slice(&16_u32.to_le_bytes());
+        p += 16;
+
+        // Msg 2: FilterPipeline (0x000B) v2, 1 filter (id=1 deflate), size=8
+        buf[p..p + 2].copy_from_slice(&0x000B_u16.to_le_bytes());
+        buf[p + 2..p + 4].copy_from_slice(&8_u16.to_le_bytes());
+        buf[p + 8] = 2; // version 2
+        buf[p + 9] = 1; // n_filters = 1
+        buf[p + 10..p + 12].copy_from_slice(&1_u16.to_le_bytes()); // deflate filter_id = 1
+        p += 16;
+
+        // Msg 3: DataLayout (0x0008) v3 class=2 ndim=1, size=12
+        buf[p..p + 2].copy_from_slice(&0x0008_u16.to_le_bytes());
+        buf[p + 2..p + 4].copy_from_slice(&12_u16.to_le_bytes());
+        buf[p + 8] = 3; // layout_ver
+        buf[p + 9] = 2; // chunked
+        buf[p + 10] = 1; // ndim = 1
+        buf[p + 11..p + 19].copy_from_slice(&0x100_u64.to_le_bytes());
+
+        // Chunk B-tree v1 type-1 at 0x100 (ndim=1 => key_bytes=24, child_addr at +24)
+        buf[0x100..0x104].copy_from_slice(b"TREE");
+        buf[0x104] = 1; // chunk btree
+        buf[0x105] = 0; // leaf
+        buf[0x106..0x108].copy_from_slice(&1_u16.to_le_bytes());
+        let ch_sz = u32::try_from(compressed.len()).expect("len");
+        buf[0x118..0x11c].copy_from_slice(&ch_sz.to_le_bytes());
+        buf[0x130..0x138].copy_from_slice(&0x200_u64.to_le_bytes());
+        buf[0x200..0x200 + compressed.len()].copy_from_slice(&compressed);
+
+        assert!(is_hdf5_deflated(&buf, 0x20));
+        assert_eq!(read_hdf5_datatype_size(&buf, 0x20), Some(16));
+        assert_eq!(
+            read_hdf5_v0_dataset_bytes(&buf, 0x20).as_deref(),
+            Some(payload.as_slice())
+        );
+
+        let names_raw = b"chr1\0\0\0\0chr2\0\0\0\0";
+        assert_eq!(decode_hal_seq_names(names_raw, 8), vec!["chr1", "chr2"]);
+
+        // 1 bottom segment with 2 children: 24 + 9*2 = 42 bytes
+        let mut bot = Vec::new();
+        bot.extend_from_slice(&100_i64.to_le_bytes());
+        bot.extend_from_slice(&50_u64.to_le_bytes());
+        bot.extend_from_slice(&(-1_i64).to_le_bytes());
+        bot.extend_from_slice(&5_i64.to_le_bytes());
+        bot.push(0);
+        bot.extend_from_slice(&(-1_i64).to_le_bytes());
+        bot.push(1);
+        assert_eq!(
+            decode_hal_bottom_array(&bot, 2),
+            vec![(100, 50, -1, vec![(5, false), (-1, true)])]
+        );
     }
 }
