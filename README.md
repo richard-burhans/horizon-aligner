@@ -89,3 +89,7 @@ target/release/horizon_merge <ref_species> <out.maf> <out.gfa> <pair1.maf> [pair
 - [Guide 1: Why Bit-Savings (ΔL) Outperforms HOXD70 in Compositionally Extreme Genomes (Markdown)](manuscript/guide_mdl_vs_hoxd70.md) | [PDF](manuscript/guide_mdl_vs_hoxd70.pdf)
 - [Guide 2: Reading and Streaming HAL Alignments in Pure Rust Without libhdf5 (Markdown)](manuscript/guide_pure_rust_hal.md) | [PDF](manuscript/guide_pure_rust_hal.pdf)
 - [Guide 3: What Is a Horizon Bubble? Calibrated Epistemic Abstention (Markdown)](manuscript/guide_horizon_bubbles.md) | [PDF](manuscript/guide_horizon_bubbles.pdf)
+
+## Architecture
+See [ARCHITECTURE.md](ARCHITECTURE.md) for a map of the core abstractions and dependency flow.
+

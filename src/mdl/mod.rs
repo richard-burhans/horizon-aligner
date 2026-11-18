@@ -1,4 +1,8 @@
 //! Banded MDL+BOCPD dynamic programming, X-drop extension, and contig-pair alignment.
+//! ## Horizon Bubbles
+//! In this layer, areas where the alignment lacks sufficient confidence to align (either because a gap is too large to enter DP, or because the MDL DP abstains due to negative bit-savings) are termed **Horizon Bubbles**.
+//! - Unaligned inter-LCB gaps larger than `max_gap_bp` yield *macro bubbles*.
+//! - DP dropouts within a gap yield *internal bubbles*, returned via `GapResult`.
 
 use crate::AlignError;
 use crate::bocpd::MIN_POST_PROB;
