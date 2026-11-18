@@ -1,0 +1,1002 @@
+//! Spaced-seed indexing, transition-tolerant and translated seeding, and LCB chaining.
+
+use crate::AlignError;
+use crate::bocpd::base_to_idx;
+use std::collections::HashMap;
+
+/// KP-14 spaced seed mask (weight 11, span 15).
+pub const MASK_KP14: &str = "111011011011011";
+/// Secondary `w=10` spaced seed mask for divergent intra-LCB chaining.
+pub const MASK_W10: &str = "11011011011011";
+/// Local `w=9` spaced seed mask for intra-gap anchor seeding.
+pub const MASK_W9: &str = "110101101011011";
+pub(crate) const MASK_RY20: &str = "1110110110111011011011011";
+/// Standard `LASTZ` `12-of-19` spaced-seed mask.
+pub const MASK_LASTZ12: &str = "1110100110010101111";
+/// Complementary `11-of-18` spaced-seed mask for multi-shape divergent seeding.
+pub const MASK_LASTZ11: &str = "111010011001010111";
+
+/// Extract canonical strand-symmetric spaced-seed positions with at most `max_occ` hits.
+///
+/// # Errors
+///
+/// Returns [`AlignError::InvalidMask`] if `mask` is empty, exceeds 31 active bits, or contains invalid characters.
+pub fn canonical_spaced_seeds(
+    seq: &[u8],
+    mask: &str,
+    max_occ: usize,
+) -> Result<HashMap<u64, Vec<usize>>, AlignError> {
+    canonical_spaced_seeds_impl(seq, mask, max_occ, false, false)
+}
+
+/// Extract canonical spaced-seed positions with optional softmask skipping and 1-bit `R/Y`
+/// transition-tolerant encoding.
+///
+/// # Errors
+///
+/// Returns [`AlignError::InvalidMask`] if `mask` is empty, exceeds active bit limits, or contains invalid characters.
+pub fn canonical_spaced_seeds_with_opts(
+    seq: &[u8],
+    mask: &str,
+    max_occ: usize,
+    skip_softmasked: bool,
+    ry_mode: bool,
+) -> Result<HashMap<u64, Vec<usize>>, AlignError> {
+    canonical_spaced_seeds_impl(seq, mask, max_occ, skip_softmasked, ry_mode)
+}
+
+fn canonical_spaced_seeds_impl(
+    seq: &[u8],
+    mask: &str,
+    max_occ: usize,
+    skip_softmasked: bool,
+    ry_mode: bool,
+) -> Result<HashMap<u64, Vec<usize>>, AlignError> {
+    if mask.is_empty() {
+        return Err(AlignError::InvalidMask("mask is empty".to_owned()));
+    }
+    let bytes = mask.as_bytes();
+    let span = bytes.len();
+    let mut offsets = Vec::new();
+    for (idx, &ch) in bytes.iter().enumerate() {
+        match ch {
+            b'1' => offsets.push(idx),
+            b'0' => {}
+            _ => {
+                return Err(AlignError::InvalidMask(format!(
+                    "unexpected char '{}'",
+                    ch as char
+                )));
+            }
+        }
+    }
+    let max_bits = if ry_mode { 62 } else { 31 };
+    if offsets.is_empty() || offsets.len() > max_bits {
+        return Err(AlignError::InvalidMask(format!(
+            "active mask bits must be in 1..={max_bits}"
+        )));
+    }
+    if seq.len() < span {
+        return Ok(HashMap::new());
+    }
+
+    let rev_offsets: Vec<usize> = offsets.iter().rev().map(|&o| span - 1 - o).collect();
+    let mut counts: HashMap<u64, usize> = HashMap::with_capacity(seq.len() / 2);
+    let mut positions: HashMap<u64, Vec<usize>> = HashMap::with_capacity(seq.len() / 2);
+
+    for i in 0..=(seq.len() - span) {
+        let sub = &seq[i..i + span];
+        let mut fwd = 0_u64;
+        let mut rc = 0_u64;
+        let mut valid = true;
+        for (&fo, &ro) in offsets.iter().zip(&rev_offsets) {
+            if skip_softmasked && (sub[fo].is_ascii_lowercase() || sub[ro].is_ascii_lowercase()) {
+                valid = false;
+                break;
+            }
+            let (Some(bf), Some(br)) = (base_to_idx(sub[fo]), base_to_idx(sub[ro])) else {
+                valid = false;
+                break;
+            };
+            if ry_mode {
+                fwd = (fwd << 1) | ((bf & 1) as u64);
+                rc = (rc << 1) | ((1 - (br & 1)) as u64);
+            } else {
+                fwd = (fwd << 2) | (bf as u64);
+                rc = (rc << 2) | ((3 - br) as u64);
+            }
+        }
+        if !valid {
+            continue;
+        }
+        let key = fwd.min(rc);
+        let entry = counts.entry(key).or_insert(0);
+        *entry += 1;
+        if *entry <= max_occ {
+            positions.entry(key).or_default().push(i);
+        }
+    }
+
+    positions.retain(|k, _| counts.get(k).copied().unwrap_or(usize::MAX) <= max_occ);
+    Ok(positions)
+}
+
+/// Compute the Longest Increasing Subsequence chain over `(x, y)` anchors.
+#[must_use]
+pub fn lis_chain(anchors: &[(usize, usize)]) -> Vec<(usize, usize)> {
+    if anchors.is_empty() {
+        return Vec::new();
+    }
+    let mut sorted = anchors.to_vec();
+    sorted.sort_unstable();
+
+    let mut tails_y: Vec<usize> = Vec::with_capacity(sorted.len());
+    let mut tail_idx: Vec<usize> = Vec::with_capacity(sorted.len());
+    let mut prev = vec![usize::MAX; sorted.len()];
+
+    for (idx, &(_, y)) in sorted.iter().enumerate() {
+        let pos = tails_y.partition_point(|&ty| ty < y);
+        if pos == tails_y.len() {
+            tails_y.push(y);
+            tail_idx.push(idx);
+        } else {
+            tails_y[pos] = y;
+            tail_idx[pos] = idx;
+        }
+        if pos > 0 {
+            prev[idx] = tail_idx[pos - 1];
+        }
+    }
+
+    let mut chain = Vec::with_capacity(tail_idx.len());
+    let mut cur = tail_idx[tail_idx.len() - 1];
+    while cur != usize::MAX {
+        chain.push(sorted[cur]);
+        cur = prev[cur];
+    }
+    chain.reverse();
+    chain
+}
+
+/// Cluster `(x, y)` hits on one strand into colinear LCB chains.
+#[must_use]
+pub fn cluster_strand_lcbs(
+    hits: &[(usize, usize)],
+    max_gap: usize,
+    max_diag_drift: usize,
+    min_anchors: usize,
+    min_span_bp: usize,
+    max_mean_step: f64,
+) -> Vec<Vec<(usize, usize)>> {
+    if hits.is_empty() {
+        return Vec::new();
+    }
+    let mut sorted = hits.to_vec();
+    sorted.sort_unstable();
+
+    let keep = |ch: &[(usize, usize)]| -> bool {
+        let span_x = ch[ch.len() - 1].0 - ch[0].0;
+        #[allow(clippy::cast_precision_loss)]
+        let mean_step = (span_x as f64) / (ch.len() as f64);
+        ch.len() >= min_anchors && span_x >= min_span_bp && mean_step <= max_mean_step
+    };
+
+    let mut active: Vec<Vec<(usize, usize)>> = Vec::new();
+    let mut finished: Vec<Vec<(usize, usize)>> = Vec::new();
+
+    for &(x, y) in &sorted {
+        let mut best_idx: Option<usize> = None;
+        let mut best_cost = usize::MAX;
+        let mut still_active: Vec<Vec<(usize, usize)>> = Vec::with_capacity(active.len());
+
+        for ch in active {
+            let (lx, ly) = ch[ch.len() - 1];
+            if x.saturating_sub(lx) > max_gap {
+                if keep(&ch) {
+                    finished.push(ch);
+                }
+                continue;
+            }
+            still_active.push(ch);
+            if x > lx && y > ly {
+                let dx = x - lx;
+                let dy = y - ly;
+                let drift = dx.abs_diff(dy);
+                if dx <= max_gap && dy <= max_gap && drift <= max_diag_drift {
+                    let cost = drift + dx;
+                    if cost < best_cost {
+                        best_cost = cost;
+                        best_idx = Some(still_active.len() - 1);
+                    }
+                }
+            }
+        }
+        active = still_active;
+        if let Some(idx) = best_idx {
+            active[idx].push((x, y));
+        } else {
+            active.push(vec![(x, y)]);
+        }
+    }
+
+    for ch in active {
+        if keep(&ch) {
+            finished.push(ch);
+        }
+    }
+    finished
+}
+
+/// Find local `w=9` spaced-seed anchors with 2-hit diagonal consistency.
+///
+/// # Errors
+///
+/// Returns [`AlignError::InvalidMask`] if `mask` is invalid.
+pub fn local_w9_subchain(
+    sub_x: &[u8],
+    sub_y: &[u8],
+    off_x: usize,
+    off_y: usize,
+    mask: &str,
+    max_diag_diff: usize,
+    max_step_bp: usize,
+) -> Result<Vec<(usize, usize)>, AlignError> {
+    let ix = canonical_spaced_seeds(sub_x, mask, 2)?;
+    let iy = canonical_spaced_seeds(sub_y, mask, 2)?;
+    let mut hits = Vec::new();
+    for (k, pxs) in &ix {
+        if let Some(pys) = iy.get(k) {
+            for &px in pxs {
+                for &py in pys {
+                    hits.push((px, py));
+                }
+            }
+        }
+    }
+    let chain = lis_chain(&hits);
+    let mut kept = Vec::new();
+
+    for (idx, &(x, y)) in chain.iter().enumerate() {
+        #[allow(clippy::cast_possible_wrap)]
+        let diag = (x as isize) - (y as isize);
+        #[allow(clippy::cast_possible_wrap)]
+        let max_dd = max_diag_diff as isize;
+        let has_prev = idx > 0 && {
+            let (px, py) = chain[idx - 1];
+            #[allow(clippy::cast_possible_wrap)]
+            let pdiag = (px as isize) - (py as isize);
+            (diag - pdiag).abs() <= max_dd && (x - px) <= max_step_bp
+        };
+        let has_next = idx + 1 < chain.len() && {
+            let (nx, ny) = chain[idx + 1];
+            #[allow(clippy::cast_possible_wrap)]
+            let ndiag = (nx as isize) - (ny as isize);
+            (diag - ndiag).abs() <= max_dd && (nx - x) <= max_step_bp
+        };
+        if has_prev || has_next {
+            kept.push((off_x + x, off_y + y));
+        }
+    }
+    Ok(kept)
+}
+
+pub(crate) fn merge_colinear_lcbs(
+    lcb_list: &[Vec<(usize, usize)>],
+    max_local_rescue_bp: usize,
+) -> Vec<Vec<(usize, usize)>> {
+    if lcb_list.is_empty() {
+        return Vec::new();
+    }
+    let mut ordered = lcb_list.to_vec();
+    ordered.sort_by_key(|c| c[0].0);
+    let mut merged = vec![ordered[0].clone()];
+    for nxt in ordered.into_iter().skip(1) {
+        let last = &merged[merged.len() - 1];
+        let (px, py) = last[last.len() - 1];
+        let (nx, ny) = nxt[0];
+        if nx > px && ny > py {
+            let dx = nx - px;
+            let dy = ny - py;
+            if dx <= max_local_rescue_bp && dy <= max_local_rescue_bp && dx.abs_diff(dy) <= 4000 {
+                let m_idx = merged.len() - 1;
+                merged[m_idx].extend(nxt);
+                continue;
+            }
+        }
+        merged.push(nxt);
+    }
+    merged
+}
+
+/// Precomputed strand-symmetric KP-14 seed index for one contig.
+#[derive(Debug, Clone)]
+pub struct ContigIndex {
+    pub(crate) seq: Vec<u8>,
+    pub(crate) seq_rc: Vec<u8>,
+    pub(crate) seeds_fwd: HashMap<u64, Vec<usize>>,
+    pub(crate) seeds_rc: HashMap<u64, Vec<usize>>,
+}
+
+/// Precompute forward and reverse-complement KP-14 seed maps for a contig.
+///
+/// # Errors
+///
+/// Returns [`AlignError::InvalidMask`] if `MASK_KP14` is invalid.
+pub fn prepare_contig_index(seq: &[u8]) -> Result<ContigIndex, AlignError> {
+    prepare_contig_index_opts(seq, false)
+}
+
+/// Precompute forward and reverse-complement KP-14 seed maps, optionally skipping lowercase
+/// softmasked bases during seeding.
+///
+/// # Errors
+///
+/// Returns [`AlignError::InvalidMask`] if `MASK_KP14` is invalid.
+pub fn prepare_contig_index_opts(
+    seq: &[u8],
+    skip_softmasked: bool,
+) -> Result<ContigIndex, AlignError> {
+    let seq_rc_case: Vec<u8> = seq
+        .iter()
+        .rev()
+        .map(|&b| match b {
+            b'A' => b'T',
+            b'T' => b'A',
+            b'C' => b'G',
+            b'G' => b'C',
+            b'a' => b't',
+            b't' => b'a',
+            b'c' => b'g',
+            b'g' => b'c',
+            other => other,
+        })
+        .collect();
+    let seeds_fwd = canonical_spaced_seeds_with_opts(seq, MASK_KP14, 2, skip_softmasked, false)?;
+    let seeds_rc =
+        canonical_spaced_seeds_with_opts(&seq_rc_case, MASK_KP14, 2, skip_softmasked, false)?;
+    Ok(ContigIndex {
+        seq: seq.to_vec(),
+        seq_rc: revcomp(seq),
+        seeds_fwd,
+        seeds_rc,
+    })
+}
+
+/// Count shared KP-14 seeds (on either strand) between two pre-indexed contigs.
+#[must_use]
+pub fn shared_seed_count(idx_x: &ContigIndex, idx_y: &ContigIndex) -> usize {
+    let fwd = idx_x
+        .seeds_fwd
+        .keys()
+        .filter(|k| idx_y.seeds_fwd.contains_key(*k))
+        .count();
+    let rc = idx_x
+        .seeds_fwd
+        .keys()
+        .filter(|k| idx_y.seeds_rc.contains_key(*k))
+        .count();
+    fwd.max(rc)
+}
+
+type LcbList = Vec<Vec<(usize, usize)>>;
+
+type AnchorPairs = Vec<(usize, usize)>;
+
+pub(crate) fn intersect_seed_maps(
+    ix: &HashMap<u64, Vec<usize>>,
+    iy_fwd: &HashMap<u64, Vec<usize>>,
+    iy_rc: &HashMap<u64, Vec<usize>>,
+) -> (AnchorPairs, AnchorPairs) {
+    let mut hits_fwd = Vec::new();
+    let mut hits_rc = Vec::new();
+    for (k, pxs) in ix {
+        if let Some(pys) = iy_fwd.get(k) {
+            for &px in pxs {
+                for &py in pys {
+                    hits_fwd.push((px, py));
+                }
+            }
+        }
+        if let Some(pys) = iy_rc.get(k) {
+            for &px in pxs {
+                for &py in pys {
+                    hits_rc.push((px, py));
+                }
+            }
+        }
+    }
+    (hits_fwd, hits_rc)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn find_spaced_transition_hits<S: std::hash::BuildHasher>(
+    seq_x: &[u8],
+    offsets: &[usize],
+    rev_offsets: &[usize],
+    span: usize,
+    iy_fwd: &HashMap<u64, Vec<usize>, S>,
+    iy_rc: &HashMap<u64, Vec<usize>, S>,
+    skip_softmasked: bool,
+    min_transitions: usize,
+    max_transitions: usize,
+) -> (AnchorPairs, AnchorPairs) {
+    if seq_x.len() < span {
+        return (Vec::new(), Vec::new());
+    }
+    let w = offsets.len();
+    let mut hits_fwd = Vec::new();
+    let mut hits_rc = Vec::new();
+    let mut keys = Vec::with_capacity(w * w / 2 + w + 1);
+    for i in 0..=(seq_x.len() - span) {
+        let sub = &seq_x[i..i + span];
+        let mut fwd = 0_u64;
+        let mut rc = 0_u64;
+        let mut valid = true;
+        for (&fo, &ro) in offsets.iter().zip(rev_offsets) {
+            if skip_softmasked && (sub[fo].is_ascii_lowercase() || sub[ro].is_ascii_lowercase()) {
+                valid = false;
+                break;
+            }
+            let (Some(bf), Some(br)) = (base_to_idx(sub[fo]), base_to_idx(sub[ro])) else {
+                valid = false;
+                break;
+            };
+            fwd = (fwd << 2) | (bf as u64);
+            rc = (rc << 2) | ((3 - br) as u64);
+        }
+        if !valid {
+            continue;
+        }
+        keys.clear();
+        if min_transitions == 0 {
+            keys.push(fwd.min(rc));
+        }
+        if min_transitions <= 1 && max_transitions >= 1 {
+            for b in 0..w {
+                let mf = fwd ^ (2_u64 << (2 * (w - 1 - b)));
+                let mr = rc ^ (2_u64 << (2 * b));
+                keys.push(mf.min(mr));
+            }
+        }
+        if max_transitions >= 2 {
+            for a in 0..w {
+                let ma_f = fwd ^ (2_u64 << (2 * (w - 1 - a)));
+                let ma_r = rc ^ (2_u64 << (2 * a));
+                for b in (a + 1)..w {
+                    let mf = ma_f ^ (2_u64 << (2 * (w - 1 - b)));
+                    let mr = ma_r ^ (2_u64 << (2 * b));
+                    keys.push(mf.min(mr));
+                }
+            }
+        }
+        for &key in &keys {
+            if let Some(pys) = iy_fwd.get(&key) {
+                for &py in pys {
+                    hits_fwd.push((i, py));
+                }
+            }
+            if let Some(pys) = iy_rc.get(&key) {
+                for &py in pys {
+                    hits_rc.push((i, py));
+                }
+            }
+        }
+    }
+    (hits_fwd, hits_rc)
+}
+
+const LASTZ12_OFFSETS: [usize; 12] = [0, 1, 2, 4, 7, 8, 11, 13, 15, 16, 17, 18];
+const LASTZ12_REV_OFFSETS: [usize; 12] = [0, 1, 2, 3, 5, 7, 10, 11, 14, 16, 17, 18];
+
+/// Find `12-of-19` (`MASK_LASTZ12`) seed hits including 1-transition (`A<->G`, `C<->T`) neighbors.
+#[must_use]
+pub fn find_lastz12_1transition_hits<S: std::hash::BuildHasher>(
+    seq_x: &[u8],
+    iy_fwd: &HashMap<u64, Vec<usize>, S>,
+    iy_rc: &HashMap<u64, Vec<usize>, S>,
+    skip_softmasked: bool,
+) -> (AnchorPairs, AnchorPairs) {
+    find_spaced_transition_hits(
+        seq_x,
+        &LASTZ12_OFFSETS,
+        &LASTZ12_REV_OFFSETS,
+        19,
+        iy_fwd,
+        iy_rc,
+        skip_softmasked,
+        0,
+        1,
+    )
+}
+
+/// Find `12-of-19` (`MASK_LASTZ12`) seed hits with 2 simultaneous transitions (`A<->G`, `C<->T`).
+#[must_use]
+pub fn find_lastz12_2transition_hits<S: std::hash::BuildHasher>(
+    seq_x: &[u8],
+    iy_fwd: &HashMap<u64, Vec<usize>, S>,
+    iy_rc: &HashMap<u64, Vec<usize>, S>,
+    skip_softmasked: bool,
+) -> (AnchorPairs, AnchorPairs) {
+    find_spaced_transition_hits(
+        seq_x,
+        &LASTZ12_OFFSETS,
+        &LASTZ12_REV_OFFSETS,
+        19,
+        iy_fwd,
+        iy_rc,
+        skip_softmasked,
+        2,
+        2,
+    )
+}
+
+pub(crate) fn find_lastz11_1transition_hits<S: std::hash::BuildHasher>(
+    seq_x: &[u8],
+    iy_fwd: &HashMap<u64, Vec<usize>, S>,
+    iy_rc: &HashMap<u64, Vec<usize>, S>,
+    skip_softmasked: bool,
+) -> (AnchorPairs, AnchorPairs) {
+    const OFFSETS: [usize; 11] = [0, 1, 2, 4, 7, 8, 11, 13, 15, 16, 17];
+    const REV_OFFSETS: [usize; 11] = [0, 1, 2, 4, 6, 9, 10, 13, 15, 16, 17];
+    find_spaced_transition_hits(
+        seq_x,
+        &OFFSETS,
+        &REV_OFFSETS,
+        18,
+        iy_fwd,
+        iy_rc,
+        skip_softmasked,
+        0,
+        1,
+    )
+}
+
+pub(crate) fn find_w10_1transition_hits<S: std::hash::BuildHasher>(
+    seq_x: &[u8],
+    iy_fwd: &HashMap<u64, Vec<usize>, S>,
+    iy_rc: &HashMap<u64, Vec<usize>, S>,
+    skip_softmasked: bool,
+) -> (AnchorPairs, AnchorPairs) {
+    const OFFSETS: [usize; 10] = [0, 1, 3, 4, 6, 7, 9, 10, 12, 13];
+    find_spaced_transition_hits(
+        seq_x,
+        &OFFSETS,
+        &OFFSETS,
+        14,
+        iy_fwd,
+        iy_rc,
+        skip_softmasked,
+        0,
+        1,
+    )
+}
+
+/// Promote 2-hit gapped diagonal pairs (`<= max_gap` bp apart, `<= max_ddiag` bp indel shift)
+/// into candidate LCBs for banded MDL DP.
+pub(crate) fn append_two_hit_diagonal_lcbs(
+    target: &mut LcbList,
+    hits: &[(usize, usize)],
+    max_gap: usize,
+    max_ddiag: usize,
+) {
+    if hits.len() < 2 {
+        return;
+    }
+    let mut sorted = hits.to_vec();
+    sorted.sort_unstable();
+    sorted.dedup();
+    let mut promoted: Vec<Vec<(usize, usize)>> = Vec::new();
+    for i in 0..sorted.len() {
+        let (x1, y1) = sorted[i];
+        let mut j = i + 1;
+        while j < sorted.len() && sorted[j].0 - x1 <= max_gap {
+            let (x2, y2) = sorted[j];
+            if x2 > x1 && y2 > y1 && y2 - y1 <= max_gap {
+                let d1 = x1.cast_signed() - y1.cast_signed();
+                let d2 = x2.cast_signed() - y2.cast_signed();
+                if (d1 - d2).unsigned_abs() <= max_ddiag {
+                    promoted.push(vec![(x1, y1), (x2, y2)]);
+                    break;
+                }
+            }
+            j += 1;
+        }
+    }
+    for lcb in promoted {
+        let (sx, ex) = (lcb[0].0, lcb[lcb.len() - 1].0);
+        if !target
+            .iter()
+            .any(|c| sx <= c[c.len() - 1].0 && ex >= c[0].0)
+        {
+            target.push(lcb);
+        }
+    }
+}
+
+fn codon_to_aa(b0: u8, b1: u8, b2: u8) -> Option<u8> {
+    // Standard genetic code indexed by (A=0, C=1, G=2, T=3): 0..20 = amino acids, 255 = stop.
+    const TABLE: [u8; 64] = [
+        // AAA..ATT
+        8, 11, 8, 11, 16, 16, 16, 16, 14, 15, 14, 15, 7, 7, 10, 7, // CAA..CTT
+        13, 6, 13, 6, 12, 12, 12, 12, 14, 14, 14, 14, 9, 9, 9, 9, // GAA..GTT
+        3, 2, 3, 2, 0, 0, 0, 0, 5, 5, 5, 5, 17, 17, 17, 17, // TAA..TTT
+        255, 19, 255, 19, 15, 15, 15, 15, 255, 1, 18, 1, 9, 4, 9, 4,
+    ];
+    let (Some(i0), Some(i1), Some(i2)) = (base_to_idx(b0), base_to_idx(b1), base_to_idx(b2)) else {
+        return None;
+    };
+    let aa = TABLE[(i0 << 4) | (i1 << 2) | i2];
+    if aa == 255 { None } else { Some(aa) }
+}
+
+const fn aa_group(ax: u8) -> u8 {
+    const GROUP: [u8; 20] = [0, 1, 2, 2, 3, 0, 4, 5, 4, 5, 5, 6, 7, 6, 4, 8, 8, 5, 3, 3];
+    if (ax as usize) < 20 {
+        GROUP[ax as usize]
+    } else {
+        9
+    }
+}
+
+const fn aa_pair_score(ax: u8, ay: u8) -> i32 {
+    if ax == ay {
+        return 15;
+    }
+    let gx = aa_group(ax);
+    let gy = aa_group(ay);
+    if gx < 9 && gx == gy { 6 } else { -6 }
+}
+
+fn index_aa_spaced_4of6_frames(
+    seq: &[u8],
+    max_occ: usize,
+    skip_softmasked: bool,
+) -> HashMap<u32, Vec<usize>> {
+    // Reduced 9-group biochemical alphabet spaced 5-of-6 mask ("111011", 18 bp span).
+    const AA_OFFSETS: [usize; 5] = [0, 1, 2, 4, 5];
+    let mut map: HashMap<u32, Vec<usize>> = HashMap::new();
+    let mut counts: HashMap<u32, usize> = HashMap::new();
+    for frame in 0..3 {
+        if seq.len() < frame + 18 {
+            continue;
+        }
+        let mut pos = frame;
+        while pos + 18 <= seq.len() {
+            let mut key = 0_u32;
+            let mut valid = true;
+            for &c in &AA_OFFSETS {
+                let s = &seq[pos + c * 3..pos + c * 3 + 3];
+                if skip_softmasked && s.iter().any(u8::is_ascii_lowercase) {
+                    valid = false;
+                    break;
+                }
+                let Some(aa) = codon_to_aa(s[0], s[1], s[2]) else {
+                    valid = false;
+                    break;
+                };
+                key = key * 9 + u32::from(aa_group(aa));
+            }
+            if valid {
+                let cnt = counts.entry(key).or_insert(0);
+                *cnt += 1;
+                if *cnt <= max_occ {
+                    map.entry(key).or_default().push(pos);
+                } else {
+                    map.remove(&key);
+                }
+            }
+            pos += 3;
+        }
+    }
+    map
+}
+
+/// Find spaced `4-of-6` translated amino-acid (18 bp) hits across all reading frames.
+pub(crate) fn find_translated_aa5_hits(
+    seq_x: &[u8],
+    seq_y: &[u8],
+    max_occ: usize,
+    skip_softmasked: bool,
+) -> AnchorPairs {
+    let ix = index_aa_spaced_4of6_frames(seq_x, max_occ, skip_softmasked);
+    let iy = index_aa_spaced_4of6_frames(seq_y, max_occ, skip_softmasked);
+    let mut hits = Vec::new();
+    for (k, xs) in &ix {
+        if let Some(ys) = iy.get(k) {
+            for &px in xs {
+                for &py in ys {
+                    hits.push((px, py));
+                }
+            }
+        }
+    }
+    hits
+}
+
+/// Extend an ungapped codon-level amino-acid HSP from a 5-codon (`15 bp`) seed.
+fn extend_aa_ungapped_hsp(
+    seq_x: &[u8],
+    seq_y: &[u8],
+    px: usize,
+    py: usize,
+    min_score: i32,
+) -> Option<(usize, usize, usize, usize, i32)> {
+    const AA_XDROP: i32 = 30;
+    if px + 15 > seq_x.len() || py + 15 > seq_y.len() {
+        return None;
+    }
+    let mut core = 0i32;
+    for c in 0..5 {
+        let ax = codon_to_aa(
+            seq_x[px + c * 3],
+            seq_x[px + c * 3 + 1],
+            seq_x[px + c * 3 + 2],
+        )?;
+        let ay = codon_to_aa(
+            seq_y[py + c * 3],
+            seq_y[py + c * 3 + 1],
+            seq_y[py + c * 3 + 2],
+        )?;
+        core += aa_pair_score(ax, ay);
+    }
+
+    let mut cur = 0i32;
+    let mut best_left = 0i32;
+    let (mut lx, mut ly) = (px, py);
+    let (mut ix, mut iy) = (px, py);
+    while ix >= 3 && iy >= 3 {
+        ix -= 3;
+        iy -= 3;
+        let (Some(ax), Some(ay)) = (
+            codon_to_aa(seq_x[ix], seq_x[ix + 1], seq_x[ix + 2]),
+            codon_to_aa(seq_y[iy], seq_y[iy + 1], seq_y[iy + 2]),
+        ) else {
+            break;
+        };
+        cur += aa_pair_score(ax, ay);
+        if cur > best_left {
+            best_left = cur;
+            lx = ix;
+            ly = iy;
+        } else if best_left - cur > AA_XDROP {
+            break;
+        }
+    }
+
+    cur = 0;
+    let mut best_right = 0i32;
+    let (mut rx, mut ry) = (px + 15, py + 15);
+    ix = px + 15;
+    iy = py + 15;
+    while ix + 3 <= seq_x.len() && iy + 3 <= seq_y.len() {
+        let (Some(ax), Some(ay)) = (
+            codon_to_aa(seq_x[ix], seq_x[ix + 1], seq_x[ix + 2]),
+            codon_to_aa(seq_y[iy], seq_y[iy + 1], seq_y[iy + 2]),
+        ) else {
+            break;
+        };
+        cur += aa_pair_score(ax, ay);
+        ix += 3;
+        iy += 3;
+        if cur > best_right {
+            best_right = cur;
+            rx = ix;
+            ry = iy;
+        } else if best_right - cur > AA_XDROP {
+            break;
+        }
+    }
+
+    let total = core + best_left + best_right;
+    (total >= min_score).then_some((lx, ly, rx, ry, total))
+}
+
+pub(crate) fn append_hsp_gated_aa_lcbs(
+    target: &mut LcbList,
+    seq_x: &[u8],
+    seq_y: &[u8],
+    hits: &[(usize, usize)],
+    min_aa_score: i32,
+) {
+    let mut gated = Vec::new();
+    let mut strong = Vec::new();
+    for &(px, py) in hits {
+        if let Some((lx, ly, rx, ry, sc)) =
+            extend_aa_ungapped_hsp(seq_x, seq_y, px, py, min_aa_score)
+        {
+            gated.push((px, py));
+            if sc >= min_aa_score + 30 && rx >= lx + 24 && ry >= ly + 24 {
+                strong.push(vec![(lx, ly), (rx - 15, ry - 15)]);
+            }
+        }
+    }
+    let mut candidates = cluster_strand_lcbs(&gated, 1800, 200, 2, 24, 250.0);
+    candidates.extend(strong);
+    for lcb in candidates {
+        let (sx, ex) = (lcb[0].0, lcb[lcb.len() - 1].0);
+        if !target
+            .iter()
+            .any(|c| sx <= c[c.len() - 1].0 && ex >= c[0].0)
+        {
+            target.push(lcb);
+        }
+    }
+}
+
+/// Find 2-hit translated amino-acid `5-mer` (15 bp) anchors across all reading frames.
+#[allow(dead_code)]
+pub(crate) fn append_translated_aa5_lcbs(
+    target: &mut LcbList,
+    seq_x: &[u8],
+    seq_y: &[u8],
+    max_occ: usize,
+    skip_softmasked: bool,
+) {
+    let hits = find_translated_aa5_hits(seq_x, seq_y, max_occ, skip_softmasked);
+    append_two_hit_diagonal_lcbs(target, &hits, 120, 12);
+}
+
+#[inline]
+fn hsp_pair_score(a: u8, b: u8) -> i32 {
+    let (Some(ia), Some(ib)) = (base_to_idx(a), base_to_idx(b)) else {
+        return -15;
+    };
+    if ia == ib {
+        10
+    } else if (ia ^ ib) == 2 {
+        -3 // transition (A<->G, C<->T)
+    } else {
+        -12 // transversion
+    }
+}
+
+/// Extend a 19-bp seed hit `(px, py)` without gaps using transition-aware X-drop;
+/// returns `Some((start_x, start_y, end_x, end_y, score))` when `score >= min_score`.
+fn extend_ungapped_hsp(
+    seq_x: &[u8],
+    seq_y: &[u8],
+    px: usize,
+    py: usize,
+    min_score: i32,
+) -> Option<(usize, usize, usize, usize, i32)> {
+    const XDROP: i32 = 60;
+    if px + 19 > seq_x.len() || py + 19 > seq_y.len() {
+        return None;
+    }
+    let mut core = 0i32;
+    for off in 0..19 {
+        core += hsp_pair_score(seq_x[px + off], seq_y[py + off]);
+    }
+
+    let mut cur = 0i32;
+    let mut best_left = 0i32;
+    let mut lx = px;
+    let mut ly = py;
+    let mut ix = px;
+    let mut iy = py;
+    while ix > 0 && iy > 0 {
+        ix -= 1;
+        iy -= 1;
+        cur += hsp_pair_score(seq_x[ix], seq_y[iy]);
+        if cur > best_left {
+            best_left = cur;
+            lx = ix;
+            ly = iy;
+        } else if best_left - cur > XDROP {
+            break;
+        }
+    }
+
+    cur = 0;
+    let mut best_right = 0i32;
+    let mut rx = px + 19;
+    let mut ry = py + 19;
+    ix = px + 19;
+    iy = py + 19;
+    while ix < seq_x.len() && iy < seq_y.len() {
+        cur += hsp_pair_score(seq_x[ix], seq_y[iy]);
+        ix += 1;
+        iy += 1;
+        if cur > best_right {
+            best_right = cur;
+            rx = ix;
+            ry = iy;
+        } else if best_right - cur > XDROP {
+            break;
+        }
+    }
+
+    let total = core + best_left + best_right;
+    (total >= min_score).then_some((lx, ly, rx, ry, total))
+}
+
+pub(crate) fn append_hsp_gated_lastz12_lcbs(
+    target: &mut LcbList,
+    seq_x: &[u8],
+    seq_y: &[u8],
+    hits: &[(usize, usize)],
+    min_hsp_score: i32,
+) {
+    let mut filtered_hits: Vec<(usize, usize)> = Vec::new();
+    let mut strong_hsps: Vec<Vec<(usize, usize)>> = Vec::new();
+    for &(px, py) in hits {
+        if let Some((lx, ly, rx, ry, sc)) = extend_ungapped_hsp(seq_x, seq_y, px, py, min_hsp_score)
+        {
+            filtered_hits.push((px, py));
+            if sc >= min_hsp_score + 15 && rx >= lx + 18 && ry >= ly + 18 {
+                strong_hsps.push(vec![(lx, ly), (rx - 12, ry - 12)]);
+            }
+        }
+    }
+    let mut candidates = cluster_strand_lcbs(&filtered_hits, 1800, 200, 3, 30, 250.0);
+    candidates.extend(cluster_strand_lcbs(&filtered_hits, 150, 25, 2, 16, 150.0));
+    candidates.extend(strong_hsps);
+    for lcb in candidates {
+        let (sx, ex) = (lcb[0].0, lcb[lcb.len() - 1].0);
+        if !target
+            .iter()
+            .any(|c| sx <= c[c.len() - 1].0 && ex >= c[0].0)
+        {
+            target.push(lcb);
+        }
+    }
+}
+
+pub(crate) fn find_w12_raw_lcbs(idx_x: &ContigIndex, idx_y: &ContigIndex) -> (LcbList, LcbList) {
+    let (hits_fwd, hits_rc) =
+        intersect_seed_maps(&idx_x.seeds_fwd, &idx_y.seeds_fwd, &idx_y.seeds_rc);
+    let raw_fwd = cluster_strand_lcbs(&hits_fwd, 3500, 350, 8, 100, 450.0);
+    let raw_rc = cluster_strand_lcbs(&hits_rc, 3500, 350, 8, 100, 450.0);
+    (raw_fwd, raw_rc)
+}
+
+pub(crate) fn append_nonoverlapping_lcbs(
+    target: &mut LcbList,
+    existing: &[Vec<(usize, usize)>],
+    hits: &[(usize, usize)],
+    min_anchors: usize,
+    min_span: usize,
+) {
+    let mut candidates = cluster_strand_lcbs(hits, 1800, 200, min_anchors, min_span, 250.0);
+    // Tight 2-hit diagonal pass (LASTZ-style): 2 nearby hits within 120bp and <=25bp drift.
+    candidates.extend(cluster_strand_lcbs(hits, 120, 25, 2, 16, 120.0));
+    for lcb in candidates {
+        let (sx, ex) = (lcb[0].0, lcb[lcb.len() - 1].0);
+        if !existing
+            .iter()
+            .chain(target.iter())
+            .any(|c| sx <= c[c.len() - 1].0 && ex >= c[0].0)
+        {
+            target.push(lcb);
+        }
+    }
+}
+
+/// Fast pre-DP score: return the anchor count of the largest `w=12` LCB between two contigs.
+#[must_use]
+pub fn score_contig_pair_lcb(idx_x: &ContigIndex, idx_y: &ContigIndex) -> usize {
+    let (raw_fwd, raw_rc) = find_w12_raw_lcbs(idx_x, idx_y);
+    raw_fwd
+        .iter()
+        .chain(raw_rc.iter())
+        .map(Vec::len)
+        .max()
+        .unwrap_or(0)
+}
+
+/// Align two pre-indexed contigs without recomputing KP-14 seed maps.
+///
+/// Reverse-complement a DNA byte slice (uppercasing ASCII bases).
+#[must_use]
+pub fn revcomp(seq: &[u8]) -> Vec<u8> {
+    seq.iter()
+        .rev()
+        .map(|&b| match b.to_ascii_uppercase() {
+            b'A' => b'T',
+            b'T' => b'A',
+            b'C' => b'G',
+            b'G' => b'C',
+            other => other,
+        })
+        .collect()
+}

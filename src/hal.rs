@@ -309,6 +309,60 @@ pub struct Hdf5ObjectHeader {
     pub message_types: Vec<u16>,
 }
 
+fn iter_v1_header_messages<'a, F>(bytes: &'a [u8], obj_addr: usize, mut f: F) -> Option<()>
+where
+    F: FnMut(u16, &'a [u8]) -> std::ops::ControlFlow<()>,
+{
+    let slice = bytes.get(obj_addr..)?;
+    if slice.len() < 16 || slice[0] != 1 {
+        return None;
+    }
+    let num_msgs = usize::from(u16::from_le_bytes([slice[2], slice[3]]));
+    let hdr_size = usize::try_from(u32::from_le_bytes([
+        slice[8], slice[9], slice[10], slice[11],
+    ]))
+    .ok()?;
+    let first_end = obj_addr
+        .saturating_add(16)
+        .saturating_add(hdr_size)
+        .min(bytes.len());
+    let mut chunks = std::collections::VecDeque::from([(obj_addr + 16, first_end)]);
+    let mut visited_addrs = std::collections::HashSet::from([obj_addr]);
+    let mut seen = 0usize;
+
+    while let Some((mut pos, end)) = chunks.pop_front() {
+        while seen < num_msgs && pos + 8 <= end {
+            let mtype = u16::from_le_bytes([bytes[pos], bytes[pos + 1]]);
+            let msize = usize::from(u16::from_le_bytes([bytes[pos + 2], bytes[pos + 3]]));
+            let body_start = pos + 8;
+            let body_end = body_start.saturating_add(msize).min(end);
+            let body = &bytes[body_start..body_end];
+            seen += 1;
+            pos += 8 + msize;
+
+            if mtype == 0x0010 && body.len() >= 16 {
+                if let (Some(cont_u64), Some(len_u64)) =
+                    (read_u64_le(body, 0), read_u64_le(body, 8))
+                    && let (Ok(cont_addr), Ok(cont_len)) =
+                        (usize::try_from(cont_u64), usize::try_from(len_u64))
+                    && visited_addrs.len() < 1024
+                    && visited_addrs.insert(cont_addr)
+                    && cont_addr < bytes.len()
+                {
+                    let cont_end = cont_addr.saturating_add(cont_len).min(bytes.len());
+                    chunks.push_back((cont_addr, cont_end));
+                }
+                continue;
+            }
+
+            if f(mtype, body).is_break() {
+                return Some(());
+            }
+        }
+    }
+    Some(())
+}
+
 /// Parse an HDF5 v1 or v2 object header starting at `slice` (positioned at `root_group_addr`).
 #[must_use]
 pub fn read_hdf5_object_header(slice: &[u8]) -> Option<Hdf5ObjectHeader> {
@@ -348,21 +402,11 @@ pub fn read_hdf5_object_header(slice: &[u8]) -> Option<Hdf5ObjectHeader> {
         });
     }
     if slice[0] == 1 {
-        // HDF5 Object Header v1
-        let num_msgs = usize::from(u16::from_le_bytes([slice[2], slice[3]]));
-        let hdr_size = usize::try_from(u32::from_le_bytes([
-            slice[8], slice[9], slice[10], slice[11],
-        ]))
-        .ok()?;
-        let mut pos = 16usize;
-        let end = (16 + hdr_size).min(slice.len());
         let mut msg_types = Vec::new();
-        while msg_types.len() < num_msgs && pos + 8 <= end {
-            let mtype = u16::from_le_bytes([slice[pos], slice[pos + 1]]);
-            let msize = usize::from(u16::from_le_bytes([slice[pos + 2], slice[pos + 3]]));
+        iter_v1_header_messages(slice, 0, |mtype, _| {
             msg_types.push(mtype);
-            pos += 8 + msize;
-        }
+            std::ops::ControlFlow::Continue(())
+        })?;
         return Some(Hdf5ObjectHeader {
             version: 1,
             message_types: msg_types,
@@ -470,37 +514,20 @@ pub fn read_hdf5_v0_group_entries(
     bytes: &[u8],
     group_obj_addr: usize,
 ) -> Option<Vec<Hdf5GroupEntry>> {
-    let group_slice = bytes.get(group_obj_addr..)?;
-    if group_slice.len() < 16 || group_slice[0] != 1 {
-        return None;
-    }
-    let num_msgs = usize::from(u16::from_le_bytes([group_slice[2], group_slice[3]]));
-    let hdr_size = usize::try_from(u32::from_le_bytes([
-        group_slice[8],
-        group_slice[9],
-        group_slice[10],
-        group_slice[11],
-    ]))
-    .ok()?;
-    let mut pos = 16usize;
-    let end = (16 + hdr_size).min(group_slice.len());
     let mut symtab_addrs: Option<(usize, usize)> = None;
-    let mut seen = 0usize;
-    while seen < num_msgs && pos + 8 <= end {
-        let mtype = u16::from_le_bytes([group_slice[pos], group_slice[pos + 1]]);
-        let msize = usize::from(u16::from_le_bytes([
-            group_slice[pos + 2],
-            group_slice[pos + 3],
-        ]));
-        if mtype == 0x0011 && msize >= 16 && pos + 8 + 16 <= end {
-            let btree_addr = usize::try_from(read_u64_le(group_slice, pos + 8)?).ok()?;
-            let heap_addr = usize::try_from(read_u64_le(group_slice, pos + 16)?).ok()?;
+    iter_v1_header_messages(bytes, group_obj_addr, |mtype, body| {
+        if mtype == 0x0011
+            && body.len() >= 16
+            && let Some(bt_u64) = read_u64_le(body, 0)
+            && let Some(hp_u64) = read_u64_le(body, 8)
+            && let (Ok(btree_addr), Ok(heap_addr)) =
+                (usize::try_from(bt_u64), usize::try_from(hp_u64))
+        {
             symtab_addrs = Some((btree_addr, heap_addr));
-            break;
+            return std::ops::ControlFlow::Break(());
         }
-        seen += 1;
-        pos += 8 + msize;
-    }
+        std::ops::ControlFlow::Continue(())
+    })?;
     let (btree_addr, heap_addr) = symtab_addrs?;
     if bytes.get(heap_addr..heap_addr + 4) != Some(b"HEAP") {
         return None;
@@ -529,40 +556,29 @@ pub fn read_hdf5_v0_root_names(bytes: &[u8]) -> Option<Vec<String>> {
 /// Parse HDF5 `Dataspace` (`0x0001`) dimension sizes from an object header (`v1`).
 #[must_use]
 pub fn read_hdf5_dataspace_dims(bytes: &[u8], obj_addr: usize) -> Option<Vec<u64>> {
-    let slice = bytes.get(obj_addr..)?;
-    if slice.len() < 16 || slice[0] != 1 {
-        return None;
-    }
-    let num_msgs = usize::from(u16::from_le_bytes([slice[2], slice[3]]));
-    let hdr_size = usize::try_from(u32::from_le_bytes([
-        slice[8], slice[9], slice[10], slice[11],
-    ]))
-    .ok()?;
-    let mut pos = 16usize;
-    let end = (16 + hdr_size).min(slice.len());
-    let mut seen = 0usize;
-    while seen < num_msgs && pos + 8 <= end {
-        let mtype = u16::from_le_bytes([slice[pos], slice[pos + 1]]);
-        let msize = usize::from(u16::from_le_bytes([slice[pos + 2], slice[pos + 3]]));
-        if mtype == 0x0001 && msize >= 4 && pos + 8 + msize <= end {
-            let body = &slice[pos + 8..pos + 8 + msize];
+    let mut result = None;
+    iter_v1_header_messages(bytes, obj_addr, |mtype, body| {
+        if mtype == 0x0001 && body.len() >= 4 {
             let ds_ver = body[0];
             let rank = usize::from(body[1]);
             let dims_off = match ds_ver {
                 1 => 8usize,
                 2 => 4usize,
-                _ => return None,
+                _ => return std::ops::ControlFlow::Break(()),
             };
             let mut dims = Vec::with_capacity(rank);
             for d in 0..rank {
-                dims.push(read_u64_le(body, dims_off + d * 8)?);
+                let Some(dim) = read_u64_le(body, dims_off + d * 8) else {
+                    return std::ops::ControlFlow::Break(());
+                };
+                dims.push(dim);
             }
-            return Some(dims);
+            result = Some(dims);
+            return std::ops::ControlFlow::Break(());
         }
-        seen += 1;
-        pos += 8 + msize;
-    }
-    None
+        std::ops::ControlFlow::Continue(())
+    })?;
+    result
 }
 
 /// Summary of an HDF5 `.hal` file read natively in pure Rust.
@@ -747,34 +763,23 @@ pub fn inspect_hal_genomes(path: &std::path::Path) -> std::io::Result<Option<Hal
 /// Read contiguous dataset bytes from an HDF5 v1 object header (`DataLayout` `0x0008`, class `1`).
 #[must_use]
 pub fn read_hdf5_v0_contiguous_data(bytes: &[u8], obj_addr: usize) -> Option<&[u8]> {
-    let slice = bytes.get(obj_addr..)?;
-    if slice.len() < 16 || slice[0] != 1 {
-        return None;
-    }
-    let num_msgs = usize::from(u16::from_le_bytes([slice[2], slice[3]]));
-    let hdr_size = usize::try_from(u32::from_le_bytes([
-        slice[8], slice[9], slice[10], slice[11],
-    ]))
-    .ok()?;
-    let mut pos = 16usize;
-    let end = (16 + hdr_size).min(slice.len());
-    let mut seen = 0usize;
-    while seen < num_msgs && pos + 8 <= end {
-        let mtype = u16::from_le_bytes([slice[pos], slice[pos + 1]]);
-        let msize = usize::from(u16::from_le_bytes([slice[pos + 2], slice[pos + 3]]));
-        if mtype == 0x0008 && msize >= 18 && pos + 8 + 18 <= end {
-            let layout_ver = slice[pos + 8];
-            let layout_class = slice[pos + 9];
-            if layout_ver == 3 && layout_class == 1 {
-                let data_addr = usize::try_from(read_u64_le(slice, pos + 10)?).ok()?;
-                let data_size = usize::try_from(read_u64_le(slice, pos + 18)?).ok()?;
-                return bytes.get(data_addr..data_addr + data_size);
-            }
+    let mut result = None;
+    iter_v1_header_messages(bytes, obj_addr, |mtype, body| {
+        if mtype == 0x0008
+            && body.len() >= 18
+            && body[0] == 3
+            && body[1] == 1
+            && let Some(addr_u64) = read_u64_le(body, 2)
+            && let Some(size_u64) = read_u64_le(body, 10)
+            && let (Ok(data_addr), Ok(data_size)) =
+                (usize::try_from(addr_u64), usize::try_from(size_u64))
+        {
+            result = bytes.get(data_addr..data_addr + data_size);
+            return std::ops::ControlFlow::Break(());
         }
-        seen += 1;
-        pos += 8 + msize;
-    }
-    None
+        std::ops::ControlFlow::Continue(())
+    })?;
+    result
 }
 
 /// One raw HDF5 chunk descriptor from a B-tree v1 type-1 chunk index.
@@ -827,67 +832,38 @@ fn walk_chunk_btree_v1(bytes: &[u8], node_addr: usize, ndim: usize, out: &mut Ve
 /// Read chunked dataset descriptors (`DataLayout` `0x0008`, class `2`) from an HDF5 v1 object header.
 #[must_use]
 pub fn read_hdf5_v0_chunk_addrs(bytes: &[u8], obj_addr: usize) -> Option<Vec<Hdf5Chunk>> {
-    let slice = bytes.get(obj_addr..)?;
-    if slice.len() < 16 || slice[0] != 1 {
-        return None;
-    }
-    let num_msgs = usize::from(u16::from_le_bytes([slice[2], slice[3]]));
-    let hdr_size = usize::try_from(u32::from_le_bytes([
-        slice[8], slice[9], slice[10], slice[11],
-    ]))
-    .ok()?;
-    let mut pos = 16usize;
-    let end = (16 + hdr_size).min(slice.len());
-    let mut seen = 0usize;
-    while seen < num_msgs && pos + 8 <= end {
-        let mtype = u16::from_le_bytes([slice[pos], slice[pos + 1]]);
-        let msize = usize::from(u16::from_le_bytes([slice[pos + 2], slice[pos + 3]]));
-        if mtype == 0x0008 && msize >= 11 && pos + 8 + 11 <= end {
-            let layout_ver = slice[pos + 8];
-            let layout_class = slice[pos + 9];
-            if layout_ver == 3 && layout_class == 2 {
-                let ndim = usize::from(slice[pos + 10]);
-                let btree_addr = usize::try_from(read_u64_le(slice, pos + 11)?).ok()?;
-                let mut chunks = Vec::new();
-                walk_chunk_btree_v1(bytes, btree_addr, ndim, &mut chunks);
-                return Some(chunks);
-            }
+    let mut result = None;
+    iter_v1_header_messages(bytes, obj_addr, |mtype, body| {
+        if mtype == 0x0008
+            && body.len() >= 11
+            && body[0] == 3
+            && body[1] == 2
+            && let Some(bt_u64) = read_u64_le(body, 3)
+            && let Ok(btree_addr) = usize::try_from(bt_u64)
+        {
+            let ndim = usize::from(body[2]);
+            let mut chunks = Vec::new();
+            walk_chunk_btree_v1(bytes, btree_addr, ndim, &mut chunks);
+            result = Some(chunks);
+            return std::ops::ControlFlow::Break(());
         }
-        seen += 1;
-        pos += 8 + msize;
-    }
-    None
+        std::ops::ControlFlow::Continue(())
+    })?;
+    result
 }
 
 /// Check whether an HDF5 v1 object header enables the deflate (`id == 1`) filter in `FilterPipeline` (`0x000B`).
 #[must_use]
 pub fn is_hdf5_deflated(bytes: &[u8], obj_addr: usize) -> bool {
-    let Some(slice) = bytes.get(obj_addr..) else {
-        return false;
-    };
-    if slice.len() < 16 || slice[0] != 1 {
-        return false;
-    }
-    let num_msgs = usize::from(u16::from_le_bytes([slice[2], slice[3]]));
-    let Ok(hdr_size) = usize::try_from(u32::from_le_bytes([
-        slice[8], slice[9], slice[10], slice[11],
-    ])) else {
-        return false;
-    };
-    let mut pos = 16usize;
-    let end = (16 + hdr_size).min(slice.len());
-    let mut seen = 0usize;
-    while seen < num_msgs && pos + 8 <= end {
-        let mtype = u16::from_le_bytes([slice[pos], slice[pos + 1]]);
-        let msize = usize::from(u16::from_le_bytes([slice[pos + 2], slice[pos + 3]]));
-        if mtype == 0x000B && msize >= 4 && pos + 8 + msize <= end {
-            let body = &slice[pos + 8..pos + 8 + msize];
+    let mut deflated = false;
+    let _ = iter_v1_header_messages(bytes, obj_addr, |mtype, body| {
+        if mtype == 0x000B && body.len() >= 4 {
             let ver = body[0];
             let n_filters = usize::from(body[1]);
             let mut fpos = match ver {
                 1 => 8usize,
                 2 => 2usize,
-                _ => return false,
+                _ => return std::ops::ControlFlow::Break(()),
             };
             for _ in 0..n_filters {
                 if fpos + 2 > body.len() {
@@ -895,7 +871,8 @@ pub fn is_hdf5_deflated(bytes: &[u8], obj_addr: usize) -> bool {
                 }
                 let filter_id = u16::from_le_bytes([body[fpos], body[fpos + 1]]);
                 if filter_id == 1 {
-                    return true;
+                    deflated = true;
+                    return std::ops::ControlFlow::Break(());
                 }
                 if ver == 1 && fpos + 8 <= body.len() {
                     let name_len =
@@ -921,44 +898,27 @@ pub fn is_hdf5_deflated(bytes: &[u8], obj_addr: usize) -> bool {
                 }
             }
         }
-        seen += 1;
-        pos += 8 + msize;
-    }
-    false
+        std::ops::ControlFlow::Continue(())
+    });
+    deflated
 }
 
 /// Read element byte size from an HDF5 `Datatype` (`0x0003`) message in an object header (`v1`).
 #[must_use]
 pub fn read_hdf5_datatype_size(bytes: &[u8], obj_addr: usize) -> Option<usize> {
-    let slice = bytes.get(obj_addr..)?;
-    if slice.len() < 16 || slice[0] != 1 {
-        return None;
-    }
-    let num_msgs = usize::from(u16::from_le_bytes([slice[2], slice[3]]));
-    let hdr_size = usize::try_from(u32::from_le_bytes([
-        slice[8], slice[9], slice[10], slice[11],
-    ]))
-    .ok()?;
-    let mut pos = 16usize;
-    let end = (16 + hdr_size).min(slice.len());
-    let mut seen = 0usize;
-    while seen < num_msgs && pos + 8 <= end {
-        let mtype = u16::from_le_bytes([slice[pos], slice[pos + 1]]);
-        let msize = usize::from(u16::from_le_bytes([slice[pos + 2], slice[pos + 3]]));
-        if mtype == 0x0003 && msize >= 8 && pos + 8 + msize <= end {
-            let sz = u32::from_le_bytes([
-                slice[pos + 12],
-                slice[pos + 13],
-                slice[pos + 14],
-                slice[pos + 15],
-            ]);
-            return usize::try_from(sz).ok();
+    let mut size = None;
+    iter_v1_header_messages(bytes, obj_addr, |mtype, body| {
+        if mtype == 0x0003 && body.len() >= 8 {
+            let sz = u32::from_le_bytes([body[4], body[5], body[6], body[7]]);
+            size = usize::try_from(sz).ok();
+            return std::ops::ControlFlow::Break(());
         }
-        seen += 1;
-        pos += 8 + msize;
-    }
-    None
+        std::ops::ControlFlow::Continue(())
+    })?;
+    size
 }
+
+const MAX_CHUNK_DECOMPRESSED_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Read raw dataset bytes from an HDF5 v0 dataset object header, supporting both contiguous
 /// (`DataLayout` class `1`) and chunked (`DataLayout` class `2`, optionally zlib-deflated) storage.
@@ -976,8 +936,12 @@ pub fn read_hdf5_v0_dataset_bytes(bytes: &[u8], obj_addr: usize) -> Option<Vec<u
         let raw_chunk = bytes.get(start..start + len)?;
         if deflated {
             use std::io::Read as _;
-            let mut dec = flate2::read::ZlibDecoder::new(raw_chunk);
-            dec.read_to_end(&mut out).ok()?;
+            let dec = flate2::read::ZlibDecoder::new(raw_chunk);
+            let mut bounded = dec.take(MAX_CHUNK_DECOMPRESSED_BYTES + 1);
+            let n = bounded.read_to_end(&mut out).ok()?;
+            if u64::try_from(n).unwrap_or(u64::MAX) > MAX_CHUNK_DECOMPRESSED_BYTES {
+                return None;
+            }
         } else {
             out.extend_from_slice(raw_chunk);
         }

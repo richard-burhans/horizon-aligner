@@ -77,22 +77,13 @@ fn parse_maf_pairs(path: &Path, cx: &str, cy: &str) -> Result<HashSet<(usize, us
 }
 
 fn main() -> Result<()> {
-    let base = Path::new(
-        "/home/agent/.gemini/antigravity-cli/brain/c77b5ff5-88ad-43af-973a-c37dbadc186d/scratch/plasmodium_fastas",
-    );
-    let pf = read_named_contig(
-        &base.join("GCA_032713075.1__Plasmodium_falciparum.fa"),
-        "CP131981.1",
-    )?;
-    let pv = read_named_contig(
-        &base.join("GCA_914969965.1__Plasmodium_vivax.fa"),
-        "CAJZCX010000015.1",
-    )?;
-    let maf_all = parse_maf_pairs(
-        &base.join("pf_pv_rbest.maf"),
-        "CP131981.1",
-        "CAJZCX010000015.1",
-    )?;
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() < 4 {
+        anyhow::bail!("usage: eval_pf_pv <pf.fa> <pv.fa> <rbest.maf>");
+    }
+    let pf = read_named_contig(Path::new(&args[1]), "CP131981.1")?;
+    let pv = read_named_contig(Path::new(&args[2]), "CAJZCX010000015.1")?;
+    let maf_all = parse_maf_pairs(Path::new(&args[3]), "CP131981.1", "CAJZCX010000015.1")?;
 
     let t0 = Instant::now();
     let aln = align_contig_pair(&pf, &pv)?;

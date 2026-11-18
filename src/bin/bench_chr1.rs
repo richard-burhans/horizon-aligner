@@ -38,15 +38,10 @@ fn revcomp(seq: &[u8]) -> Vec<u8> {
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    let (fa_x, fa_y) = if args.len() >= 3 {
-        (PathBuf::from(&args[1]), PathBuf::from(&args[2]))
-    } else {
-        let base = "/home/agent/.gemini/antigravity-cli/brain/c77b5ff5-88ad-43af-973a-c37dbadc186d/scratch/plasmodium_fastas";
-        (
-            Path::new(base).join("GCA_032713075.1__Plasmodium_falciparum.fa"),
-            Path::new(base).join("GCA_900097025.1__Plasmodium_reichenowi.fa"),
-        )
-    };
+    if args.len() < 3 {
+        anyhow::bail!("usage: bench_chr1 <target.fa> <query.fa>");
+    }
+    let (fa_x, fa_y) = (PathBuf::from(&args[1]), PathBuf::from(&args[2]));
 
     let t0 = Instant::now();
     let seq_x = read_first_contig(&fa_x)?;

@@ -1,46 +1,16 @@
 //! Multi-contig whole-genome aligner CLI using KP-14 + parallel MDL/BOCPD.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use horizon_aligner::{
     AlignConfig, ContigIndex, align_contig_pair_with_config, format_gfa_blocks,
     format_gfa_paralog_tags, format_gfa_summary, format_maf_blocks, prepare_contig_index_opts,
-    resolve_alignment_duplications, score_contig_pair_lcb, shared_seed_count,
+    read_fasta_contigs, resolve_alignment_duplications, score_contig_pair_lcb, shared_seed_count,
 };
 use rayon::prelude::*;
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::{BufWriter, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Instant;
-
-fn read_fasta_contigs(path: &Path, max_contigs: usize) -> Result<Vec<(String, Vec<u8>)>> {
-    let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    let mut out = Vec::new();
-    let mut cur_name: Option<String> = None;
-    let mut cur_seq: Vec<u8> = Vec::new();
-
-    for line in text.lines() {
-        if let Some(rest) = line.strip_prefix('>') {
-            if let Some(name) = cur_name.take() {
-                out.push((name, std::mem::take(&mut cur_seq)));
-                if out.len() >= max_contigs {
-                    return Ok(out);
-                }
-            }
-            let header = rest
-                .split_whitespace()
-                .next()
-                .unwrap_or("contig")
-                .to_owned();
-            cur_name = Some(header);
-        } else if cur_name.is_some() {
-            cur_seq.extend_from_slice(line.trim().as_bytes());
-        }
-    }
-    if let Some(name) = cur_name {
-        out.push((name, cur_seq));
-    }
-    Ok(out)
-}
 
 struct CliArgs {
     fa_x: PathBuf,
@@ -57,7 +27,7 @@ struct CliArgs {
     hal_info: Option<PathBuf>,
 }
 
-fn parse_args() -> CliArgs {
+fn parse_args() -> Result<CliArgs> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut pos = Vec::new();
     let mut maf_out = None;
@@ -130,18 +100,16 @@ fn parse_args() -> CliArgs {
         }
     }
 
-    let base = "/home/agent/.gemini/antigravity-cli/brain/c77b5ff5-88ad-43af-973a-c37dbadc186d/scratch/plasmodium_fastas";
-    let fa_x = pos.first().map_or_else(
-        || Path::new(base).join("GCA_032713075.1__Plasmodium_falciparum.fa"),
-        PathBuf::from,
-    );
-    let fa_y = pos.get(1).map_or_else(
-        || Path::new(base).join("GCA_914969965.1__Plasmodium_vivax.fa"),
-        PathBuf::from,
-    );
+    if pos.len() < 2 && hal_info.is_none() {
+        bail!(
+            "usage: horizon_wga <target.fa> <query.fa> [max_contigs] [--maf out.maf] [--gfa out.gfa] [--hal-info file.hal] [--top-k K] [--rbest] [--resolve-dups] [--respect-softmask] [--ry-seeds|--no-ry-seeds]"
+        );
+    }
+    let fa_x = pos.first().map_or_default(PathBuf::from);
+    let fa_y = pos.get(1).map_or_default(PathBuf::from);
     let max_contigs = pos.get(2).and_then(|s| s.parse().ok()).unwrap_or(1);
 
-    CliArgs {
+    Ok(CliArgs {
         fa_x,
         fa_y,
         max_contigs,
@@ -154,7 +122,7 @@ fn parse_args() -> CliArgs {
         respect_softmask,
         use_ry_seeds,
         hal_info,
-    }
+    })
 }
 
 fn compute_top_k_mask(
@@ -203,7 +171,7 @@ fn compute_top_k_mask(
 
 #[allow(clippy::too_many_lines)]
 fn main() -> Result<()> {
-    let cli = parse_args();
+    let cli = parse_args()?;
     if let Some(hal_path) = &cli.hal_info {
         let info = horizon_aligner::hal::inspect_hal_genomes(hal_path)
             .with_context(|| format!("inspecting {}", hal_path.display()))?

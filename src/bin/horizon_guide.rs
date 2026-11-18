@@ -3,46 +3,17 @@
 use anyhow::{Context, Result, bail};
 use horizon_aligner::{
     AlignConfig, ContigIndex, align_contig_pair_with_config, format_maf_blocks, hal::HalAlignment,
-    merge_pairwise_mafs, prepare_contig_index_opts, shared_seed_count,
+    merge_pairwise_mafs, prepare_contig_index_opts, read_fasta_contigs, shared_seed_count,
 };
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Instant;
 
 type ContigList = Vec<(String, Vec<u8>)>;
 type IndexedSpecies = (String, ContigList, Vec<(String, ContigIndex)>);
-
-fn read_fasta_contigs(path: &Path, max_contigs: usize) -> Result<ContigList> {
-    let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    let mut out = Vec::new();
-    let mut cur_name: Option<String> = None;
-    let mut cur_seq: Vec<u8> = Vec::new();
-    for line in text.lines() {
-        if let Some(rest) = line.strip_prefix('>') {
-            if let Some(name) = cur_name.take() {
-                out.push((name, std::mem::take(&mut cur_seq)));
-                if out.len() >= max_contigs {
-                    return Ok(out);
-                }
-            }
-            let header = rest
-                .split_whitespace()
-                .next()
-                .unwrap_or("contig")
-                .to_owned();
-            cur_name = Some(header);
-        } else if cur_name.is_some() {
-            cur_seq.extend_from_slice(line.trim().as_bytes());
-        }
-    }
-    if let Some(name) = cur_name {
-        out.push((name, cur_seq));
-    }
-    Ok(out)
-}
 
 fn select_central_hinge(species: &[IndexedSpecies]) -> usize {
     let mut best_idx = 0usize;

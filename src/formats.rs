@@ -1,0 +1,266 @@
+//! GFA v1.1, MAF v1, FASTA I/O, and e-graph paralog resolution helpers.
+
+use crate::egraph;
+use crate::mdl::ContigAlignment;
+use crate::seeding::revcomp;
+use std::fmt::Write as _;
+
+/// Format aligned LCBs and Horizon Bubbles as minimal GFA v1.1 records.
+#[must_use]
+pub fn format_gfa_summary(name_x: &str, name_y: &str, aln: &ContigAlignment) -> String {
+    let mut out = String::from("H\tVN:Z:1.1\n");
+    let total_bubbles = aln.macro_bubbles + aln.internal_bubbles;
+    let _ = writeln!(
+        out,
+        "S\t{name_x}__{name_y}\t*\tLN:i:{}\tLF:i:{}\tLR:i:{}\tHB:i:{total_bubbles}",
+        aln.aligned_pairs.len(),
+        aln.lcbs_fwd,
+        aln.lcbs_rc
+    );
+    out
+}
+
+/// Emit detailed GFA v1.1 block segments, Horizon-Bubble nodes, and links for a contig pair.
+#[must_use]
+pub fn format_gfa_blocks(name_x: &str, name_y: &str, aln: &ContigAlignment) -> String {
+    let mut out = String::from("H\tVN:Z:1.1\n");
+    if aln.aligned_pairs.is_empty() {
+        return out;
+    }
+
+    let runs: Vec<(usize, usize, usize, char)> = partition_colinear_blocks(&aln.aligned_pairs)
+        .into_iter()
+        .map(|(blk, is_rev)| {
+            let strand = if is_rev { '-' } else { '+' };
+            (blk[0].0, blk[0].1, blk.len(), strand)
+        })
+        .collect();
+
+    for (idx, &(bx, by, blen, bst)) in runs.iter().enumerate() {
+        let seg_id = format!("{name_x}__{name_y}__blk_{idx}");
+        let _ = writeln!(
+            out,
+            "S\t{seg_id}\t*\tLN:i:{blen}\tXS:i:{bx}\tYS:i:{by}\tST:Z:{bst}"
+        );
+        if idx > 0 {
+            let prev_seg = format!("{name_x}__{name_y}__blk_{}", idx - 1);
+            let gap_x = bx.saturating_sub(runs[idx - 1].0 + runs[idx - 1].2);
+            if gap_x >= 6 {
+                let bub_id = format!("{name_x}__{name_y}__bub_{idx}");
+                let _ = writeln!(out, "S\t{bub_id}\t*\tLN:i:{gap_x}\tHB:i:1");
+                let _ = writeln!(out, "L\t{prev_seg}\t+\t{bub_id}\t+\t0M");
+                let _ = writeln!(out, "L\t{bub_id}\t+\t{seg_id}\t+\t0M");
+            } else {
+                let _ = writeln!(out, "L\t{prev_seg}\t+\t{seg_id}\t+\t0M");
+            }
+        }
+    }
+    out
+}
+
+/// Run e-graph duplication/inversion collapse on a sequence of signed block labels.
+#[must_use]
+pub fn resolve_lcb_duplications(blocks: &[(&str, i8)]) -> Option<egraph::Expr> {
+    let mut eg = egraph::EGraph::new();
+    let root = egraph::build_seq_expr(&mut eg, blocks)?;
+    egraph::saturate_synteny(&mut eg, 4, 800);
+    egraph::extract_min_cost(&mut eg, root).map(|(_, expr)| expr)
+}
+
+/// Bucket colinear alignment blocks into `bin_bp` reference windows and return
+/// deduplicated block labels collapsed by the e-graph duplication/inversion rules.
+#[must_use]
+pub fn resolve_alignment_duplications(aln: &ContigAlignment, bin_bp: usize) -> Vec<String> {
+    let bins: Vec<(String, i8)> = partition_colinear_blocks(&aln.aligned_pairs)
+        .into_iter()
+        .map(|(blk, is_rev)| {
+            let b_idx = blk[0].0 / bin_bp.max(1);
+            (format!("B{b_idx}"), if is_rev { -1 } else { 1 })
+        })
+        .collect();
+    let mut dups: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for win in bins.chunks(12) {
+        if win.len() < 2 {
+            continue;
+        }
+        let refs: Vec<(&str, i8)> = win.iter().map(|(s, st)| (s.as_str(), *st)).collect();
+        if let Some(expr) = resolve_lcb_duplications(&refs) {
+            for d in egraph::collect_dups(&expr) {
+                dups.insert(d);
+            }
+        }
+    }
+    dups.into_iter().collect()
+}
+
+/// Format e-graph-resolved paralog annotations as GFA v1.1 comment/tag lines.
+#[must_use]
+pub fn format_gfa_paralog_tags(name_x: &str, name_y: &str, dups: &[String]) -> String {
+    if dups.is_empty() {
+        return String::new();
+    }
+    format!("# EG:Z:{name_x}__{name_y}\t{}\n", dups.join(","))
+}
+
+/// Partition sorted aligned pairs into colinear runs of at least 12 bases.
+fn partition_colinear_blocks(pairs: &[(usize, usize)]) -> Vec<(Vec<(usize, usize)>, bool)> {
+    let mut blocks: Vec<(Vec<(usize, usize)>, bool)> = Vec::new();
+    let mut cur: Vec<(usize, usize)> = Vec::new();
+    let mut cur_rev: Option<bool> = None;
+
+    for &(x, y) in pairs {
+        if let Some(&(px, py)) = cur.last() {
+            let dx_ok = x > px && (x - px) <= 20;
+            let fwd = dx_ok && y > py && (y - py) <= 20;
+            let rev = dx_ok && py > y && (py - y) <= 20;
+            let matches = match cur_rev {
+                None => fwd || rev,
+                Some(false) => fwd,
+                Some(true) => rev,
+            };
+            if matches {
+                if cur_rev.is_none() {
+                    cur_rev = Some(rev);
+                }
+                cur.push((x, y));
+                continue;
+            }
+        }
+        if cur.len() >= 12 {
+            blocks.push((std::mem::take(&mut cur), cur_rev.unwrap_or(false)));
+        } else {
+            cur.clear();
+        }
+        cur_rev = None;
+        cur.push((x, y));
+    }
+    if cur.len() >= 12 {
+        blocks.push((cur, cur_rev.unwrap_or(false)));
+    }
+    blocks
+}
+
+/// Group aligned `(x, y)` pairs into colinear MAF blocks and emit standard MAF v1 text.
+#[must_use]
+#[allow(clippy::too_many_arguments)]
+pub fn format_maf_blocks(
+    name_x: &str,
+    len_x: usize,
+    name_y: &str,
+    len_y: usize,
+    seq_x: &[u8],
+    seq_y: &[u8],
+    aln: &ContigAlignment,
+) -> String {
+    let mut out = String::from("##maf version=1 scoring=horizon_mdl\n");
+    if aln.aligned_pairs.is_empty() {
+        return out;
+    }
+
+    for (blk, is_rev) in partition_colinear_blocks(&aln.aligned_pairs) {
+        if blk
+            .iter()
+            .any(|&(x, y)| x >= seq_x.len() || y >= seq_y.len())
+        {
+            continue;
+        }
+        let x0 = blk[0].0;
+        let x_end = blk[blk.len() - 1].0 + 1;
+        let mut ax = String::with_capacity(blk.len() + 8);
+        let mut ay = String::with_capacity(blk.len() + 8);
+
+        let mut prev_x = blk[0].0;
+        let mut prev_y = blk[0].1;
+        ax.push(seq_x[prev_x].to_ascii_uppercase() as char);
+        let first_y = seq_y[prev_y].to_ascii_uppercase();
+        ay.push(if is_rev {
+            revcomp(&[first_y])[0] as char
+        } else {
+            first_y as char
+        });
+
+        for &(x, y) in blk.iter().skip(1) {
+            for &bx in &seq_x[(prev_x + 1)..x] {
+                ax.push(bx.to_ascii_uppercase() as char);
+                ay.push('-');
+            }
+            if is_rev {
+                for &by in seq_y[(y + 1)..prev_y].iter().rev() {
+                    ax.push('-');
+                    ay.push(revcomp(&[by])[0] as char);
+                }
+            } else {
+                for &by in &seq_y[(prev_y + 1)..y] {
+                    ax.push('-');
+                    ay.push(by.to_ascii_uppercase() as char);
+                }
+            }
+            ax.push(seq_x[x].to_ascii_uppercase() as char);
+            let by = seq_y[y].to_ascii_uppercase();
+            ay.push(if is_rev {
+                revcomp(&[by])[0] as char
+            } else {
+                by as char
+            });
+            prev_x = x;
+            prev_y = y;
+        }
+
+        let (y_start, y_span, y_strand) = if is_rev {
+            let y_lo = blk[blk.len() - 1].1;
+            let y_hi = blk[0].1 + 1;
+            (len_y - y_hi, y_hi - y_lo, '-')
+        } else {
+            let y_lo = blk[0].1;
+            let y_hi = blk[blk.len() - 1].1 + 1;
+            (y_lo, y_hi - y_lo, '+')
+        };
+
+        let _ = writeln!(out, "a score={}.0", blk.len());
+        let _ = writeln!(out, "s {name_x} {x0} {} + {len_x} {ax}", x_end - x0);
+        let _ = writeln!(
+            out,
+            "s {name_y} {y_start} {y_span} {y_strand} {len_y} {ay}\n"
+        );
+    }
+    out
+}
+
+/// Read up to `max_contigs` FASTA records `(contig_name, sequence_bytes)` from `path`
+/// (`max_contigs == 0` reads all records).
+///
+/// # Errors
+/// Returns an `std::io::Error` if `path` cannot be opened or read.
+pub fn read_fasta_contigs(
+    path: &std::path::Path,
+    max_contigs: usize,
+) -> std::io::Result<Vec<(String, Vec<u8>)>> {
+    use std::io::BufRead as _;
+    let f = std::fs::File::open(path)?;
+    let reader = std::io::BufReader::new(f);
+    let mut out = Vec::new();
+    let mut name = String::new();
+    let mut seq = Vec::new();
+    for line_res in reader.lines() {
+        let line = line_res?;
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix('>') {
+            if !name.is_empty() {
+                out.push((std::mem::take(&mut name), std::mem::take(&mut seq)));
+                if max_contigs > 0 && out.len() >= max_contigs {
+                    return Ok(out);
+                }
+            }
+            rest.split_whitespace()
+                .next()
+                .unwrap_or("contig")
+                .clone_into(&mut name);
+        } else if !name.is_empty() && !trimmed.is_empty() {
+            seq.extend_from_slice(trimmed.as_bytes());
+        }
+    }
+    if !name.is_empty() && (max_contigs == 0 || out.len() < max_contigs) {
+        out.push((name, seq));
+    }
+    Ok(out)
+}
