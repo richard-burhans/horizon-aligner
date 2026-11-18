@@ -1,7 +1,10 @@
 //! Multi-contig whole-genome aligner CLI using KP-14 + parallel MDL/BOCPD.
 
 use anyhow::{Context, Result};
-use horizon_aligner::{align_contig_pair, format_gfa_summary};
+use horizon_aligner::{
+    ContigIndex, align_contig_pair_indexed, format_gfa_summary, prepare_contig_index,
+};
+use rayon::prelude::*;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -54,13 +57,22 @@ fn main() -> Result<()> {
     let contigs_x = read_fasta_contigs(&fa_x, max_contigs)?;
     let contigs_y = read_fasta_contigs(&fa_y, max_contigs)?;
 
+    let idx_x: Vec<(String, ContigIndex)> = contigs_x
+        .par_iter()
+        .map(|(n, s)| Ok((n.clone(), prepare_contig_index(s)?)))
+        .collect::<Result<Vec<_>>>()?;
+    let idx_y: Vec<(String, ContigIndex)> = contigs_y
+        .par_iter()
+        .map(|(n, s)| Ok((n.clone(), prepare_contig_index(s)?)))
+        .collect::<Result<Vec<_>>>()?;
+
     let mut total_pairs = 0usize;
     let mut total_bubbles = 0usize;
     let mut gfa_out = String::new();
 
-    for (nx, sx) in &contigs_x {
-        for (ny, sy) in &contigs_y {
-            let aln = align_contig_pair(sx, sy)?;
+    for (nx, ix) in &idx_x {
+        for (ny, iy) in &idx_y {
+            let aln = align_contig_pair_indexed(ix, iy)?;
             if !aln.aligned_pairs.is_empty() {
                 total_pairs += aln.aligned_pairs.len();
                 total_bubbles += aln.macro_bubbles + aln.internal_bubbles;

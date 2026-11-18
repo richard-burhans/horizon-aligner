@@ -876,26 +876,68 @@ fn merge_colinear_lcbs(
     merged
 }
 
+/// Precomputed strand-symmetric KP-14 seed index for one contig.
+#[derive(Debug, Clone)]
+pub struct ContigIndex {
+    seq: Vec<u8>,
+    seq_rc: Vec<u8>,
+    seeds_fwd: HashMap<u64, Vec<usize>>,
+    seeds_rc: HashMap<u64, Vec<usize>>,
+}
+
+/// Precompute forward and reverse-complement KP-14 seed maps for a contig.
+///
+/// # Errors
+///
+/// Returns [`AlignError::InvalidMask`] if `MASK_KP14` is invalid.
+pub fn prepare_contig_index(seq: &[u8]) -> Result<ContigIndex, AlignError> {
+    let seq_rc = revcomp(seq);
+    let seeds_fwd = canonical_spaced_seeds(seq, MASK_KP14, 2)?;
+    let seeds_rc = canonical_spaced_seeds(&seq_rc, MASK_KP14, 2)?;
+    Ok(ContigIndex {
+        seq: seq.to_vec(),
+        seq_rc,
+        seeds_fwd,
+        seeds_rc,
+    })
+}
+
 /// Run the full bidirectional LCB + 2-hit rescue + parallel MDL/BOCPD pipeline on two contigs.
 ///
 /// # Errors
 ///
 /// Returns [`AlignError::InvalidMask`] if internal masks fail validation.
-#[allow(clippy::too_many_lines)]
 pub fn align_contig_pair(seq_x: &[u8], seq_y: &[u8]) -> Result<ContigAlignment, AlignError> {
+    let idx_x = prepare_contig_index(seq_x)?;
+    let idx_y = prepare_contig_index(seq_y)?;
+    align_contig_pair_indexed(&idx_x, &idx_y)
+}
+
+/// Align two pre-indexed contigs without recomputing KP-14 seed maps.
+///
+/// # Errors
+///
+/// Returns [`AlignError::InvalidMask`] if internal masks fail validation.
+#[allow(clippy::too_many_lines)]
+pub fn align_contig_pair_indexed(
+    idx_x: &ContigIndex,
+    idx_y: &ContigIndex,
+) -> Result<ContigAlignment, AlignError> {
     let span = MASK_KP14.len();
     let max_gap_bp = 1600;
     let max_local_rescue_bp = 25_000;
+    let seq_x = &idx_x.seq;
+    let seq_y = &idx_y.seq;
+    let seq_y_rc = &idx_y.seq_rc;
     let pv_len = seq_y.len();
-    let seq_y_rc = revcomp(seq_y);
 
-    let ix = canonical_spaced_seeds(seq_x, MASK_KP14, 2)?;
-    let iy_fwd = canonical_spaced_seeds(seq_y, MASK_KP14, 2)?;
-    let iy_rc = canonical_spaced_seeds(&seq_y_rc, MASK_KP14, 2)?;
+    let ix = &idx_x.seeds_fwd;
+    let iy_fwd = &idx_y.seeds_fwd;
+    let iy_rc = &idx_y.seeds_rc;
 
     let mut hits_fwd = Vec::new();
     let mut hits_rc = Vec::new();
-    for (k, pxs) in &ix {
+    for (k, pxs) in ix {
         if let Some(pys) = iy_fwd.get(k) {
             for &px in pxs {
                 for &py in pys {
@@ -926,7 +968,10 @@ pub fn align_contig_pair(seq_x: &[u8], seq_y: &[u8]) -> Result<ContigAlignment, 
     let mut xdrop_jobs: Vec<(bool, usize, usize, usize, usize, bool)> = Vec::new();
     let mut macro_bubbles = 0usize;
 
-    for (is_rc, lcb_list, y_work) in [(false, &lcbs_fwd, seq_y), (true, &lcbs_rc, &seq_y_rc)] {
+    for (is_rc, lcb_list, y_work) in [
+        (false, &lcbs_fwd, seq_y.as_slice()),
+        (true, &lcbs_rc, seq_y_rc.as_slice()),
+    ] {
         // Inter-LCB rescue pass.
         let mut rescued_inter = Vec::new();
         for w in lcb_list.windows(2) {
@@ -1037,7 +1082,7 @@ pub fn align_contig_pair(seq_x: &[u8], seq_y: &[u8]) -> Result<ContigAlignment, 
     let dp_results: Vec<(bool, usize, usize, GapResult)> = dp_jobs
         .par_iter()
         .map(|&(is_rc, x0, x1, y0, y1)| {
-            let y_work = if is_rc { &seq_y_rc } else { seq_y };
+            let y_work = if is_rc { seq_y_rc } else { seq_y };
             let res = banded_mdl_gap(&seq_x[x0..x1], &y_work[y0..y1], 64, 10.0);
             (is_rc, x0, y0, res)
         })
@@ -1059,7 +1104,7 @@ pub fn align_contig_pair(seq_x: &[u8], seq_y: &[u8]) -> Result<ContigAlignment, 
     let xdrop_results: Vec<(bool, Vec<(usize, usize)>)> = xdrop_jobs
         .par_iter()
         .map(|&(is_rc, x0, x1, y0, y1, rev)| {
-            let y_work = if is_rc { &seq_y_rc } else { seq_y };
+            let y_work = if is_rc { seq_y_rc } else { seq_y };
             let pairs = mdl_xdrop_extend(&seq_x[x0..x1], &y_work[y0..y1], x0, y0, rev, 600, 24);
             (is_rc, pairs)
         })
@@ -1258,5 +1303,16 @@ mod tests {
         let gfa = format_gfa_summary("chr1_x", "chr1_y", &aln);
         assert!(gfa.starts_with("H\tVN:Z:1.1\n"));
         assert!(gfa.contains("HB:i:5"));
+    }
+
+    #[test]
+    fn indexed_alignment_matches_unindexed() {
+        let sx = b"ATATATATATATATATATATGCGCGCGCGCGCGCGCGCGCATATATATATATATATATATATATATATATATATATATATGCGCGCGCGCGCGCGCGCGC";
+        let sy = b"ATATATATATATCTATATATGCGCGCGCGCGCGCGCGCGCATATATATATATATATATATATATATATATATATATATATGCGCGCGCGCGCGCGCGCGC";
+        let unindexed = align_contig_pair(sx, sy).expect("valid");
+        let ix = prepare_contig_index(sx).expect("valid");
+        let iy = prepare_contig_index(sy).expect("valid");
+        let indexed = align_contig_pair_indexed(&ix, &iy).expect("valid");
+        assert_eq!(unindexed, indexed);
     }
 }
