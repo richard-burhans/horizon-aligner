@@ -33,4 +33,7 @@ These sets were completely locked away during algorithm development to prevent o
 | `cactus447way` | Human (`hg38`) | Horse (`Equus_caballus`) | Distant Mammal | **47.3%** | 146 | ~0.19s |
 | `cactus447way` | Human (`hg38`) | Macaque (`Macaca_mulatta`) | Close Primate | **92.5%** | 275 | ~0.26s |
 | `multiz470way` | Human (`hg38`) | Marmoset (`HLcalPym1`) | Medium Primate | **82.2%** | 497 | ~0.29s |
+| `cactus241way` (Zoonomia) | Human (`hg38`) | Dog (`Canis_lupus`) | Distant Mammal | *(Running)* | *(Running)* | - |
+| B10K 363-way | Chicken (`galGal6`) | Zebra Finch (`taeGut2`) | Deep Avian | *(Pending Data)* | - | - |
+| HPRC (v1.1) | `GRCh38` | `CHM13` | Human Pangenome | *(Graph Eval)* | - | - |
 
