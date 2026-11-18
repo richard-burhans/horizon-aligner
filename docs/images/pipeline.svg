@@ -47,7 +47,7 @@
 
   <!-- Bubble outputs -->
   <path d="M160,300 L160,330" class="arrow" />
-  <text x="165" y="320" class="label">Bit-savings >= min_delta</text>
+  <text x="165" y="320" class="label">Bit-savings &gt;= min_delta</text>
 
   <path d="M50,285 L30,285 L30,345 L50,345" class="arrow" />
   <text x="35" y="310" class="label" transform="rotate(-90 35,310)">Abstention</text>
