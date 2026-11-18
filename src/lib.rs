@@ -937,6 +937,44 @@ pub fn shared_seed_count(idx_x: &ContigIndex, idx_y: &ContigIndex) -> usize {
     fwd.max(rc)
 }
 
+type LcbList = Vec<Vec<(usize, usize)>>;
+
+fn find_w12_raw_lcbs(idx_x: &ContigIndex, idx_y: &ContigIndex) -> (LcbList, LcbList) {
+    let mut hits_fwd = Vec::new();
+    let mut hits_rc = Vec::new();
+    for (k, pxs) in &idx_x.seeds_fwd {
+        if let Some(pys) = idx_y.seeds_fwd.get(k) {
+            for &px in pxs {
+                for &py in pys {
+                    hits_fwd.push((px, py));
+                }
+            }
+        }
+        if let Some(pys) = idx_y.seeds_rc.get(k) {
+            for &px in pxs {
+                for &py in pys {
+                    hits_rc.push((px, py));
+                }
+            }
+        }
+    }
+    let raw_fwd = cluster_strand_lcbs(&hits_fwd, 3500, 350, 8, 100, 450.0);
+    let raw_rc = cluster_strand_lcbs(&hits_rc, 3500, 350, 8, 100, 450.0);
+    (raw_fwd, raw_rc)
+}
+
+/// Fast pre-DP score: return the anchor count of the largest `w=12` LCB between two contigs.
+#[must_use]
+pub fn score_contig_pair_lcb(idx_x: &ContigIndex, idx_y: &ContigIndex) -> usize {
+    let (raw_fwd, raw_rc) = find_w12_raw_lcbs(idx_x, idx_y);
+    raw_fwd
+        .iter()
+        .chain(raw_rc.iter())
+        .map(Vec::len)
+        .max()
+        .unwrap_or(0)
+}
+
 /// Align two pre-indexed contigs without recomputing KP-14 seed maps.
 ///
 /// # Errors
@@ -969,31 +1007,7 @@ pub fn align_contig_pair_indexed_with_min_lcb(
     let seq_y_rc = &idx_y.seq_rc;
     let pv_len = seq_y.len();
 
-    let ix = &idx_x.seeds_fwd;
-    let iy_fwd = &idx_y.seeds_fwd;
-    let iy_rc = &idx_y.seeds_rc;
-
-    let mut hits_fwd = Vec::new();
-    let mut hits_rc = Vec::new();
-    for (k, pxs) in ix {
-        if let Some(pys) = iy_fwd.get(k) {
-            for &px in pxs {
-                for &py in pys {
-                    hits_fwd.push((px, py));
-                }
-            }
-        }
-        if let Some(pys) = iy_rc.get(k) {
-            for &px in pxs {
-                for &py in pys {
-                    hits_rc.push((px, py));
-                }
-            }
-        }
-    }
-
-    let raw_fwd = cluster_strand_lcbs(&hits_fwd, 3500, 350, 8, 100, 450.0);
-    let raw_rc = cluster_strand_lcbs(&hits_rc, 3500, 350, 8, 100, 450.0);
+    let (raw_fwd, raw_rc) = find_w12_raw_lcbs(idx_x, idx_y);
 
     // Early exit for off-diagonal contig pairs lacking colinear w=12 LCB support.
     let top_lcb_anchors = raw_fwd
@@ -1341,43 +1355,105 @@ pub fn format_gfa_paralog_tags(name_x: &str, name_y: &str, dups: &[String]) -> S
     format!("# EG:Z:{name_x}__{name_y}\t{}\n", dups.join(","))
 }
 
-type MergeRowTuple = (String, usize, usize, char, usize, String);
-type MergeGrid =
-    std::collections::BTreeMap<(String, usize), std::collections::BTreeMap<String, MergeRowTuple>>;
+struct PairwiseMafBlock {
+    ref_start: usize,
+    ref_end: usize,
+    ref_src_size: usize,
+    qry_species: String,
+    qry_contig: String,
+    qry_start: usize,
+    qry_strand: char,
+    qry_src_size: usize,
+    ref_seq: Vec<u8>,
+    qry_seq: Vec<u8>,
+}
 
-fn parse_maf_into_grid(
-    ref_species: &str,
+fn project_block_interval(
+    blk: &PairwiseMafBlock,
+    lo: usize,
+    hi: usize,
+) -> Option<(String, String, usize, usize, usize)> {
+    if blk.ref_start > lo || blk.ref_end < hi {
+        return None;
+    }
+    let mut ref_pos = blk.ref_start;
+    let mut qry_before = 0usize;
+    let mut qry_in = 0usize;
+    let mut ref_sub = Vec::with_capacity(hi - lo);
+    let mut qry_sub = Vec::with_capacity(hi - lo);
+
+    for (&rb, &qb) in blk.ref_seq.iter().zip(blk.qry_seq.iter()) {
+        if rb != b'-' {
+            if (lo..hi).contains(&ref_pos) {
+                ref_sub.push(rb);
+                qry_sub.push(qb);
+                if qb != b'-' {
+                    qry_in += 1;
+                }
+            } else if ref_pos < lo && qb != b'-' {
+                qry_before += 1;
+            }
+            ref_pos += 1;
+        } else if ref_pos <= lo && qb != b'-' {
+            qry_before += 1;
+        }
+    }
+
+    if ref_sub.len() != hi - lo || qry_in == 0 {
+        return None;
+    }
+    Some((
+        String::from_utf8_lossy(&ref_sub).into_owned(),
+        String::from_utf8_lossy(&qry_sub).into_owned(),
+        blk.qry_start + qry_before,
+        qry_in,
+        blk.qry_src_size,
+    ))
+}
+
+fn parse_pairwise_maf_blocks(
     query_sp: &str,
     maf_text: &str,
     step_bp: usize,
-    grid: &mut MergeGrid,
+    by_contig: &mut std::collections::BTreeMap<String, Vec<PairwiseMafBlock>>,
 ) -> std::collections::BTreeSet<String> {
-    let mut cur_rows: Vec<MergeRowTuple> = Vec::new();
+    type RawRow = (String, usize, usize, char, usize, String);
+    let mut cur_rows: Vec<RawRow> = Vec::new();
     let mut tokens: Vec<(String, i8)> = Vec::new();
 
-    let flush =
-        |rows: &mut Vec<MergeRowTuple>, grid: &mut MergeGrid, tokens: &mut Vec<(String, i8)>| {
-            if rows.len() >= 2 {
-                let ref_row = &rows[0];
-                let qry_row = &rows[1];
-                let b_idx = ref_row.1 / step_bp;
-                let st_sign = if qry_row.3 == '-' { -1 } else { 1 };
-                tokens.push((format!("B{b_idx}"), st_sign));
-                let slot = grid.entry((ref_row.0.clone(), b_idx)).or_default();
-                slot.entry(ref_species.to_owned())
-                    .or_insert_with(|| ref_row.clone());
-                slot.entry(query_sp.to_owned())
-                    .or_insert_with(|| qry_row.clone());
-            }
-            rows.clear();
-        };
+    let flush = |rows: &mut Vec<RawRow>,
+                 by_contig: &mut std::collections::BTreeMap<String, Vec<PairwiseMafBlock>>,
+                 tokens: &mut Vec<(String, i8)>| {
+        if rows.len() >= 2 {
+            let r = &rows[0];
+            let q = &rows[1];
+            let b_idx = r.1 / step_bp;
+            tokens.push((format!("B{b_idx}"), if q.3 == '-' { -1 } else { 1 }));
+            by_contig
+                .entry(r.0.clone())
+                .or_default()
+                .push(PairwiseMafBlock {
+                    ref_start: r.1,
+                    ref_end: r.1 + r.2,
+                    ref_src_size: r.4,
+                    qry_species: query_sp.to_owned(),
+                    qry_contig: q.0.clone(),
+                    qry_start: q.1,
+                    qry_strand: q.3,
+                    qry_src_size: q.4,
+                    ref_seq: r.5.as_bytes().to_vec(),
+                    qry_seq: q.5.as_bytes().to_vec(),
+                });
+        }
+        rows.clear();
+    };
 
     for line in maf_text.lines() {
         if line.is_empty() || line.starts_with("##") {
             continue;
         }
         if line.starts_with("a ") {
-            flush(&mut cur_rows, grid, &mut tokens);
+            flush(&mut cur_rows, by_contig, &mut tokens);
         } else if let Some(rest) = line.strip_prefix("s ") {
             let parts: Vec<&str> = rest.split_whitespace().collect();
             if parts.len() >= 6
@@ -1399,7 +1475,7 @@ fn parse_maf_into_grid(
             }
         }
     }
-    flush(&mut cur_rows, grid, &mut tokens);
+    flush(&mut cur_rows, by_contig, &mut tokens);
 
     let mut sp_dups = std::collections::BTreeSet::new();
     for win in tokens.chunks(12) {
@@ -1416,8 +1492,8 @@ fn parse_maf_into_grid(
     sp_dups
 }
 
-/// Merge multiple pairwise MAF texts anchored on `ref_species` into multi-species MAF v1 +
-/// GFA v1.1 + e-graph paralog tags.
+/// Merge multiple pairwise MAF texts anchored on `ref_species` using exact reference-interval
+/// splitting and base-level threading into multi-species MAF v1 + GFA v1.1 + e-graph paralog tags.
 #[must_use]
 pub fn merge_pairwise_mafs(
     ref_species: &str,
@@ -1426,12 +1502,12 @@ pub fn merge_pairwise_mafs(
 ) -> (String, String, usize, usize) {
     use std::collections::{BTreeMap, BTreeSet};
 
-    let mut grid: MergeGrid = BTreeMap::new();
+    let mut by_contig: BTreeMap<String, Vec<PairwiseMafBlock>> = BTreeMap::new();
     let mut dups_by_species: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let step_bp = bin_bp.max(1);
 
     for (query_sp, maf_text) in pairwise_mafs {
-        let sp_dups = parse_maf_into_grid(ref_species, query_sp, maf_text, step_bp, &mut grid);
+        let sp_dups = parse_pairwise_maf_blocks(query_sp, maf_text, step_bp, &mut by_contig);
         dups_by_species
             .entry(query_sp.clone())
             .or_default()
@@ -1444,35 +1520,73 @@ pub fn merge_pairwise_mafs(
     let mut multi_species_blocks = 0usize;
     let mut prev_seg: Option<String> = None;
 
-    for ((ref_contig, b_idx), sp_map) in grid {
-        total_blocks += 1;
-        if sp_map.len() >= 3 {
-            multi_species_blocks += 1;
-        }
-        let _ = writeln!(maf_out, "a score={}.0", sp_map.len());
-        for (sp, (contig, start, size, strand, src_size, seq)) in &sp_map {
-            let label = if sp == ref_species {
-                contig.clone()
-            } else {
-                format!("{sp}.{contig}")
+    for (ref_contig, blocks) in by_contig {
+        let mut bounds: Vec<usize> = blocks
+            .iter()
+            .flat_map(|b| [b.ref_start, b.ref_end])
+            .collect();
+        bounds.sort_unstable();
+        bounds.dedup();
+
+        for w in bounds.windows(2) {
+            let (lo, hi) = (w[0], w[1]);
+            if lo >= hi {
+                continue;
+            }
+            let mut ref_row_meta: Option<(usize, String)> = None;
+            let mut sp_rows: BTreeMap<String, (String, usize, usize, char, usize, String)> =
+                BTreeMap::new();
+            for blk in &blocks {
+                if sp_rows.contains_key(&blk.qry_species) {
+                    continue;
+                }
+                if let Some((r_sub, q_sub, q_start, q_size, q_src)) =
+                    project_block_interval(blk, lo, hi)
+                {
+                    ref_row_meta.get_or_insert((blk.ref_src_size, r_sub));
+                    sp_rows.insert(
+                        blk.qry_species.clone(),
+                        (
+                            blk.qry_contig.clone(),
+                            q_start,
+                            q_size,
+                            blk.qry_strand,
+                            q_src,
+                            q_sub,
+                        ),
+                    );
+                }
+            }
+            let Some((ref_src_size, ref_sub)) = ref_row_meta else {
+                continue;
             };
+            total_blocks += 1;
+            if sp_rows.len() >= 2 {
+                multi_species_blocks += 1;
+            }
+            let _ = writeln!(maf_out, "a score={}.0", sp_rows.len() + 1);
             let _ = writeln!(
                 maf_out,
-                "s {label} {start} {size} {strand} {src_size} {seq}"
+                "s {ref_contig} {lo} {} + {ref_src_size} {ref_sub}",
+                hi - lo
             );
-        }
-        maf_out.push('\n');
+            for (sp, (qc, qs, qz, st, qsrc, qseq)) in &sp_rows {
+                let _ = writeln!(maf_out, "s {sp}.{qc} {qs} {qz} {st} {qsrc} {qseq}");
+            }
+            maf_out.push('\n');
 
-        let seg_id = format!("ms_{ref_contig}_{b_idx}");
-        let _ = writeln!(
-            gfa_out,
-            "S\t{seg_id}\t*\tLN:i:{step_bp}\tSP:i:{}",
-            sp_map.len()
-        );
-        if let Some(prev) = prev_seg.as_ref() {
-            let _ = writeln!(gfa_out, "L\t{prev}\t+\t{seg_id}\t+\t0M");
+            let seg_id = format!("ms_{ref_contig}_{lo}_{hi}");
+            let _ = writeln!(
+                gfa_out,
+                "S\t{seg_id}\t*\tLN:i:{}\tSP:i:{}",
+                hi - lo,
+                sp_rows.len() + 1
+            );
+            if let Some(prev) = prev_seg.as_ref() {
+                let _ = writeln!(gfa_out, "L\t{prev}\t+\t{seg_id}\t+\t0M");
+            }
+            prev_seg = Some(seg_id);
         }
-        prev_seg = Some(seg_id);
     }
 
     for (sp, dups) in dups_by_species {
@@ -1856,7 +1970,7 @@ mod tests {
     #[test]
     fn resolve_dups_and_merge_pairwise_mafs_work() {
         let maf1 = "##maf version=1\na score=12.0\ns chr1 100 12 + 5000 ACGTACGTACGT\ns q1 10 12 + 5000 ACGTACGTACGT\n\na score=12.0\ns chr1 200 12 + 5000 ACGTACGTACGT\ns q1 200 12 + 5000 ACGTACGTACGT\n";
-        let maf2 = "##maf version=1\na score=12.0\ns chr1 150 12 + 5000 ACGTACGTACGT\ns q2 50 12 - 5000 ACGTACGTACGT\n";
+        let maf2 = "##maf version=1\na score=12.0\ns chr1 105 12 + 5000 CGTACGTACGTA\ns q2 50 12 - 5000 CGTACGTACGTA\n";
         let (merged_maf, merged_gfa, total, multi) = merge_pairwise_mafs(
             "Pf",
             &[
@@ -1865,8 +1979,9 @@ mod tests {
             ],
             1000,
         );
-        assert_eq!(total, 1);
+        assert_eq!(total, 4);
         assert_eq!(multi, 1);
+        assert!(merged_maf.contains("s chr1 105 7 + 5000 CGTACGT"));
         assert!(merged_maf.contains("s Pr.q1"));
         assert!(merged_maf.contains("s Pv.q2"));
         assert!(merged_gfa.contains("# EG:Z:Pf__Pr\tB0"));

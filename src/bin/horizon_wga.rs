@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use horizon_aligner::{
     ContigIndex, align_contig_pair_indexed_with_min_lcb, format_gfa_blocks,
     format_gfa_paralog_tags, format_gfa_summary, format_maf_blocks, prepare_contig_index,
-    resolve_alignment_duplications, shared_seed_count,
+    resolve_alignment_duplications, score_contig_pair_lcb, shared_seed_count,
 };
 use rayon::prelude::*;
 use std::fs;
@@ -50,6 +50,7 @@ struct CliArgs {
     resolve_dups: bool,
     min_shared_seeds: usize,
     min_top_lcb: usize,
+    rbest: bool,
 }
 
 fn parse_args() -> CliArgs {
@@ -60,6 +61,7 @@ fn parse_args() -> CliArgs {
     let mut resolve_dups = false;
     let mut min_shared_seeds = 8usize;
     let mut min_top_lcb = 0usize;
+    let mut rbest = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -86,6 +88,10 @@ fn parse_args() -> CliArgs {
             }
             "--resolve-dups" => {
                 resolve_dups = true;
+                i += 1;
+            }
+            "--rbest" => {
+                rbest = true;
                 i += 1;
             }
             _ => {
@@ -115,7 +121,51 @@ fn parse_args() -> CliArgs {
         resolve_dups,
         min_shared_seeds,
         min_top_lcb,
+        rbest,
     }
+}
+
+fn compute_rbest_mask(
+    target_idx: &[(String, ContigIndex)],
+    query_idx: &[(String, ContigIndex)],
+    min_shared_seeds: usize,
+) -> Vec<Vec<bool>> {
+    let scores: Vec<((usize, usize), (usize, usize))> = (0..target_idx.len())
+        .into_par_iter()
+        .flat_map(|x_i| {
+            (0..query_idx.len()).into_par_iter().map(move |y_i| {
+                let seeds = shared_seed_count(&target_idx[x_i].1, &query_idx[y_i].1);
+                let lcb = if seeds >= min_shared_seeds {
+                    score_contig_pair_lcb(&target_idx[x_i].1, &query_idx[y_i].1)
+                } else {
+                    0
+                };
+                ((x_i, y_i), (lcb, seeds))
+            })
+        })
+        .collect();
+    let mut best_y: Vec<(usize, (usize, usize))> = vec![(0, (0, 0)); target_idx.len()];
+    let mut best_x: Vec<(usize, (usize, usize))> = vec![(0, (0, 0)); query_idx.len()];
+    for &((x_i, y_i), sc) in &scores {
+        if sc > best_y[x_i].1 {
+            best_y[x_i] = (y_i, sc);
+        }
+        if sc > best_x[y_i].1 {
+            best_x[y_i] = (x_i, sc);
+        }
+    }
+    let mut mask = vec![vec![false; query_idx.len()]; target_idx.len()];
+    for (x_i, &(y_i, sc)) in best_y.iter().enumerate() {
+        if sc.1 >= min_shared_seeds {
+            mask[x_i][y_i] = true;
+        }
+    }
+    for (y_i, &(x_i, sc)) in best_x.iter().enumerate() {
+        if sc.1 >= min_shared_seeds {
+            mask[x_i][y_i] = true;
+        }
+    }
+    mask
 }
 
 fn main() -> Result<()> {
@@ -140,8 +190,18 @@ fn main() -> Result<()> {
     let mut maf_buf = String::new();
     let mut gfa_buf = String::new();
 
+    let allowed = cli
+        .rbest
+        .then(|| compute_rbest_mask(&idx_x, &idx_y, cli.min_shared_seeds));
+
     for (x_i, (nx, ix)) in idx_x.iter().enumerate() {
         for (y_i, (ny, iy)) in idx_y.iter().enumerate() {
+            if let Some(mask) = allowed.as_ref()
+                && !mask[x_i][y_i]
+            {
+                pruned_pairs += 1;
+                continue;
+            }
             if shared_seed_count(ix, iy) < cli.min_shared_seeds {
                 pruned_pairs += 1;
                 continue;
