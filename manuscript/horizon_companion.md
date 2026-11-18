@@ -3,6 +3,7 @@ title: "Horizon Technical Companion: Data Representations, Mathematical Foundati
 author:
   - "Richard Burhans (ORCID 0009-0006-5949-0958)"
 date: "2026-11-18"
+bibliography: references.bib
 ---
 
 # 1. Purpose and Scope
@@ -132,3 +133,16 @@ Consider a 20 bp *Plasmodium*-like pair with a conserved `15%`-GC left flank, a 
    - On the conserved prefix (`10 bp`), matching `A`/`T` under $P(W) \approx 0.91$ still yields $\Delta L \approx +14.2$ bits ($\ge \hat{\lambda} = 10.0$ bits) with column posteriors $P(M_{ij}) > 0.95$.
    - Inside the `6 bp` gap (`GGGGCC` vs. `CCTTTT`), 0 of 6 bases match, giving $\Delta L \approx -6.4$ bits ($< 10.0$ bits) and $P(M_{ij}) < 0.15$.
 4. **Conformal Gate & Output:** Horizon emits the aligned `MAF` blocks for `0..10` and `16..20`, and isolates `10..16` as an explicit `# HB:Z:` **Horizon Bubble** in the `GFA` graph rather than forcing 6 mismatched bases into a false alignment.
+
+---
+
+# 5. References {.unnumbered}
+
+Full BibTeX entries for all cited works are maintained in [references.bib](references.bib).
+
+- **Adams RP & MacKay DJC** (2007). Bayesian online changepoint detection. *arXiv:0710.3742*.
+- **Allison L, Wallace CS, Yee CN** (1992). Finite-state models in the alignment of macromolecules. *Journal of Molecular Evolution*, 35(1):77–89.
+- **Angelopoulos AN, Bates S, Fisch A, Lei L, Schuster T** (2024). Conformal risk control. *ICLR 2024* (`arXiv:2208.02814`).
+- **Foster JN, Greenwald MB, Moore JT, Pierce BC, Schmitt A** (2007). Combinators for bidirectional tree transformations: A linguistic approach to the view-update problem. *ACM TOPLAS*, 29(3):17.
+- **Hickey G, Paten B, Earl D, Zerbino D, Haussler D** (2013). HAL: a hierarchical format for storing and analyzing multiple genome alignments. *Bioinformatics*, 29(10):1341–1342.
+- **Willsey M, Nandi C, Wang YR, Flatt O, Tatlock Z, Panchekha P** (2021). egg: Fast and extensible equality saturation. *PACMPL*, 5(POPL):1–29.

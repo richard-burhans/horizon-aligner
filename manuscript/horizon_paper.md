@@ -3,6 +3,7 @@ title: "Horizon: Information-Theoretic Whole-Genome Alignment with Conformal Epi
 author:
   - "Richard Burhans (ORCID 0009-0006-5949-0958)"
 date: "2026-11-18"
+bibliography: references.bib
 ---
 
 # Abstract {.unnumbered}
@@ -91,6 +92,8 @@ Horizon demonstrates that replacing fixed substitution heuristics with online co
 Three limitations define our immediate roadmap. First, while de novo precision remains high (`84–99%`) across close and medium divergences, recall drops to `34–45%` across distant Laurasiatherian mammals and coronaviruses, and precision fell to `5.0%` when aligning a `95 kb` crocodilian outgroup slice against a `1.35 Mb` chicken contig without `--rbest` filtering. Expanding `horizon_guide` with iterative ancestral consensus refinement and tighter LCB specificity filters is expected to close this distant-recall gap. Second, our pure-Rust `HAL` reader currently parses HDF5 `v0` metadata, `zlib`-compressed chunks, and all five `HAL` segment arrays in unit tests, and next requires streaming `Seek`-based file I/O to extract regions directly from multi-hundred-gigabyte alignments such as `363-avian-2020.hal` and `241-mammalian-2020v2.hal`. Third, integrating `horizon_wga` and `horizon_merge` into public Galaxy workflows will allow broad evaluation across pathogen and vertebrate pangenome panels with full provenance.
 
 # References {.unnumbered}
+
+Full BibTeX entries for all cited works are maintained in [references.bib](references.bib).
 
 - **Adams RP & MacKay DJC** (2007). Bayesian online changepoint detection. *arXiv:0710.3742*.
 - **Allison L, Wallace CS, Yee CN** (1992). Finite-state models in the alignment of macromolecules. *Journal of Molecular Evolution*, 35:77–89.
