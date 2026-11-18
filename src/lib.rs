@@ -1246,6 +1246,137 @@ fn find_w10_1transition_hits<S: std::hash::BuildHasher>(
     )
 }
 
+/// Promote 2-hit gapped diagonal pairs (`<= max_gap` bp apart, `<= max_ddiag` bp indel shift)
+/// into candidate LCBs for banded MDL DP.
+fn append_two_hit_diagonal_lcbs(
+    target: &mut LcbList,
+    hits: &[(usize, usize)],
+    max_gap: usize,
+    max_ddiag: usize,
+) {
+    if hits.len() < 2 {
+        return;
+    }
+    let mut sorted = hits.to_vec();
+    sorted.sort_unstable();
+    sorted.dedup();
+    let mut promoted: Vec<Vec<(usize, usize)>> = Vec::new();
+    for i in 0..sorted.len() {
+        let (x1, y1) = sorted[i];
+        let mut j = i + 1;
+        while j < sorted.len() && sorted[j].0 - x1 <= max_gap {
+            let (x2, y2) = sorted[j];
+            if x2 > x1 && y2 > y1 && y2 - y1 <= max_gap {
+                let d1 = x1.cast_signed() - y1.cast_signed();
+                let d2 = x2.cast_signed() - y2.cast_signed();
+                if (d1 - d2).unsigned_abs() <= max_ddiag {
+                    promoted.push(vec![(x1, y1), (x2, y2)]);
+                    break;
+                }
+            }
+            j += 1;
+        }
+    }
+    for lcb in promoted {
+        let (sx, ex) = (lcb[0].0, lcb[lcb.len() - 1].0);
+        if !target
+            .iter()
+            .any(|c| sx <= c[c.len() - 1].0 && ex >= c[0].0)
+        {
+            target.push(lcb);
+        }
+    }
+}
+
+fn codon_to_aa(b0: u8, b1: u8, b2: u8) -> Option<u8> {
+    // Standard genetic code indexed by (A=0, C=1, G=2, T=3): 0..20 = amino acids, 255 = stop.
+    const TABLE: [u8; 64] = [
+        // AAA..ATT
+        8, 11, 8, 11, 16, 16, 16, 16, 14, 15, 14, 15, 7, 7, 10, 7, // CAA..CTT
+        13, 6, 13, 6, 12, 12, 12, 12, 14, 14, 14, 14, 9, 9, 9, 9, // GAA..GTT
+        3, 2, 3, 2, 0, 0, 0, 0, 5, 5, 5, 5, 17, 17, 17, 17, // TAA..TTT
+        255, 19, 255, 19, 15, 15, 15, 15, 255, 1, 18, 1, 9, 4, 9, 4,
+    ];
+    let (Some(i0), Some(i1), Some(i2)) = (base_to_idx(b0), base_to_idx(b1), base_to_idx(b2)) else {
+        return None;
+    };
+    let aa = TABLE[(i0 << 4) | (i1 << 2) | i2];
+    if aa == 255 { None } else { Some(aa) }
+}
+
+fn index_aa5_frames(seq: &[u8], max_occ: usize, skip_softmasked: bool) -> HashMap<u32, Vec<usize>> {
+    let mut map: HashMap<u32, Vec<usize>> = HashMap::new();
+    let mut counts: HashMap<u32, usize> = HashMap::new();
+    for frame in 0..3 {
+        if seq.len() < frame + 15 {
+            continue;
+        }
+        let mut pos = frame;
+        while pos + 15 <= seq.len() {
+            let mut key = 0_u32;
+            let mut valid = true;
+            for c in 0..5 {
+                let s = &seq[pos + c * 3..pos + c * 3 + 3];
+                if skip_softmasked && s.iter().any(u8::is_ascii_lowercase) {
+                    valid = false;
+                    break;
+                }
+                let Some(aa) = codon_to_aa(s[0], s[1], s[2]) else {
+                    valid = false;
+                    break;
+                };
+                key = key * 20 + u32::from(aa);
+            }
+            if valid {
+                let cnt = counts.entry(key).or_insert(0);
+                *cnt += 1;
+                if *cnt <= max_occ {
+                    map.entry(key).or_default().push(pos);
+                } else {
+                    map.remove(&key);
+                }
+            }
+            pos += 3;
+        }
+    }
+    map
+}
+
+/// Find 2-hit translated amino-acid `5-mer` (15 bp) hits across all reading frames.
+fn find_translated_aa5_hits(
+    seq_x: &[u8],
+    seq_y: &[u8],
+    max_occ: usize,
+    skip_softmasked: bool,
+) -> AnchorPairs {
+    let ix = index_aa5_frames(seq_x, max_occ, skip_softmasked);
+    let iy = index_aa5_frames(seq_y, max_occ, skip_softmasked);
+    let mut hits = Vec::new();
+    for (k, xs) in &ix {
+        if let Some(ys) = iy.get(k) {
+            for &px in xs {
+                for &py in ys {
+                    hits.push((px, py));
+                }
+            }
+        }
+    }
+    hits
+}
+
+/// Find 2-hit translated amino-acid `5-mer` (15 bp) anchors across all reading frames.
+#[allow(dead_code)]
+fn append_translated_aa5_lcbs(
+    target: &mut LcbList,
+    seq_x: &[u8],
+    seq_y: &[u8],
+    max_occ: usize,
+    skip_softmasked: bool,
+) {
+    let hits = find_translated_aa5_hits(seq_x, seq_y, max_occ, skip_softmasked);
+    append_two_hit_diagonal_lcbs(target, &hits, 120, 12);
+}
+
 #[inline]
 fn hsp_pair_score(a: u8, b: u8) -> i32 {
     let (Some(ia), Some(ib)) = (base_to_idx(a), base_to_idx(b)) else {
@@ -1558,11 +1689,17 @@ pub fn align_contig_pair_with_config(
         append_hsp_gated_lastz12_lcbs(&mut combined_fwd, seq_x, seq_y, &hits_ry_fwd, 210);
         append_hsp_gated_lastz12_lcbs(&mut combined_rc, seq_x, seq_y_rc, &hits_ry_rc, 210);
 
-        // HSP-gated w=10 (10-of-14) 1-transition seeding reusing iy10_fwd/iy10_rc for distant blocks.
+        // HSP-gated w=10 (10-of-14) 1-transition seeding.
         let (hits_w10_fwd, hits_w10_rc) =
             find_w10_1transition_hits(seq_x, &iy10_fwd, &iy10_rc, cfg.skip_softmasked);
         append_hsp_gated_lastz12_lcbs(&mut combined_fwd, seq_x, seq_y, &hits_w10_fwd, 200);
         append_hsp_gated_lastz12_lcbs(&mut combined_rc, seq_x, seq_y_rc, &hits_w10_rc, 200);
+
+        // HSP-gated 6-frame translated 5-mer amino-acid seeding for divergent coding homologs.
+        let aa_fwd = find_translated_aa5_hits(seq_x, seq_y, 2, cfg.skip_softmasked);
+        let aa_rc = find_translated_aa5_hits(seq_x, seq_y_rc, 2, cfg.skip_softmasked);
+        append_hsp_gated_lastz12_lcbs(&mut combined_fwd, seq_x, seq_y, &aa_fwd, 180);
+        append_hsp_gated_lastz12_lcbs(&mut combined_rc, seq_x, seq_y_rc, &aa_rc, 180);
     }
 
     // Transition-tolerant R/Y (1-bit purine/pyrimidine) fallback for divergent homologs.
@@ -2730,5 +2867,18 @@ mod tests {
         assert_eq!(total, 1);
         assert!(merged_maf.contains("s mm10.q_best"));
         assert!(!merged_maf.contains("s mm10.q_weak"));
+    }
+
+    #[test]
+    fn translated_aa5_recovers_synonymous_divergent_coding_pair() {
+        // Two coding sequences encoding the same 12-aa peptide with synonymous 3rd-codon swaps.
+        let sx = b"GCTACTGGTAAAGTTGACTTCCCAATGCAACGTTGG";
+        let sy = b"GCCACAGGCAAAGTCGATTTTCCTATGCAGAGGTGG";
+        let mut lcbs = Vec::new();
+        append_translated_aa5_lcbs(&mut lcbs, sx, sy, 2, false);
+        assert!(
+            !lcbs.is_empty(),
+            "expected translated 5-mer AA LCB for synonymous coding pair"
+        );
     }
 }

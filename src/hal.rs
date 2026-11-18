@@ -300,6 +300,77 @@ pub fn inspect_hal_file(path: &std::path::Path) -> std::io::Result<Option<Hdf5Su
     Ok(read_hdf5_superblock(&buf[..n]))
 }
 
+/// Summary of an HDF5 object header (v1 or v2) parsed from a `.hal` file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hdf5ObjectHeader {
+    /// Object header format version (`1` or `2`).
+    pub version: u8,
+    /// Message type IDs found in the header prefix (e.g., `0x0011` `SymbolTable`, `0x000C` Attribute).
+    pub message_types: Vec<u16>,
+}
+
+/// Parse an HDF5 v1 or v2 object header starting at `slice` (positioned at `root_group_addr`).
+#[must_use]
+pub fn read_hdf5_object_header(slice: &[u8]) -> Option<Hdf5ObjectHeader> {
+    if slice.len() < 16 {
+        return None;
+    }
+    if slice.starts_with(b"OHDR") {
+        // HDF5 Object Header v2
+        let flags = slice[5];
+        let mut pos = 6usize;
+        if flags & 0x20 != 0 {
+            pos += 16; // access, mod, change, birth times (4 x u32)
+        }
+        if flags & 0x10 != 0 {
+            pos += 4; // max_compact, min_dense
+        }
+        let chunk_sz_bytes = 1usize << (flags & 0x03);
+        if pos + chunk_sz_bytes > slice.len() {
+            return None;
+        }
+        let mut chunk_sz = 0usize;
+        for b in 0..chunk_sz_bytes {
+            chunk_sz |= usize::from(slice[pos + b]) << (8 * b);
+        }
+        pos += chunk_sz_bytes;
+        let end = (pos + chunk_sz).min(slice.len());
+        let mut msg_types = Vec::new();
+        while pos + 4 <= end {
+            let mtype = u16::from(slice[pos]);
+            let msize = usize::from(u16::from_le_bytes([slice[pos + 1], slice[pos + 2]]));
+            msg_types.push(mtype);
+            pos += 4 + msize;
+        }
+        return Some(Hdf5ObjectHeader {
+            version: 2,
+            message_types: msg_types,
+        });
+    }
+    if slice[0] == 1 {
+        // HDF5 Object Header v1
+        let num_msgs = usize::from(u16::from_le_bytes([slice[2], slice[3]]));
+        let hdr_size = usize::try_from(u32::from_le_bytes([
+            slice[8], slice[9], slice[10], slice[11],
+        ]))
+        .ok()?;
+        let mut pos = 16usize;
+        let end = (16 + hdr_size).min(slice.len());
+        let mut msg_types = Vec::new();
+        while msg_types.len() < num_msgs && pos + 8 <= end {
+            let mtype = u16::from_le_bytes([slice[pos], slice[pos + 1]]);
+            let msize = usize::from(u16::from_le_bytes([slice[pos + 2], slice[pos + 3]]));
+            msg_types.push(mtype);
+            pos += 8 + msize;
+        }
+        return Some(Hdf5ObjectHeader {
+            version: 1,
+            message_types: msg_types,
+        });
+    }
+    None
+}
+
 const fn decode_hal_nibble(nibble: u8) -> u8 {
     match nibble & 0x0f {
         0 => b'a',
@@ -380,5 +451,16 @@ mod tests {
                 root_group_addr: None,
             })
         );
+
+        let mut ohdr = vec![0u8; 20];
+        ohdr[0..4].copy_from_slice(b"OHDR");
+        ohdr[4] = 2;
+        ohdr[5] = 0; // 1-byte chunk size
+        ohdr[6] = 6; // chunk size = 6
+        ohdr[7] = 0x0A; // GroupInfo message
+        ohdr[8..10].copy_from_slice(&2_u16.to_le_bytes());
+        let parsed = read_hdf5_object_header(&ohdr).expect("valid OHDR");
+        assert_eq!(parsed.version, 2);
+        assert_eq!(parsed.message_types, vec![0x0A]);
     }
 }

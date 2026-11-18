@@ -212,6 +212,7 @@ fn build_mid_to_hinge_map(
 
 /// Project `src -> mid -> dst` via `hinge_to_mid_maf` and `mid_to_dst_maf`, emitting rescued
 /// `hinge <-> dst` MAF blocks for hinge positions not already covered in `dst_direct_maf`.
+#[allow(clippy::too_many_arguments)]
 fn rescue_transitive_maf(
     hinge_contigs: &ContigList,
     mid_contigs: &ContigList,
@@ -219,6 +220,8 @@ fn rescue_transitive_maf(
     mid_to_dst_maf: &str,
     dst_direct_maf: &str,
     mid_is_first_in_pair: bool,
+    min_run_len: usize,
+    min_ident_pct: usize,
 ) -> String {
     let hinge_idx_by_name: HashMap<&str, usize> = hinge_contigs
         .iter()
@@ -313,11 +316,14 @@ fn rescue_transitive_maf(
             d_src_size,
             dst_rel_rev,
             pts,
+            min_run_len,
+            min_ident_pct,
         );
     }
     out
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_rescued_runs(
     out: &mut String,
     h_name: &str,
@@ -326,6 +332,8 @@ fn emit_rescued_runs(
     d_src_size: usize,
     dst_rel_rev: bool,
     mut pts: Vec<(usize, usize, u8, u8)>,
+    min_run_len: usize,
+    min_ident_pct: usize,
 ) {
     pts.sort_unstable_by_key(|p| p.0);
     pts.dedup_by_key(|p| p.0);
@@ -352,7 +360,7 @@ fn emit_rescued_runs(
             .iter()
             .filter(|p| p.2.eq_ignore_ascii_case(&p.3))
             .count();
-        if run.len() >= 12 && matches * 10 >= run.len() * 6 {
+        if run.len() >= min_run_len && matches * 100 >= run.len() * min_ident_pct {
             let h_start = run[0].0;
             let size = run.len();
             let d_min = run.iter().map(|p| p.1).min().unwrap_or(0);
@@ -671,6 +679,8 @@ fn main() -> Result<()> {
                     &sister_maf,
                     &pairwise_mafs[pw_j].1,
                     true,
+                    12,
+                    60,
                 );
                 if !rescued_j.is_empty() {
                     rescues.push((pw_j, rescued_j));
@@ -682,6 +692,8 @@ fn main() -> Result<()> {
                     &sister_maf,
                     &pairwise_mafs[pw_i].1,
                     false,
+                    12,
+                    60,
                 );
                 if !rescued_i.is_empty() {
                     rescues.push((pw_i, rescued_i));
@@ -711,6 +723,8 @@ fn main() -> Result<()> {
                         &anc_left_maf,
                         &pairwise_mafs[pw_i].1,
                         true,
+                        15,
+                        70,
                     );
                     if !anc_rescued_i.is_empty() {
                         rescues.push((pw_i, anc_rescued_i));
@@ -722,6 +736,8 @@ fn main() -> Result<()> {
                         &anc_right_maf,
                         &pairwise_mafs[pw_j].1,
                         true,
+                        15,
+                        70,
                     );
                     if !anc_rescued_j.is_empty() {
                         rescues.push((pw_j, anc_rescued_j));
