@@ -1313,7 +1313,7 @@ fn append_hsp_gated_lastz12_lcbs(
         if let Some((lx, ly, rx, ry, sc)) = extend_ungapped_hsp(seq_x, seq_y, px, py, min_hsp_score)
         {
             filtered_hits.push((px, py));
-            if sc >= min_hsp_score + 60 && rx >= lx + 20 && ry >= ly + 20 {
+            if sc >= min_hsp_score + 15 && rx >= lx + 18 && ry >= ly + 18 {
                 strong_hsps.push(vec![(lx, ly), (rx - 12, ry - 12)]);
             }
         }
@@ -1569,6 +1569,17 @@ pub fn align_contig_pair_with_config(
     ] {
         // Inter-LCB sparse-region rescue using w=10 spaced seeds (with 2-hit w=9 fallback).
         let mut rescued_inter = Vec::new();
+        if lcb_list.is_empty() && seq_x.len() <= 2500 && y_work.len() <= 2500 {
+            let sub10 = local_w9_subchain(seq_x, y_work, 0, 0, MASK_W10, 200, 1800)?;
+            if sub10.len() >= 3 {
+                rescued_inter.push(sub10);
+            } else {
+                let sub9 = local_w9_subchain(seq_x, y_work, 0, 0, MASK_W9, 120, 1200)?;
+                if sub9.len() >= 4 {
+                    rescued_inter.push(sub9);
+                }
+            }
+        }
         for w in lcb_list.windows(2) {
             let x0 = w[0][w[0].len() - 1].0 + span;
             let y0 = w[0][w[0].len() - 1].1 + span;
@@ -2144,27 +2155,32 @@ pub fn merge_pairwise_mafs(
 
             let mut ref_src_size_opt: Option<usize> = None;
             let mut ref_bases_opt: Option<Vec<u8>> = None;
-            let mut sp_seen: BTreeSet<String> = BTreeSet::new();
-            let mut sp_proj: Vec<(String, String, char, ProjectedInterval)> = Vec::new();
+            // Net overlapping alignments per query species by highest match score in [lo, hi).
+            let mut best_by_sp: BTreeMap<String, (isize, String, char, ProjectedInterval)> =
+                BTreeMap::new();
             for &idx in &active {
                 let blk = &blocks[idx];
-                if sp_seen.contains(&blk.qry_species) {
-                    continue;
-                }
                 if let Some(proj) = project_block_interval(blk, lo, hi) {
-                    sp_seen.insert(blk.qry_species.clone());
                     ref_src_size_opt.get_or_insert(blk.ref_src_size);
                     if ref_bases_opt.is_none() {
                         ref_bases_opt = Some(proj.ref_bases.clone());
                     }
-                    sp_proj.push((
-                        blk.qry_species.clone(),
-                        blk.qry_contig.clone(),
-                        blk.qry_strand,
-                        proj,
-                    ));
+                    let score = interval_match_score(&proj);
+                    match best_by_sp.get(&blk.qry_species) {
+                        Some((best_sc, _, _, _)) if *best_sc >= score => {}
+                        _ => {
+                            best_by_sp.insert(
+                                blk.qry_species.clone(),
+                                (score, blk.qry_contig.clone(), blk.qry_strand, proj),
+                            );
+                        }
+                    }
                 }
             }
+            let sp_proj: Vec<(String, String, char, ProjectedInterval)> = best_by_sp
+                .into_iter()
+                .map(|(sp, (_, ctg, strand, proj))| (sp, ctg, strand, proj))
+                .collect();
             let (Some(ref_src_size), Some(ref_bases)) = (ref_src_size_opt, ref_bases_opt) else {
                 continue;
             };
@@ -2195,6 +2211,20 @@ pub fn merge_pairwise_mafs(
     }
 
     (maf_out, gfa_out, total_blocks, multi_species_blocks)
+}
+
+fn interval_match_score(proj: &ProjectedInterval) -> isize {
+    let mut score = 0isize;
+    for (&rb, &qb) in proj.ref_bases.iter().zip(&proj.qry_bases) {
+        if rb != b'-' && qb != b'-' {
+            if rb.eq_ignore_ascii_case(&qb) {
+                score += 2;
+            } else {
+                score -= 1;
+            }
+        }
+    }
+    score
 }
 
 /// Partition sorted aligned pairs into colinear runs of at least 12 bases.
@@ -2649,5 +2679,19 @@ mod tests {
         assert!(!fwd1.contains(&(0, 0)), "1-transition should miss (0, 0)");
         let (fwd2, _) = find_lastz12_2transition_hits(sx, &iy_fwd, &iy_rc, false);
         assert!(fwd2.contains(&(0, 0)), "expected (0, 0) in {fwd2:?}");
+    }
+
+    #[test]
+    fn merge_nets_best_scoring_overlapping_block() {
+        let weak =
+            "##maf version=1\na score=1.0\ns chr1 0 6 + 100 AAAAAA\ns q_weak 0 6 + 100 TTTTTT\n";
+        let strong =
+            "##maf version=1\na score=6.0\ns chr1 0 6 + 100 AAAAAA\ns q_best 0 6 + 100 AAAAAA\n";
+        let combined = format!("{weak}\n{strong}");
+        let (merged_maf, _, total, _) =
+            merge_pairwise_mafs("hg38", &[("mm10".to_owned(), combined)], 1000);
+        assert_eq!(total, 1);
+        assert!(merged_maf.contains("s mm10.q_best"));
+        assert!(!merged_maf.contains("s mm10.q_weak"));
     }
 }

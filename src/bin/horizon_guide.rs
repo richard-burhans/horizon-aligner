@@ -348,7 +348,7 @@ fn emit_rescued_runs(
             }
         }
         let run = &pts[run_start..run_end];
-        if run.len() >= 12 {
+        if run.len() >= 8 {
             let h_start = run[0].0;
             let size = run.len();
             let d_min = run.iter().map(|p| p.1).min().unwrap_or(0);
@@ -370,6 +370,183 @@ fn emit_rescued_runs(
         }
         run_start = run_end;
     }
+}
+
+struct AncRun {
+    anc_start: usize,
+    left_src: String,
+    left_start: usize,
+    left_ss: usize,
+    left_strand: char,
+    left_seq: Vec<u8>,
+    right_src: String,
+    right_start: usize,
+    right_ss: usize,
+    right_strand: char,
+    right_seq: Vec<u8>,
+}
+
+fn format_ancestral_maf(anc_seq: &[u8], runs: Vec<AncRun>) -> (String, String) {
+    let anc_len = anc_seq.len();
+    let mut anc_left = String::from("##maf version=1\n");
+    let mut anc_right = String::from("##maf version=1\n");
+    for r in runs {
+        let sz = r.left_seq.len();
+        let a_str = String::from_utf8_lossy(&anc_seq[r.anc_start..r.anc_start + sz]);
+        let l_aln = String::from_utf8_lossy(&r.left_seq);
+        let r_aln = String::from_utf8_lossy(&r.right_seq);
+        let _ = writeln!(anc_left, "a score={sz}.0");
+        let _ = writeln!(
+            anc_left,
+            "s anc_consensus {} {sz} + {anc_len} {a_str}",
+            r.anc_start
+        );
+        let _ = writeln!(
+            anc_left,
+            "s {} {} {sz} {} {} {l_aln}\n",
+            r.left_src, r.left_start, r.left_strand, r.left_ss
+        );
+        let _ = writeln!(anc_right, "a score={sz}.0");
+        let _ = writeln!(
+            anc_right,
+            "s anc_consensus {} {sz} + {anc_len} {a_str}",
+            r.anc_start
+        );
+        let _ = writeln!(
+            anc_right,
+            "s {} {} {sz} {} {} {r_aln}\n",
+            r.right_src, r.right_start, r.right_strand, r.right_ss
+        );
+    }
+    (anc_left, anc_right)
+}
+
+#[derive(Default)]
+struct AncRunAccum {
+    cur_anc: Vec<u8>,
+    left_bases: Vec<u8>,
+    right_bases: Vec<u8>,
+    left_pos: Vec<usize>,
+    right_pos: Vec<usize>,
+}
+
+impl AncRunAccum {
+    fn flush(
+        &mut self,
+        r_left: &MafRow,
+        r_right: &MafRow,
+        anc_seq: &mut Vec<u8>,
+        runs: &mut Vec<AncRun>,
+    ) {
+        if self.cur_anc.len() >= 12 {
+            if !anc_seq.is_empty() {
+                anc_seq.extend_from_slice(&[b'N'; 40]);
+            }
+            let anc_start = anc_seq.len();
+            anc_seq.extend_from_slice(&self.cur_anc);
+            let l_min = *self.left_pos.iter().min().unwrap_or(&0);
+            let l_max = *self.left_pos.iter().max().unwrap_or(&0);
+            let left_start = if r_left.strand == '-' {
+                r_left.src_size - 1 - l_max
+            } else {
+                l_min
+            };
+            let r_min = *self.right_pos.iter().min().unwrap_or(&0);
+            let r_max = *self.right_pos.iter().max().unwrap_or(&0);
+            let right_start = if r_right.strand == '-' {
+                r_right.src_size - 1 - r_max
+            } else {
+                r_min
+            };
+            runs.push(AncRun {
+                anc_start,
+                left_src: r_left.src.clone(),
+                left_start,
+                left_ss: r_left.src_size,
+                left_strand: r_left.strand,
+                left_seq: std::mem::take(&mut self.left_bases),
+                right_src: r_right.src.clone(),
+                right_start,
+                right_ss: r_right.src_size,
+                right_strand: r_right.strand,
+                right_seq: std::mem::take(&mut self.right_bases),
+            });
+        }
+        self.cur_anc.clear();
+        self.left_bases.clear();
+        self.right_bases.clear();
+        self.left_pos.clear();
+        self.right_pos.clear();
+    }
+}
+
+fn append_ancestral_runs_for_block(
+    r_left: &MafRow,
+    r_right: &MafRow,
+    anc_seq: &mut Vec<u8>,
+    runs: &mut Vec<AncRun>,
+    flip: &mut bool,
+) {
+    let mut lk = 0usize;
+    let mut rk = 0usize;
+    let mut acc = AncRunAccum::default();
+
+    for (lb, rb) in r_left.seq.bytes().zip(r_right.seq.bytes()) {
+        if lb != b'-' && rb != b'-' {
+            let lp = fwd_pos(r_left, lk);
+            let rp = fwd_pos(r_right, rk);
+            let lb_fwd = if r_left.strand == '-' {
+                complement_base(lb)
+            } else {
+                lb
+            };
+            let rb_fwd = if r_right.strand == '-' {
+                complement_base(rb)
+            } else {
+                rb
+            };
+            let consensus = if lb_fwd.eq_ignore_ascii_case(&rb_fwd) {
+                lb_fwd
+            } else {
+                *flip = !*flip;
+                if *flip { lb_fwd } else { rb_fwd }
+            };
+            acc.cur_anc.push(consensus);
+            acc.left_bases.push(lb);
+            acc.right_bases.push(rb);
+            acc.left_pos.push(lp);
+            acc.right_pos.push(rp);
+        } else {
+            acc.flush(r_left, r_right, anc_seq, runs);
+        }
+        if lb != b'-' {
+            lk += 1;
+        }
+        if rb != b'-' {
+            rk += 1;
+        }
+    }
+    acc.flush(r_left, r_right, anc_seq, runs);
+}
+
+/// Build a single concatenated ancestral consensus contig from ungapped `i <-> j` runs in
+/// `sister_maf`, together with `anc <-> i` and `anc <-> j` MAF strings for `rescue_transitive_maf`.
+fn build_ancestral_bridge(sister_maf: &str) -> (ContigList, String, String) {
+    let mut anc_seq: Vec<u8> = Vec::new();
+    let mut runs: Vec<AncRun> = Vec::new();
+    let mut flip = false;
+
+    for (r_left, r_right) in parse_two_row_maf_blocks(sister_maf) {
+        append_ancestral_runs_for_block(&r_left, &r_right, &mut anc_seq, &mut runs, &mut flip);
+    }
+
+    let (anc_left, anc_right) = format_ancestral_maf(&anc_seq, runs);
+    let anc_contigs = if anc_seq.is_empty() {
+        Vec::new()
+    } else {
+        vec![("anc_consensus".to_owned(), anc_seq)]
+    };
+    (anc_contigs, anc_left, anc_right)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -503,6 +680,47 @@ fn main() -> Result<()> {
                 );
                 if !rescued_i.is_empty() {
                     rescues.push((pw_i, rescued_i));
+                }
+
+                // True ancestral consensus bridge: align hinge <-> anc(i, j) and project onto i & j.
+                let (anc_contigs, anc_left_maf, anc_right_maf) =
+                    build_ancestral_bridge(&sister_maf);
+                if !anc_contigs.is_empty() {
+                    let anc_indices: Vec<(String, ContigIndex)> = anc_contigs
+                        .iter()
+                        .map(|(n, s)| {
+                            Ok((n.clone(), prepare_contig_index_opts(s, respect_softmask)?))
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    let (hinge_to_anc_maf, _) = align_species_pair(
+                        hinge_contigs,
+                        hinge_indices,
+                        &anc_contigs,
+                        &anc_indices,
+                        &cfg,
+                    )?;
+                    let anc_rescued_i = rescue_transitive_maf(
+                        hinge_contigs,
+                        &anc_contigs,
+                        &hinge_to_anc_maf,
+                        &anc_left_maf,
+                        &pairwise_mafs[pw_i].1,
+                        true,
+                    );
+                    if !anc_rescued_i.is_empty() {
+                        rescues.push((pw_i, anc_rescued_i));
+                    }
+                    let anc_rescued_j = rescue_transitive_maf(
+                        hinge_contigs,
+                        &anc_contigs,
+                        &hinge_to_anc_maf,
+                        &anc_right_maf,
+                        &pairwise_mafs[pw_j].1,
+                        true,
+                    );
+                    if !anc_rescued_j.is_empty() {
+                        rescues.push((pw_j, anc_rescued_j));
+                    }
                 }
             }
         }
