@@ -467,16 +467,50 @@ fn build_ancestral_consensus_contigs(
         .collect()
 }
 
-fn remap_consensus_maf_to_hinge(hinge_contigs: &ContigList, cons_maf: &str) -> String {
+fn remap_consensus_maf_to_hinge(
+    hinge_contigs: &ContigList,
+    cons_maf: &str,
+    existing_maf: &str,
+) -> String {
     let ctg_map: HashMap<&str, &[u8]> = hinge_contigs
         .iter()
         .map(|(n, s)| (n.as_str(), s.as_slice()))
         .collect();
+    let mut covered_by_contig: HashMap<String, Vec<(usize, usize)>> = HashMap::new();
+    for (r0, _) in parse_two_row_maf_blocks(existing_maf) {
+        if r0.strand != '+' {
+            continue;
+        }
+        let r0_size = r0.seq.bytes().filter(|&b| b != b'-').count();
+        if r0_size > 0 {
+            covered_by_contig
+                .entry(r0.src)
+                .or_default()
+                .push((r0.start, r0.start + r0_size));
+        }
+    }
     let mut out = String::new();
     for (r0, r1) in parse_two_row_maf_blocks(cons_maf) {
         let Some(&ref_seq) = ctg_map.get(r0.src.as_str()) else {
             continue;
         };
+        let r0_size = r0.seq.bytes().filter(|&b| b != b'-').count();
+        if r0_size == 0 {
+            continue;
+        }
+        let s0 = r0.start;
+        let e0 = s0 + r0_size;
+        if let Some(spans) = covered_by_contig.get(&r0.src) {
+            let mut ov = 0usize;
+            for &(a, b) in spans {
+                if a < e0 && b > s0 {
+                    ov += b.min(e0) - a.max(s0);
+                }
+            }
+            if ov * 10 >= r0_size * 9 {
+                continue;
+            }
+        }
         let mut remapped_r0 = String::with_capacity(r0.seq.len());
         let mut rp = r0.start;
         for ch in r0.seq.bytes() {
@@ -488,8 +522,11 @@ fn remap_consensus_maf_to_hinge(hinge_contigs: &ContigList, cons_maf: &str) -> S
                 rp += 1;
             }
         }
-        let r0_size = r0.seq.bytes().filter(|&b| b != b'-').count();
         let r1_size = r1.seq.bytes().filter(|&b| b != b'-').count();
+        covered_by_contig
+            .entry(r0.src.clone())
+            .or_default()
+            .push((s0, e0));
         let _ = writeln!(out, "a score=1.0");
         let _ = writeln!(
             out,
@@ -689,30 +726,35 @@ fn main() -> Result<()> {
             pairwise_mafs[pw_idx].1.push_str(&rescued_maf);
         }
 
-        // Ancestral consensus rescue for distant outgroups (< 50% hinge coverage).
-        let covs: Vec<(usize, f64)> = (0..indexed.len())
-            .filter(|&i| i != hinge_idx)
-            .map(|i| {
-                let pw = sp_to_pw_idx[&i];
-                (i, maf_ref_coverage(hinge_contigs, &pairwise_mafs[pw].1))
-            })
-            .collect();
-        let high_cov_mafs: Vec<&str> = covs
-            .iter()
-            .filter(|&&(_, c)| c >= 0.50)
-            .map(|&(i, _)| pairwise_mafs[sp_to_pw_idx[&i]].1.as_str())
-            .collect();
-        let low_cov_species: Vec<usize> = covs
-            .iter()
-            .filter(|&&(_, c)| c < 0.50)
-            .map(|&(i, _)| i)
-            .collect();
-        if !high_cov_mafs.is_empty() && !low_cov_species.is_empty() {
-            let cons_contigs = build_ancestral_consensus_contigs(hinge_contigs, &high_cov_mafs);
+        // Iterative ancestral consensus rescue (2 rounds) for distant outgroups (< 50% hinge coverage).
+        let rescue_top_k = if top_k == 0 { 0 } else { top_k.max(3) };
+        for round in 0..2 {
+            let covs: Vec<(usize, f64)> = (0..indexed.len())
+                .filter(|&i| i != hinge_idx)
+                .map(|i| {
+                    let pw = sp_to_pw_idx[&i];
+                    (i, maf_ref_coverage(hinge_contigs, &pairwise_mafs[pw].1))
+                })
+                .collect();
+            let seed_mafs: Vec<&str> = covs
+                .iter()
+                .filter(|&&(_, c)| round > 0 || c >= 0.50)
+                .map(|&(i, _)| pairwise_mafs[sp_to_pw_idx[&i]].1.as_str())
+                .collect();
+            let low_cov_species: Vec<usize> = covs
+                .iter()
+                .filter(|&&(_, c)| c < 0.50)
+                .map(|&(i, _)| i)
+                .collect();
+            if seed_mafs.is_empty() || low_cov_species.is_empty() {
+                break;
+            }
+            let cons_contigs = build_ancestral_consensus_contigs(hinge_contigs, &seed_mafs);
             let cons_indices: Vec<(String, ContigIndex)> = cons_contigs
                 .par_iter()
                 .map(|(n, s)| Ok((n.clone(), prepare_contig_index_opts(s, respect_softmask)?)))
                 .collect::<Result<Vec<_>>>()?;
+            let mut any_added = false;
             for k in low_cov_species {
                 let (cons_maf, _) = align_species_pair(
                     &cons_contigs,
@@ -720,12 +762,21 @@ fn main() -> Result<()> {
                     &indexed[k].1,
                     &indexed[k].2,
                     &cfg,
-                    top_k,
+                    rescue_top_k,
                 )?;
-                let remapped = remap_consensus_maf_to_hinge(hinge_contigs, &cons_maf);
+                let pw_idx = sp_to_pw_idx[&k];
+                let remapped = remap_consensus_maf_to_hinge(
+                    hinge_contigs,
+                    &cons_maf,
+                    &pairwise_mafs[pw_idx].1,
+                );
                 if !remapped.is_empty() {
-                    pairwise_mafs[sp_to_pw_idx[&k]].1.push_str(&remapped);
+                    pairwise_mafs[pw_idx].1.push_str(&remapped);
+                    any_added = true;
                 }
+            }
+            if !any_added {
+                break;
             }
         }
     }

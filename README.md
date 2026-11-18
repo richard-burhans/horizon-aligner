@@ -34,6 +34,7 @@ manuscript/
 ├── guide_mdl_vs_hoxd70.md / .pdf    # Guide 1: Why ΔL beats HOXD70 in AT/GC extremes
 ├── guide_pure_rust_hal.md / .pdf    # Guide 2: Pure-Rust Seek HDF5/HAL reader & writer
 ├── guide_horizon_bubbles.md / .pdf  # Guide 3: What is a Horizon Bubble?
+├── guide_making_alignments.md       # Guide 4: Build genome alignments with Horizon
 ├── references.bib                   # BibTeX references
 ├── figures/                         # Publication figures (SVG & PNG)
 └── scripts/generate_figures.py      # Reproducible figure generator

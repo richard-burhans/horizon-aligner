@@ -618,6 +618,8 @@ mod tests {
             &[(0, 0, 0, 12, false)],
         );
         let bytes = hal.to_hdf5_bytes();
+        assert_eq!(u16::from_le_bytes([bytes[16], bytes[17]]), 4);
+        assert_eq!(u16::from_le_bytes([bytes[18], bytes[19]]), 16);
         let sb = read_hdf5_superblock(&bytes).expect("superblock");
         let root_addr = sb.root_group_addr.expect("root addr");
         let mut cursor = std::io::Cursor::new(&bytes);

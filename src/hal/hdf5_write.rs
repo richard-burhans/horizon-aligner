@@ -155,25 +155,32 @@ impl Hdf5V0Builder {
             ds.extend_from_slice(&d.to_le_bytes());
         }
 
-        // Datatype (0x0003), minimal 8-byte header with element size at [4..8]
+        // Datatype (0x0003), Opaque class (5), version 1, element size at [4..8]
         let mut dt = vec![0u8; 8];
+        dt[0] = 0x15;
         dt[4..8].copy_from_slice(&u32::try_from(elem_size).unwrap_or(1).to_le_bytes());
 
         // DataLayout (0x0008), version 3, class 1 (contiguous)
+        let layout_addr = if data.is_empty() { u64::MAX } else { data_addr };
         let mut dl = Vec::with_capacity(18);
         dl.push(3);
         dl.push(1);
-        dl.extend_from_slice(&data_addr.to_le_bytes());
+        dl.extend_from_slice(&layout_addr.to_le_bytes());
         dl.extend_from_slice(&(data.len() as u64).to_le_bytes());
 
         self.write_v1_obj_header(&[(0x0001, &ds), (0x0003, &dt), (0x0008, &dl)])
     }
 
     fn write_group(&mut self, entries: &[(&str, u64)]) -> (u64, u64, u64) {
+        // Group Leaf Node K = 4 => max 8 entries per SNOD
+        const MAX_SNOD: usize = 8;
         self.align8();
+        let mut sorted: Vec<(&str, u64)> = entries.to_vec();
+        sorted.sort_by_key(|&(name, _)| name);
+
         let mut heap_data = vec![0u8]; // offset 0 reserved for empty string
-        let mut name_offsets = Vec::with_capacity(entries.len());
-        for &(name, _) in entries {
+        let mut name_offsets = Vec::with_capacity(sorted.len());
+        for &(name, _) in &sorted {
             name_offsets.push(heap_data.len() as u64);
             heap_data.extend_from_slice(name.as_bytes());
             heap_data.push(0);
@@ -191,24 +198,36 @@ impl Hdf5V0Builder {
         self.buf.extend_from_slice(&[0u8; 4]); // version 0 + reserved
         self.buf
             .extend_from_slice(&(heap_data.len() as u64).to_le_bytes());
-        self.buf.extend_from_slice(&0u64.to_le_bytes()); // free offset
+        self.buf.extend_from_slice(&1u64.to_le_bytes()); // H5HL_FREE_NULL (1): no free blocks
         self.buf.extend_from_slice(&heap_data_addr.to_le_bytes());
 
-        self.align8();
-        let snod_addr = self.buf.len() as u64;
-        self.buf.extend_from_slice(b"SNOD");
-        self.buf.push(1); // version 1
-        self.buf.push(0);
-        self.buf.extend_from_slice(
-            &u16::try_from(entries.len())
-                .unwrap_or(u16::MAX)
-                .to_le_bytes(),
-        );
-        for (idx, &(_, obj_addr)) in entries.iter().enumerate() {
-            let mut rec = [0u8; 40];
-            rec[0..8].copy_from_slice(&name_offsets[idx].to_le_bytes());
-            rec[8..16].copy_from_slice(&obj_addr.to_le_bytes());
-            self.buf.extend_from_slice(&rec);
+        let mut snods: Vec<(u64, u64, u64)> = Vec::new();
+        for chunk in sorted
+            .iter()
+            .enumerate()
+            .collect::<Vec<_>>()
+            .chunks(MAX_SNOD)
+        {
+            self.align8();
+            let snod_addr = self.buf.len() as u64;
+            self.buf.extend_from_slice(b"SNOD");
+            self.buf.push(1); // version 1
+            self.buf.push(0);
+            self.buf
+                .extend_from_slice(&u16::try_from(chunk.len()).unwrap_or(u16::MAX).to_le_bytes());
+            for &(idx, &(_, obj_addr)) in chunk {
+                let mut rec = [0u8; 40];
+                rec[0..8].copy_from_slice(&name_offsets[idx].to_le_bytes());
+                rec[8..16].copy_from_slice(&obj_addr.to_le_bytes());
+                self.buf.extend_from_slice(&rec);
+            }
+            // Pad SNOD to 2 * leaf_k = 8 slots so libhdf5 reads a full node cleanly.
+            for _ in chunk.len()..MAX_SNOD {
+                self.buf.extend_from_slice(&[0u8; 40]);
+            }
+            let first_off = name_offsets[chunk[0].0];
+            let last_off = name_offsets[chunk[chunk.len() - 1].0];
+            snods.push((first_off, snod_addr, last_off));
         }
 
         self.align8();
@@ -216,12 +235,22 @@ impl Hdf5V0Builder {
         self.buf.extend_from_slice(b"TREE");
         self.buf.push(0); // type 0 (group)
         self.buf.push(0); // level 0 (leaf)
-        self.buf.extend_from_slice(&1u16.to_le_bytes()); // n_entries
+        self.buf
+            .extend_from_slice(&u16::try_from(snods.len()).unwrap_or(u16::MAX).to_le_bytes());
         self.buf.extend_from_slice(&u64::MAX.to_le_bytes()); // left sibling
         self.buf.extend_from_slice(&u64::MAX.to_le_bytes()); // right sibling
-        self.buf.extend_from_slice(&0u64.to_le_bytes()); // key 0
-        self.buf.extend_from_slice(&snod_addr.to_le_bytes()); // child SNOD
-        self.buf.extend_from_slice(&u64::MAX.to_le_bytes()); // end key
+        for (i, &(first_off, snod_addr, _)) in snods.iter().enumerate() {
+            let key = if i == 0 { 0u64 } else { first_off };
+            self.buf.extend_from_slice(&key.to_le_bytes());
+            self.buf.extend_from_slice(&snod_addr.to_le_bytes());
+        }
+        let end_key = snods.last().map_or(0, |&(_, _, last_off)| last_off);
+        self.buf.extend_from_slice(&end_key.to_le_bytes());
+        // Pad B-tree node to 2 * group_internal_k (32) child slots.
+        for _ in snods.len()..32 {
+            self.buf.extend_from_slice(&0u64.to_le_bytes());
+            self.buf.extend_from_slice(&0u64.to_le_bytes());
+        }
 
         let mut symtab = [0u8; 16];
         symtab[0..8].copy_from_slice(&btree_addr.to_le_bytes());
@@ -236,6 +265,8 @@ impl Hdf5V0Builder {
         self.buf[8] = 0; // superblock version 0
         self.buf[13] = 8; // offset_size
         self.buf[14] = 8; // length_size
+        self.buf[16..18].copy_from_slice(&4u16.to_le_bytes()); // group leaf node K
+        self.buf[18..20].copy_from_slice(&16u16.to_le_bytes()); // group internal node K
         self.buf[24..32].copy_from_slice(&0u64.to_le_bytes());
         self.buf[32..40].copy_from_slice(&u64::MAX.to_le_bytes());
         self.buf[40..48].copy_from_slice(&eof_addr.to_le_bytes());
