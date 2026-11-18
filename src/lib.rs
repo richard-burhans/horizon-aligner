@@ -1,10 +1,14 @@
 //! Banded MDL + BOCPD + KP-14 aligner with Horizon-Bubble abstention.
 
-use std::collections::HashMap;
+use rayon::prelude::*;
+use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 use thiserror::Error;
 
 /// Canonical KP-14 spaced-seed mask (span 15, weight 12).
 pub const MASK_KP14: &str = "111011011011011";
+/// Secondary local rescue mask (span 15, weight 9).
+pub const MASK_W9: &str = "110101101011011";
 
 const NEG_INF: f64 = -1e18;
 const GAP_OPEN_BITS: f64 = -4.5;
@@ -543,6 +547,573 @@ pub fn banded_mdl_gap(seq_x: &[u8], seq_y: &[u8], band_w: usize, min_block_bits:
     }
 }
 
+/// Result of aligning a full contig pair.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContigAlignment {
+    /// Kept 0-based `+` strand `(x, y)` base pairs.
+    pub aligned_pairs: Vec<(usize, usize)>,
+    /// Number of forward LCBs.
+    pub lcbs_fwd: usize,
+    /// Number of reverse-complement LCBs.
+    pub lcbs_rc: usize,
+    /// Number of macro Horizon Bubbles (`> max_gap_bp`).
+    pub macro_bubbles: usize,
+    /// Number of internal Horizon Bubbles emitted inside DP gaps.
+    pub internal_bubbles: usize,
+}
+
+/// Cluster `(x, y)` hits on one strand into colinear LCB chains.
+#[must_use]
+pub fn cluster_strand_lcbs(
+    hits: &[(usize, usize)],
+    max_gap: usize,
+    max_diag_drift: usize,
+    min_anchors: usize,
+    min_span_bp: usize,
+    max_mean_step: f64,
+) -> Vec<Vec<(usize, usize)>> {
+    if hits.is_empty() {
+        return Vec::new();
+    }
+    let mut sorted = hits.to_vec();
+    sorted.sort_unstable();
+
+    let keep = |ch: &[(usize, usize)]| -> bool {
+        let span_x = ch[ch.len() - 1].0 - ch[0].0;
+        #[allow(clippy::cast_precision_loss)]
+        let mean_step = (span_x as f64) / (ch.len() as f64);
+        ch.len() >= min_anchors && span_x >= min_span_bp && mean_step <= max_mean_step
+    };
+
+    let mut active: Vec<Vec<(usize, usize)>> = Vec::new();
+    let mut finished: Vec<Vec<(usize, usize)>> = Vec::new();
+
+    for &(x, y) in &sorted {
+        let mut best_idx: Option<usize> = None;
+        let mut best_cost = usize::MAX;
+        let mut still_active: Vec<Vec<(usize, usize)>> = Vec::with_capacity(active.len());
+
+        for ch in active {
+            let (lx, ly) = ch[ch.len() - 1];
+            if x.saturating_sub(lx) > max_gap {
+                if keep(&ch) {
+                    finished.push(ch);
+                }
+                continue;
+            }
+            still_active.push(ch);
+            if x > lx && y > ly {
+                let dx = x - lx;
+                let dy = y - ly;
+                let drift = dx.abs_diff(dy);
+                if dx <= max_gap && dy <= max_gap && drift <= max_diag_drift {
+                    let cost = drift + dx;
+                    if cost < best_cost {
+                        best_cost = cost;
+                        best_idx = Some(still_active.len() - 1);
+                    }
+                }
+            }
+        }
+        active = still_active;
+        if let Some(idx) = best_idx {
+            active[idx].push((x, y));
+        } else {
+            active.push(vec![(x, y)]);
+        }
+    }
+
+    for ch in active {
+        if keep(&ch) {
+            finished.push(ch);
+        }
+    }
+    finished
+}
+
+/// Find local `w=9` spaced-seed anchors with 2-hit diagonal consistency.
+///
+/// # Errors
+///
+/// Returns [`AlignError::InvalidMask`] if `mask` is invalid.
+pub fn local_w9_subchain(
+    sub_x: &[u8],
+    sub_y: &[u8],
+    off_x: usize,
+    off_y: usize,
+    mask: &str,
+    max_diag_diff: usize,
+    max_step_bp: usize,
+) -> Result<Vec<(usize, usize)>, AlignError> {
+    let ix = canonical_spaced_seeds(sub_x, mask, 1)?;
+    let iy = canonical_spaced_seeds(sub_y, mask, 1)?;
+    let mut hits = Vec::new();
+    for (k, px) in &ix {
+        if let Some(py) = iy.get(k) {
+            hits.push((px[0], py[0]));
+        }
+    }
+    let chain = lis_chain(&hits);
+    let mut kept = Vec::new();
+
+    for (idx, &(x, y)) in chain.iter().enumerate() {
+        #[allow(clippy::cast_possible_wrap)]
+        let diag = (x as isize) - (y as isize);
+        #[allow(clippy::cast_possible_wrap)]
+        let max_dd = max_diag_diff as isize;
+        let has_prev = idx > 0 && {
+            let (px, py) = chain[idx - 1];
+            #[allow(clippy::cast_possible_wrap)]
+            let pdiag = (px as isize) - (py as isize);
+            (diag - pdiag).abs() <= max_dd && (x - px) <= max_step_bp
+        };
+        let has_next = idx + 1 < chain.len() && {
+            let (nx, ny) = chain[idx + 1];
+            #[allow(clippy::cast_possible_wrap)]
+            let ndiag = (nx as isize) - (ny as isize);
+            (diag - ndiag).abs() <= max_dd && (nx - x) <= max_step_bp
+        };
+        if has_prev || has_next {
+            kept.push((off_x + x, off_y + y));
+        }
+    }
+    Ok(kept)
+}
+
+/// Extend an alignment outward from an anchor using banded MDL + BOCPD X-drop.
+#[must_use]
+#[allow(clippy::too_many_lines, clippy::many_single_char_names)]
+pub fn mdl_xdrop_extend(
+    seq_x: &[u8],
+    seq_y: &[u8],
+    off_x: usize,
+    off_y: usize,
+    reverse: bool,
+    max_ext: usize,
+    band_w: usize,
+) -> Vec<(usize, usize)> {
+    let x_slice: Vec<u8> = if reverse {
+        seq_x.iter().rev().take(max_ext).copied().collect()
+    } else {
+        seq_x.iter().take(max_ext).copied().collect()
+    };
+    let y_slice: Vec<u8> = if reverse {
+        seq_y.iter().rev().take(max_ext).copied().collect()
+    } else {
+        seq_y.iter().take(max_ext).copied().collect()
+    };
+    let n = x_slice.len();
+    let m = y_slice.len();
+    if n < 12 || m < 12 {
+        return Vec::new();
+    }
+
+    let gc_x = bocpd_gc_profile(&x_slice, 1.0 / 120.0, 60);
+    let gc_y = bocpd_gc_profile(&y_slice, 1.0 / 120.0, 60);
+    let pi_x: Vec<[f64; 4]> = gc_x.into_iter().map(base_probs).collect();
+    let pi_y: Vec<[f64; 4]> = gc_y.into_iter().map(base_probs).collect();
+
+    let x_drop_bits = 15.0;
+    let min_peak_bits = 10.0;
+    let stride = 2 * band_w + 1;
+    let mut dp = vec![NEG_INF; (n + 1) * stride];
+    let mut bt = vec![0_u8; (n + 1) * stride]; // 1=diag, 2=up, 3=left
+
+    let slot = |i: usize, j: usize| -> Option<usize> {
+        #[allow(clippy::cast_possible_wrap)]
+        let diff = (j as isize) - (i as isize);
+        #[allow(clippy::cast_possible_wrap)]
+        let bw = band_w as isize;
+        if diff.abs() <= bw {
+            #[allow(clippy::cast_sign_loss)]
+            Some(i * stride + (diff + bw) as usize)
+        } else {
+            None
+        }
+    };
+
+    if let Some(s0) = slot(0, 0) {
+        dp[s0] = 0.0;
+    }
+    let mut best_score = 0.0;
+    let mut best_cell = (0usize, 0usize);
+
+    for i in 0..=n {
+        let mut row_best = NEG_INF;
+        let j_lo = i.saturating_sub(band_w);
+        let j_hi = (i + band_w).min(m);
+        for j in j_lo..=j_hi {
+            if i == 0 && j == 0 {
+                row_best = 0.0;
+                continue;
+            }
+            let mut cand = NEG_INF;
+            let mut src = 0_u8;
+            if i > 0
+                && j > 0
+                && let Some(ps) = slot(i - 1, j - 1)
+                && dp[ps] > NEG_INF * 0.5
+            {
+                let sb = joint_pair_bits(
+                    x_slice[i - 1],
+                    y_slice[j - 1],
+                    pi_x[i - 1],
+                    pi_y[j - 1],
+                    IDENTITY_PRIOR,
+                );
+                let v = dp[ps] + sb;
+                if v > cand {
+                    cand = v;
+                    src = 1;
+                }
+            }
+            if i > 0
+                && let Some(ps) = slot(i - 1, j)
+                && dp[ps] > NEG_INF * 0.5
+            {
+                let pen = if bt[ps] == 2 {
+                    GAP_EXTEND_BITS
+                } else {
+                    GAP_OPEN_BITS
+                };
+                let v = dp[ps] + pen;
+                if v > cand {
+                    cand = v;
+                    src = 2;
+                }
+            }
+            if j > 0
+                && let Some(ps) = slot(i, j - 1)
+                && dp[ps] > NEG_INF * 0.5
+            {
+                let pen = if bt[ps] == 3 {
+                    GAP_EXTEND_BITS
+                } else {
+                    GAP_OPEN_BITS
+                };
+                let v = dp[ps] + pen;
+                if v > cand {
+                    cand = v;
+                    src = 3;
+                }
+            }
+            if cand >= best_score - x_drop_bits {
+                if let Some(s) = slot(i, j) {
+                    dp[s] = cand;
+                    bt[s] = src;
+                }
+                if cand > row_best {
+                    row_best = cand;
+                }
+                if cand > best_score {
+                    best_score = cand;
+                    best_cell = (i, j);
+                }
+            }
+        }
+        if row_best < best_score - x_drop_bits {
+            break;
+        }
+    }
+
+    if best_score < min_peak_bits {
+        return Vec::new();
+    }
+
+    let mut pairs = Vec::new();
+    let (mut ci, mut cj) = best_cell;
+    while ci > 0 || cj > 0 {
+        let Some(s) = slot(ci, cj) else { break };
+        match bt[s] {
+            1 => {
+                let px = if reverse {
+                    off_x + seq_x.len() - ci
+                } else {
+                    off_x + ci - 1
+                };
+                let py = if reverse {
+                    off_y + seq_y.len() - cj
+                } else {
+                    off_y + cj - 1
+                };
+                pairs.push((px, py));
+                ci -= 1;
+                cj -= 1;
+            }
+            2 => ci -= 1,
+            3 => cj -= 1,
+            _ => break,
+        }
+    }
+    pairs
+}
+
+fn merge_colinear_lcbs(
+    lcb_list: &[Vec<(usize, usize)>],
+    max_local_rescue_bp: usize,
+) -> Vec<Vec<(usize, usize)>> {
+    if lcb_list.is_empty() {
+        return Vec::new();
+    }
+    let mut ordered = lcb_list.to_vec();
+    ordered.sort_by_key(|c| c[0].0);
+    let mut merged = vec![ordered[0].clone()];
+    for nxt in ordered.into_iter().skip(1) {
+        let last = &merged[merged.len() - 1];
+        let (px, py) = last[last.len() - 1];
+        let (nx, ny) = nxt[0];
+        if nx > px && ny > py {
+            let dx = nx - px;
+            let dy = ny - py;
+            if dx <= max_local_rescue_bp && dy <= max_local_rescue_bp && dx.abs_diff(dy) <= 4000 {
+                let m_idx = merged.len() - 1;
+                merged[m_idx].extend(nxt);
+                continue;
+            }
+        }
+        merged.push(nxt);
+    }
+    merged
+}
+
+/// Run the full bidirectional LCB + 2-hit rescue + parallel MDL/BOCPD pipeline on two contigs.
+///
+/// # Errors
+///
+/// Returns [`AlignError::InvalidMask`] if internal masks fail validation.
+#[allow(clippy::too_many_lines)]
+pub fn align_contig_pair(seq_x: &[u8], seq_y: &[u8]) -> Result<ContigAlignment, AlignError> {
+    let span = MASK_KP14.len();
+    let max_gap_bp = 1600;
+    let max_local_rescue_bp = 25_000;
+    let pv_len = seq_y.len();
+    let seq_y_rc = revcomp(seq_y);
+
+    let ix = canonical_spaced_seeds(seq_x, MASK_KP14, 2)?;
+    let iy_fwd = canonical_spaced_seeds(seq_y, MASK_KP14, 2)?;
+    let iy_rc = canonical_spaced_seeds(&seq_y_rc, MASK_KP14, 2)?;
+
+    let mut hits_fwd = Vec::new();
+    let mut hits_rc = Vec::new();
+    for (k, pxs) in &ix {
+        if let Some(pys) = iy_fwd.get(k) {
+            for &px in pxs {
+                for &py in pys {
+                    hits_fwd.push((px, py));
+                }
+            }
+        }
+        if let Some(pys) = iy_rc.get(k) {
+            for &px in pxs {
+                for &py in pys {
+                    hits_rc.push((px, py));
+                }
+            }
+        }
+    }
+
+    let lcbs_fwd = merge_colinear_lcbs(
+        &cluster_strand_lcbs(&hits_fwd, 3500, 350, 8, 100, 350.0),
+        max_local_rescue_bp,
+    );
+    let lcbs_rc = merge_colinear_lcbs(
+        &cluster_strand_lcbs(&hits_rc, 3500, 350, 8, 100, 350.0),
+        max_local_rescue_bp,
+    );
+
+    let mut pair_set: HashSet<(usize, usize)> = HashSet::new();
+    let mut dp_jobs: Vec<(bool, usize, usize, usize, usize)> = Vec::new();
+    let mut xdrop_jobs: Vec<(bool, usize, usize, usize, usize, bool)> = Vec::new();
+    let mut macro_bubbles = 0usize;
+
+    for (is_rc, lcb_list, y_work) in [(false, &lcbs_fwd, seq_y), (true, &lcbs_rc, &seq_y_rc)] {
+        // Inter-LCB rescue pass.
+        let mut rescued_inter = Vec::new();
+        for w in lcb_list.windows(2) {
+            let x0 = w[0][w[0].len() - 1].0 + span;
+            let y0 = w[0][w[0].len() - 1].1 + span;
+            let x1 = w[1][0].0;
+            let y1 = w[1][0].1;
+            if x1 > x0
+                && y1 > y0
+                && (100..=60_000).contains(&(x1 - x0))
+                && (100..=60_000).contains(&(y1 - y0))
+            {
+                let sub =
+                    local_w9_subchain(&seq_x[x0..x1], &y_work[y0..y1], x0, y0, MASK_W9, 120, 1200)?;
+                if sub.len() >= 4 {
+                    rescued_inter.push(sub);
+                }
+            }
+        }
+
+        for lcb in lcb_list.iter().chain(&rescued_inter) {
+            let mut all_anchors = Vec::with_capacity(lcb.len() * 2);
+            all_anchors.push(lcb[0]);
+            for w in lcb.windows(2) {
+                let x0 = w[0].0 + span;
+                let y0 = w[0].1 + span;
+                let x1 = w[1].0;
+                let y1 = w[1].1;
+                if x1 > x0 && y1 > y0 {
+                    let lx = x1 - x0;
+                    let ly = y1 - y0;
+                    if (lx > max_gap_bp || ly > max_gap_bp)
+                        && lx <= max_local_rescue_bp
+                        && ly <= max_local_rescue_bp
+                    {
+                        let sub = local_w9_subchain(
+                            &seq_x[x0..x1],
+                            &y_work[y0..y1],
+                            x0,
+                            y0,
+                            MASK_W9,
+                            80,
+                            600,
+                        )?;
+                        all_anchors.extend(sub);
+                    }
+                }
+                all_anchors.push(w[1]);
+            }
+
+            for &(ax, ay) in &all_anchors {
+                for off in 0..span {
+                    let py = if is_rc {
+                        pv_len - 1 - (ay + off)
+                    } else {
+                        ay + off
+                    };
+                    pair_set.insert((ax + off, py));
+                }
+            }
+
+            let (fx0, fy0) = all_anchors[0];
+            if fx0 >= 12 && fy0 >= 12 {
+                xdrop_jobs.push((
+                    is_rc,
+                    fx0.saturating_sub(600),
+                    fx0,
+                    fy0.saturating_sub(600),
+                    fy0,
+                    true,
+                ));
+            }
+            let ex0 = all_anchors[all_anchors.len() - 1].0 + span;
+            let ey0 = all_anchors[all_anchors.len() - 1].1 + span;
+            if seq_x.len().saturating_sub(ex0) >= 12 && pv_len.saturating_sub(ey0) >= 12 {
+                xdrop_jobs.push((
+                    is_rc,
+                    ex0,
+                    (ex0 + 600).min(seq_x.len()),
+                    ey0,
+                    (ey0 + 600).min(pv_len),
+                    false,
+                ));
+            }
+
+            for w in all_anchors.windows(2) {
+                let x0 = w[0].0 + span;
+                let y0 = w[0].1 + span;
+                let x1 = w[1].0;
+                let y1 = w[1].1;
+                if x1 <= x0 || y1 <= y0 {
+                    continue;
+                }
+                let lx = x1 - x0;
+                let ly = y1 - y0;
+                if lx > max_gap_bp || ly > max_gap_bp {
+                    macro_bubbles += 1;
+                    xdrop_jobs.push((is_rc, x0, x1, y0, y1, false));
+                    xdrop_jobs.push((is_rc, x0, x1, y0, y1, true));
+                    continue;
+                }
+                dp_jobs.push((is_rc, x0, x1, y0, y1));
+            }
+        }
+    }
+
+    // Run banded MDL DP gaps in parallel via rayon.
+    let dp_results: Vec<(bool, usize, usize, GapResult)> = dp_jobs
+        .par_iter()
+        .map(|&(is_rc, x0, x1, y0, y1)| {
+            let y_work = if is_rc { &seq_y_rc } else { seq_y };
+            let res = banded_mdl_gap(&seq_x[x0..x1], &y_work[y0..y1], 64, 10.0);
+            (is_rc, x0, y0, res)
+        })
+        .collect();
+
+    let mut internal_bubbles = 0usize;
+    for (is_rc, x0, y0, res) in dp_results {
+        internal_bubbles += res.bubbles;
+        for (dx, dy) in res.kept_pairs {
+            let py = if is_rc {
+                pv_len - 1 - (y0 + dy)
+            } else {
+                y0 + dy
+            };
+            pair_set.insert((x0 + dx, py));
+        }
+    }
+
+    let xdrop_results: Vec<(bool, Vec<(usize, usize)>)> = xdrop_jobs
+        .par_iter()
+        .map(|&(is_rc, x0, x1, y0, y1, rev)| {
+            let y_work = if is_rc { &seq_y_rc } else { seq_y };
+            let pairs = mdl_xdrop_extend(&seq_x[x0..x1], &y_work[y0..y1], x0, y0, rev, 600, 24);
+            (is_rc, pairs)
+        })
+        .collect();
+
+    for (is_rc, pairs) in xdrop_results {
+        for (px, py) in pairs {
+            let y_orig = if is_rc { pv_len - 1 - py } else { py };
+            pair_set.insert((px, y_orig));
+        }
+    }
+
+    let mut aligned_pairs: Vec<(usize, usize)> = pair_set.into_iter().collect();
+    aligned_pairs.sort_unstable();
+
+    Ok(ContigAlignment {
+        aligned_pairs,
+        lcbs_fwd: lcbs_fwd.len(),
+        lcbs_rc: lcbs_rc.len(),
+        macro_bubbles,
+        internal_bubbles,
+    })
+}
+
+/// Format aligned LCBs and Horizon Bubbles as minimal GFA v1.1 records.
+#[must_use]
+pub fn format_gfa_summary(name_x: &str, name_y: &str, aln: &ContigAlignment) -> String {
+    let mut out = String::from("H\tVN:Z:1.1\n");
+    let total_bubbles = aln.macro_bubbles + aln.internal_bubbles;
+    let _ = writeln!(
+        out,
+        "S\t{name_x}__{name_y}\t*\tLN:i:{}\tLF:i:{}\tLR:i:{}\tHB:i:{total_bubbles}",
+        aln.aligned_pairs.len(),
+        aln.lcbs_fwd,
+        aln.lcbs_rc
+    );
+    out
+}
+
+/// Reverse-complement a DNA byte slice (uppercasing ASCII bases).
+#[must_use]
+pub fn revcomp(seq: &[u8]) -> Vec<u8> {
+    seq.iter()
+        .rev()
+        .map(|&b| match b.to_ascii_uppercase() {
+            b'A' => b'T',
+            b'T' => b'A',
+            b'C' => b'G',
+            b'G' => b'C',
+            other => other,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -639,5 +1210,53 @@ mod tests {
         assert!(res.score_bits > 60.0);
         assert_eq!(res.kept_pairs.len(), 60);
         assert_eq!(res.bubbles, 0);
+    }
+
+    #[test]
+    fn cluster_lcbs_separates_colinear_blocks() {
+        let hits = [
+            (0, 0),
+            (30, 30),
+            (60, 60),
+            (90, 90),
+            (120, 120),
+            (150, 150),
+            (180, 180),
+            (210, 210),
+        ];
+        let lcbs = cluster_strand_lcbs(&hits, 500, 50, 8, 100, 100.0);
+        assert_eq!(lcbs.len(), 1);
+        assert_eq!(lcbs[0].len(), 8);
+    }
+
+    #[test]
+    fn local_w9_requires_two_hit_diagonal_support() {
+        let sx = b"AAAAAACCCCCCGGGGGGTTTTTTACGTACGTACGTACGT";
+        let sy = b"AAAAAACCCCCCGGGGGGTTTTTTACGTACGTACGTACGT";
+        let anchors = local_w9_subchain(sx, sy, 10, 20, MASK_W9, 80, 600).expect("valid mask");
+        assert!(anchors.len() >= 2);
+        assert!(anchors[0].0 >= 10 && anchors[0].1 >= 20);
+    }
+
+    #[test]
+    fn mdl_xdrop_extends_conserved_flank() {
+        let sx = b"ATATATATGCGCGCGCATATATATGCGCGCGCATATATAT";
+        let sy = b"ATATATATGCGCGCGCATATATATGCGCGCGCATATATAT";
+        let pairs = mdl_xdrop_extend(sx, sy, 0, 0, false, 100, 16);
+        assert!(pairs.len() >= 30);
+    }
+
+    #[test]
+    fn gfa_summary_contains_header_and_bubble_tag() {
+        let aln = ContigAlignment {
+            aligned_pairs: vec![(0, 0), (1, 1)],
+            lcbs_fwd: 1,
+            lcbs_rc: 0,
+            macro_bubbles: 2,
+            internal_bubbles: 3,
+        };
+        let gfa = format_gfa_summary("chr1_x", "chr1_y", &aln);
+        assert!(gfa.starts_with("H\tVN:Z:1.1\n"));
+        assert!(gfa.contains("HB:i:5"));
     }
 }

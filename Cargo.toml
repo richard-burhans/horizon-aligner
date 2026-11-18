@@ -6,6 +6,7 @@ description = "MDL + BOCPD + KP-14 banded whole-genome aligner with Horizon Bubb
 
 [dependencies]
 anyhow = "1.0"
+rayon = "1.10"
 thiserror = "2.0"
 
 [lints.rust]
