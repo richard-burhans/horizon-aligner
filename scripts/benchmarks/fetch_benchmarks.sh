@@ -22,3 +22,6 @@ if [ ! -f "bigMafToMaf" ]; then
     chmod +x bigMafToMaf
 fi
 ./bigMafToMaf http://hgdownload.soe.ucsc.edu/goldenPath/hg38/cactus241way/cactus241way.bigMaf -chrom=chr22_KI270735v1_random -start=0 -end=38000 cactus241way_chr22_random.maf
+
+echo "Downloading HPRC v1.0 Minigraph-Cactus pangenome graph (12 GB)..."
+curl -o hprc-v1.0-mc-grch38.gfa.gz -s https://s3-us-west-2.amazonaws.com/human-pangenomics/pangenomes/freeze/freeze1/minigraph-cactus/hprc-v1.0-mc-grch38.gfa.gz
