@@ -1304,21 +1304,39 @@ fn codon_to_aa(b0: u8, b1: u8, b2: u8) -> Option<u8> {
     if aa == 255 { None } else { Some(aa) }
 }
 
+const fn aa_group(ax: u8) -> u8 {
+    const GROUP: [u8; 20] = [0, 1, 2, 2, 3, 0, 4, 5, 4, 5, 5, 6, 7, 6, 4, 8, 8, 5, 3, 3];
+    if (ax as usize) < 20 {
+        GROUP[ax as usize]
+    } else {
+        9
+    }
+}
+
+const fn aa_pair_score(ax: u8, ay: u8) -> i32 {
+    if ax == ay {
+        return 15;
+    }
+    let gx = aa_group(ax);
+    let gy = aa_group(ay);
+    if gx < 9 && gx == gy { 6 } else { -6 }
+}
+
 fn index_aa_spaced_4of6_frames(
     seq: &[u8],
     max_occ: usize,
     skip_softmasked: bool,
 ) -> HashMap<u32, Vec<usize>> {
-    // Spaced 4-of-6 amino-acid mask ("110101"): tolerates 2 AA substitutions across 6 codons (18 bp).
-    const AA_OFFSETS: [usize; 4] = [0, 1, 3, 5];
+    // Reduced 9-group biochemical alphabet spaced 6-of-8 mask ("11101101", 24 bp span).
+    const AA_OFFSETS: [usize; 6] = [0, 1, 2, 4, 5, 7];
     let mut map: HashMap<u32, Vec<usize>> = HashMap::new();
     let mut counts: HashMap<u32, usize> = HashMap::new();
     for frame in 0..3 {
-        if seq.len() < frame + 18 {
+        if seq.len() < frame + 24 {
             continue;
         }
         let mut pos = frame;
-        while pos + 18 <= seq.len() {
+        while pos + 24 <= seq.len() {
             let mut key = 0_u32;
             let mut valid = true;
             for &c in &AA_OFFSETS {
@@ -1331,7 +1349,7 @@ fn index_aa_spaced_4of6_frames(
                     valid = false;
                     break;
                 };
-                key = key * 20 + u32::from(aa);
+                key = key * 9 + u32::from(aa_group(aa));
             }
             if valid {
                 let cnt = counts.entry(key).or_insert(0);
@@ -1368,18 +1386,6 @@ fn find_translated_aa5_hits(
         }
     }
     hits
-}
-
-const fn aa_pair_score(ax: u8, ay: u8) -> i32 {
-    const GROUP: [u8; 20] = [0, 1, 2, 2, 3, 0, 4, 5, 4, 5, 5, 6, 7, 6, 4, 8, 8, 5, 3, 3];
-    if ax == ay {
-        return 15;
-    }
-    if (ax as usize) < 20 && (ay as usize) < 20 && GROUP[ax as usize] == GROUP[ay as usize] {
-        6
-    } else {
-        -6
-    }
 }
 
 /// Extend an ungapped codon-level amino-acid HSP from a 5-codon (`15 bp`) seed.
@@ -1814,14 +1820,14 @@ pub fn align_contig_pair_with_config(
         let iy_ry_rc =
             canonical_spaced_seeds_with_opts(seq_y_rc, MASK_RY20, 2, cfg.skip_softmasked, true)?;
         let (hits_ry_fwd, hits_ry_rc) = intersect_seed_maps(&ix_ry, &iy_ry_fwd, &iy_ry_rc);
-        append_hsp_gated_lastz12_lcbs(&mut combined_fwd, seq_x, seq_y, &hits_ry_fwd, 210);
-        append_hsp_gated_lastz12_lcbs(&mut combined_rc, seq_x, seq_y_rc, &hits_ry_rc, 210);
+        append_hsp_gated_lastz12_lcbs(&mut combined_fwd, seq_x, seq_y, &hits_ry_fwd, 220);
+        append_hsp_gated_lastz12_lcbs(&mut combined_rc, seq_x, seq_y_rc, &hits_ry_rc, 220);
 
         // HSP-gated w=10 (10-of-14) 1-transition seeding.
         let (hits_w10_fwd, hits_w10_rc) =
             find_w10_1transition_hits(seq_x, &iy10_fwd, &iy10_rc, cfg.skip_softmasked);
-        append_hsp_gated_lastz12_lcbs(&mut combined_fwd, seq_x, seq_y, &hits_w10_fwd, 200);
-        append_hsp_gated_lastz12_lcbs(&mut combined_rc, seq_x, seq_y_rc, &hits_w10_rc, 200);
+        append_hsp_gated_lastz12_lcbs(&mut combined_fwd, seq_x, seq_y, &hits_w10_fwd, 220);
+        append_hsp_gated_lastz12_lcbs(&mut combined_rc, seq_x, seq_y_rc, &hits_w10_rc, 220);
 
         // Amino-acid HSP-gated 6-frame translated spaced 4-of-6 seeding for divergent coding homologs.
         let aa_fwd = find_translated_aa5_hits(seq_x, seq_y, 2, cfg.skip_softmasked);

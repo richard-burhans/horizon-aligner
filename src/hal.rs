@@ -606,6 +606,37 @@ pub fn read_hdf5_v0_chunk_addrs(bytes: &[u8], obj_addr: usize) -> Option<Vec<Hdf
     None
 }
 
+/// Decode HAL `SEQIDX_ARRAY` 24-byte records `(start, top_offset, bottom_offset)`.
+#[must_use]
+pub fn decode_hal_seq_index(raw: &[u8]) -> Vec<(u64, u64, u64)> {
+    let mut out = Vec::with_capacity(raw.len() / 24);
+    for chunk in raw.as_chunks::<24>().0 {
+        if let (Some(a), Some(b), Some(c)) = (
+            read_u64_le(chunk, 0),
+            read_u64_le(chunk, 8),
+            read_u64_le(chunk, 16),
+        ) {
+            out.push((a, b, c));
+        }
+    }
+    out
+}
+
+/// Decode HAL `TOP_ARRAY` 33-byte packed records into `(genome_idx, bottom_idx, paralogy_idx, parent_idx, reverse_flag)`.
+#[must_use]
+pub fn decode_hal_top_array(raw: &[u8]) -> Vec<(i64, i64, i64, i64, bool)> {
+    let mut out = Vec::with_capacity(raw.len() / 33);
+    for chunk in raw.as_chunks::<33>().0 {
+        let g = i64::from_le_bytes(chunk[0..8].try_into().unwrap_or([0; 8]));
+        let b = i64::from_le_bytes(chunk[8..16].try_into().unwrap_or([0; 8]));
+        let p = i64::from_le_bytes(chunk[16..24].try_into().unwrap_or([0; 8]));
+        let par = i64::from_le_bytes(chunk[24..32].try_into().unwrap_or([0; 8]));
+        let rev = chunk[32] != 0;
+        out.push((g, b, p, par, rev));
+    }
+    out
+}
+
 const fn decode_hal_nibble(nibble: u8) -> u8 {
     match nibble & 0x0f {
         0 => b'a',
@@ -697,5 +728,23 @@ mod tests {
         let parsed = read_hdf5_object_header(&ohdr).expect("valid OHDR");
         assert_eq!(parsed.version, 2);
         assert_eq!(parsed.message_types, vec![0x0A]);
+
+        let mut seqidx = Vec::new();
+        seqidx.extend_from_slice(&0_u64.to_le_bytes());
+        seqidx.extend_from_slice(&0_u64.to_le_bytes());
+        seqidx.extend_from_slice(&0_u64.to_le_bytes());
+        seqidx.extend_from_slice(&29903_u64.to_le_bytes());
+        seqidx.extend_from_slice(&1116_u64.to_le_bytes());
+        seqidx.extend_from_slice(&0_u64.to_le_bytes());
+        let parsed_idx = decode_hal_seq_index(&seqidx);
+        assert_eq!(parsed_idx, vec![(0, 0, 0), (29903, 1116, 0)]);
+
+        let mut top = Vec::new();
+        top.extend_from_slice(&10_i64.to_le_bytes());
+        top.extend_from_slice(&(-1_i64).to_le_bytes());
+        top.extend_from_slice(&(-1_i64).to_le_bytes());
+        top.extend_from_slice(&1_i64.to_le_bytes());
+        top.push(1);
+        assert_eq!(decode_hal_top_array(&top), vec![(10, -1, -1, 1, true)]);
     }
 }
