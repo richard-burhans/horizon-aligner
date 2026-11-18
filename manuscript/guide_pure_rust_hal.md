@@ -3,7 +3,6 @@ title: "Horizon Guide 2: Reading and Streaming HAL Alignments in Pure Rust Witho
 author:
   - "Richard Burhans (ORCID 0009-0006-5949-0958)"
 date: "2026-11-18"
-bibliography: references.bib
 ---
 
 # 1. Why Build a Pure-Rust HDF5 / `HAL` Reader?

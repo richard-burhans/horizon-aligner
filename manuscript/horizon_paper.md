@@ -3,7 +3,6 @@ title: "Horizon: Information-Theoretic Whole-Genome Alignment with Conformal Epi
 author:
   - "Richard Burhans (ORCID 0009-0006-5949-0958)"
 date: "2026-11-18"
-bibliography: references.bib
 ---
 
 # Abstract {.unnumbered}

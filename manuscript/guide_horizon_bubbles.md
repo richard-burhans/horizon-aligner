@@ -3,7 +3,6 @@ title: "Horizon Guide 3: What Is a Horizon Bubble? Calibrated Epistemic Abstenti
 author:
   - "Richard Burhans (ORCID 0009-0006-5949-0958)"
 date: "2026-11-18"
-bibliography: references.bib
 ---
 
 # 1. The Problem With Forced Base-by-Base Alignment

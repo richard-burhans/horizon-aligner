@@ -3,7 +3,6 @@ title: "Horizon Guide 1: Why Bit-Savings (ΔL) Outperforms Fixed Substitution Ma
 author:
   - "Richard Burhans (ORCID 0009-0006-5949-0958)"
 date: "2026-11-18"
-bibliography: references.bib
 ---
 
 # 1. The Hidden Assumption Inside `HOXD70`
