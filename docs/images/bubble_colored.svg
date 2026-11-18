@@ -1,38 +1,29 @@
 <svg width="600" height="200" xmlns="http://www.w3.org/2000/svg">
-  <style>
-    text { font-family: Helvetica, Arial, sans-serif; font-size: 10px; }
-    .lcb-block { fill: #E69F00; stroke: #333333; stroke-width: 1px; rx: 4px; }
-    .aligned-path { stroke: #009E73; stroke-width: 2.5px; fill: none; }
-    .unaligned-target { stroke: #56B4E9; stroke-width: 2.5px; stroke-dasharray: 4 2; fill: none; }
-    .unaligned-query { stroke: #CC79A7; stroke-width: 2.5px; stroke-dasharray: 4 2; fill: none; }
-    .node-text { fill: white; font-weight: bold; }
-  </style>
-
-  <text x="10" y="20" font-weight="bold" font-size="12px" fill="#333333">Figure 2. Horizon Bubble Graph Topology</text>
+  <text x="10" y="20" font-weight="bold" font-size="12px" fill="#333333" font-family="Helvetica, Arial, sans-serif">Figure 2. Horizon Bubble Graph Topology</text>
 
   <!-- LCBs -->
-  <rect x="50" y="80" width="80" height="25" class="lcb-block" />
-  <text x="90" y="96" text-anchor="middle" class="node-text">LCB 1</text>
+  <rect x="50" y="80" width="80" height="25" fill="#E69F00" stroke="#333333" stroke-width="1" rx="4" />
+  <text x="90" y="96" text-anchor="middle" fill="white" font-weight="bold" font-family="Helvetica, Arial, sans-serif" font-size="10px">LCB 1</text>
 
-  <rect x="260" y="80" width="80" height="25" class="lcb-block" />
-  <text x="300" y="96" text-anchor="middle" class="node-text">LCB 2</text>
+  <rect x="260" y="80" width="80" height="25" fill="#E69F00" stroke="#333333" stroke-width="1" rx="4" />
+  <text x="300" y="96" text-anchor="middle" fill="white" font-weight="bold" font-family="Helvetica, Arial, sans-serif" font-size="10px">LCB 2</text>
 
-  <rect x="470" y="80" width="80" height="25" class="lcb-block" />
-  <text x="510" y="96" text-anchor="middle" class="node-text">LCB 3</text>
+  <rect x="470" y="80" width="80" height="25" fill="#E69F00" stroke="#333333" stroke-width="1" rx="4" />
+  <text x="510" y="96" text-anchor="middle" fill="white" font-weight="bold" font-family="Helvetica, Arial, sans-serif" font-size="10px">LCB 3</text>
 
   <!-- Paths -->
   <!-- Aligned DP Path -->
-  <path d="M130,92.5 L260,92.5" class="aligned-path" />
-  <text x="195" y="85" text-anchor="middle" fill="#009E73" font-weight="bold">Aligned DP Path</text>
+  <path d="M130,92.5 L260,92.5" stroke="#009E73" stroke-width="2.5" fill="none" />
+  <text x="195" y="85" text-anchor="middle" fill="#009E73" font-weight="bold" font-family="Helvetica, Arial, sans-serif" font-size="10px">Aligned DP Path</text>
 
   <!-- Unaligned Horizon Bubble -->
-  <path d="M340,85 Q405,40 470,85" class="unaligned-target" />
-  <text x="405" y="45" text-anchor="middle" fill="#56B4E9" font-weight="bold">Unaligned Target</text>
+  <path d="M340,85 Q405,40 470,85" stroke="#56B4E9" stroke-width="2.5" stroke-dasharray="4 2" fill="none" />
+  <text x="405" y="45" text-anchor="middle" fill="#56B4E9" font-weight="bold" font-family="Helvetica, Arial, sans-serif" font-size="10px">Unaligned Target</text>
 
-  <path d="M340,100 Q405,145 470,100" class="unaligned-query" />
-  <text x="405" y="150" text-anchor="middle" fill="#CC79A7" font-weight="bold">Unaligned Query</text>
+  <path d="M340,100 Q405,145 470,100" stroke="#CC79A7" stroke-width="2.5" stroke-dasharray="4 2" fill="none" />
+  <text x="405" y="150" text-anchor="middle" fill="#CC79A7" font-weight="bold" font-family="Helvetica, Arial, sans-serif" font-size="10px">Unaligned Query</text>
 
-  <text x="300" y="180" text-anchor="middle" font-size="10px" font-style="italic" fill="#555555">
+  <text x="300" y="180" text-anchor="middle" font-size="10px" font-style="italic" fill="#555555" font-family="Helvetica, Arial, sans-serif">
     Explicit abstention preserves graph topology as a Horizon Bubble
   </text>
 </svg>
