@@ -10,8 +10,9 @@ pub mod seeding;
 
 pub use bocpd::bocpd_gc_profile;
 pub use formats::{
-    format_gfa_blocks, format_gfa_paralog_tags, format_gfa_summary, format_maf_blocks,
-    read_fasta_contigs, resolve_alignment_duplications, resolve_lcb_duplications,
+    MafRow, format_gfa_blocks, format_gfa_paralog_tags, format_gfa_summary, format_maf_blocks,
+    parse_two_row_maf_blocks, read_fasta_contigs, resolve_alignment_duplications,
+    resolve_lcb_duplications,
 };
 pub use mdl::{
     AlignConfig, ContigAlignment, GapResult, align_contig_pair, align_contig_pair_indexed,

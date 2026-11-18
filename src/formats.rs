@@ -264,3 +264,59 @@ pub fn read_fasta_contigs(
     }
     Ok(out)
 }
+
+/// A parsed `s`-line row from a MAF v1 alignment block.
+#[derive(Debug, Clone)]
+pub struct MafRow {
+    /// Sequence/contig identifier.
+    pub src: String,
+    /// 0-based start offset on `strand`.
+    pub start: usize,
+    /// Strand (`'+'` or `'-'`).
+    pub strand: char,
+    /// Total ungapped length of the source sequence.
+    pub src_size: usize,
+    /// Gapped alignment row string.
+    pub seq: String,
+}
+
+/// Parse two-row pairwise alignment blocks from a MAF v1 text stream.
+#[must_use]
+pub fn parse_two_row_maf_blocks(maf_text: &str) -> Vec<(MafRow, MafRow)> {
+    let mut blocks = Vec::new();
+    let mut rows: Vec<MafRow> = Vec::new();
+    for line in maf_text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with("a ") || trimmed == "a" {
+            if rows.len() >= 2 {
+                let r1 = rows.remove(0);
+                let r2 = rows.remove(0);
+                blocks.push((r1, r2));
+            }
+            rows.clear();
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix("s ") {
+            let parts: Vec<&str> = rest.split_whitespace().collect();
+            if parts.len() >= 6
+                && let (Ok(start), Ok(src_size)) =
+                    (parts[1].parse::<usize>(), parts[4].parse::<usize>())
+            {
+                let strand = parts[3].chars().next().unwrap_or('+');
+                rows.push(MafRow {
+                    src: parts[0].to_owned(),
+                    start,
+                    strand,
+                    src_size,
+                    seq: parts[5].to_owned(),
+                });
+            }
+        }
+    }
+    if rows.len() >= 2 {
+        let r1 = rows.remove(0);
+        let r2 = rows.remove(0);
+        blocks.push((r1, r2));
+    }
+    blocks
+}

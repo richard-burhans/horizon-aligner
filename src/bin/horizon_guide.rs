@@ -2,9 +2,9 @@
 
 use anyhow::{Context, Result, bail};
 use horizon_aligner::{
-    AlignConfig, ContigIndex, align_contig_pair_with_config, format_maf_blocks, hal::HalAlignment,
-    merge_pairwise_mafs, prepare_contig_index_opts, read_fasta_contigs, select_top_k_pairs,
-    shared_seed_count,
+    AlignConfig, ContigIndex, MafRow, align_contig_pair_with_config, format_maf_blocks,
+    hal::HalAlignment, merge_pairwise_mafs, parse_two_row_maf_blocks, prepare_contig_index_opts,
+    read_fasta_contigs, select_top_k_pairs, shared_seed_count,
 };
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -112,53 +112,6 @@ fn align_species_pair(
         }
     }
     Ok((maf_buf, hal_blocks))
-}
-
-struct MafRow {
-    src: String,
-    start: usize,
-    strand: char,
-    src_size: usize,
-    seq: String,
-}
-
-fn parse_two_row_maf_blocks(maf_text: &str) -> Vec<(MafRow, MafRow)> {
-    let mut blocks = Vec::new();
-    let mut rows: Vec<MafRow> = Vec::new();
-    for line in maf_text.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            if rows.len() >= 2 {
-                let r1 = rows.remove(0);
-                let r2 = rows.remove(0);
-                blocks.push((r1, r2));
-            }
-            rows.clear();
-            continue;
-        }
-        if let Some(rest) = trimmed.strip_prefix("s ") {
-            let parts: Vec<&str> = rest.split_whitespace().collect();
-            if parts.len() >= 6
-                && let (Ok(start), Ok(src_size)) =
-                    (parts[1].parse::<usize>(), parts[4].parse::<usize>())
-            {
-                let strand = parts[3].chars().next().unwrap_or('+');
-                rows.push(MafRow {
-                    src: parts[0].to_owned(),
-                    start,
-                    strand,
-                    src_size,
-                    seq: parts[5].to_owned(),
-                });
-            }
-        }
-    }
-    if rows.len() >= 2 {
-        let r1 = rows.remove(0);
-        let r2 = rows.remove(0);
-        blocks.push((r1, r2));
-    }
-    blocks
 }
 
 fn complement_base(b: u8) -> u8 {
