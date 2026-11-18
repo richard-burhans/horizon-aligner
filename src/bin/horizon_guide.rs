@@ -348,7 +348,11 @@ fn emit_rescued_runs(
             }
         }
         let run = &pts[run_start..run_end];
-        if run.len() >= 8 {
+        let matches = run
+            .iter()
+            .filter(|p| p.2.eq_ignore_ascii_case(&p.3))
+            .count();
+        if run.len() >= 12 && matches * 10 >= run.len() * 6 {
             let h_start = run[0].0;
             let size = run.len();
             let d_min = run.iter().map(|p| p.1).min().unwrap_or(0);

@@ -1226,6 +1226,26 @@ fn find_lastz11_1transition_hits<S: std::hash::BuildHasher>(
     )
 }
 
+fn find_w10_1transition_hits<S: std::hash::BuildHasher>(
+    seq_x: &[u8],
+    iy_fwd: &HashMap<u64, Vec<usize>, S>,
+    iy_rc: &HashMap<u64, Vec<usize>, S>,
+    skip_softmasked: bool,
+) -> (AnchorPairs, AnchorPairs) {
+    const OFFSETS: [usize; 10] = [0, 1, 3, 4, 6, 7, 9, 10, 12, 13];
+    find_spaced_transition_hits(
+        seq_x,
+        &OFFSETS,
+        &OFFSETS,
+        14,
+        iy_fwd,
+        iy_rc,
+        skip_softmasked,
+        0,
+        1,
+    )
+}
+
 #[inline]
 fn hsp_pair_score(a: u8, b: u8) -> i32 {
     let (Some(ia), Some(ib)) = (base_to_idx(a), base_to_idx(b)) else {
@@ -1537,6 +1557,12 @@ pub fn align_contig_pair_with_config(
         let (hits_ry_fwd, hits_ry_rc) = intersect_seed_maps(&ix_ry, &iy_ry_fwd, &iy_ry_rc);
         append_hsp_gated_lastz12_lcbs(&mut combined_fwd, seq_x, seq_y, &hits_ry_fwd, 210);
         append_hsp_gated_lastz12_lcbs(&mut combined_rc, seq_x, seq_y_rc, &hits_ry_rc, 210);
+
+        // HSP-gated w=10 (10-of-14) 1-transition seeding reusing iy10_fwd/iy10_rc for distant blocks.
+        let (hits_w10_fwd, hits_w10_rc) =
+            find_w10_1transition_hits(seq_x, &iy10_fwd, &iy10_rc, cfg.skip_softmasked);
+        append_hsp_gated_lastz12_lcbs(&mut combined_fwd, seq_x, seq_y, &hits_w10_fwd, 200);
+        append_hsp_gated_lastz12_lcbs(&mut combined_rc, seq_x, seq_y_rc, &hits_w10_rc, 200);
     }
 
     // Transition-tolerant R/Y (1-bit purine/pyrimidine) fallback for divergent homologs.

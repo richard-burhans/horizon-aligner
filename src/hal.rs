@@ -242,6 +242,8 @@ pub struct Hdf5Superblock {
     pub offset_size: u8,
     /// Size in bytes of object lengths (`sizeof_len`).
     pub length_size: u8,
+    /// Root group object header address when `offset_size == 8` and present in the header.
+    pub root_group_addr: Option<u64>,
 }
 
 /// Parse the HDF5 superblock header from the leading bytes of a `.hal` file.
@@ -252,18 +254,50 @@ pub fn read_hdf5_superblock(bytes: &[u8]) -> Option<Hdf5Superblock> {
     }
     let version = bytes[8];
     match version {
-        0 | 1 => Some(Hdf5Superblock {
-            version,
-            offset_size: bytes[13],
-            length_size: bytes[14],
-        }),
-        2 | 3 => Some(Hdf5Superblock {
-            version,
-            offset_size: bytes[9],
-            length_size: bytes[10],
-        }),
+        0 | 1 => {
+            let offset_size = bytes[13];
+            let length_size = bytes[14];
+            let root_group_addr = if offset_size == 8 && length_size == 8 && bytes.len() >= 72 {
+                Some(u64::from_le_bytes(bytes[64..72].try_into().ok()?))
+            } else {
+                None
+            };
+            Some(Hdf5Superblock {
+                version,
+                offset_size,
+                length_size,
+                root_group_addr,
+            })
+        }
+        2 | 3 => {
+            let offset_size = bytes[9];
+            let length_size = bytes[10];
+            let root_group_addr = if offset_size == 8 && bytes.len() >= 44 {
+                Some(u64::from_le_bytes(bytes[36..44].try_into().ok()?))
+            } else {
+                None
+            };
+            Some(Hdf5Superblock {
+                version,
+                offset_size,
+                length_size,
+                root_group_addr,
+            })
+        }
         _ => None,
     }
+}
+
+/// Inspect a `.hal` file on disk and parse its HDF5 superblock header.
+///
+/// # Errors
+/// Returns an `std::io::Error` if the file cannot be opened or read.
+pub fn inspect_hal_file(path: &std::path::Path) -> std::io::Result<Option<Hdf5Superblock>> {
+    use std::io::Read as _;
+    let mut f = std::fs::File::open(path)?;
+    let mut buf = [0u8; 96];
+    let n = f.read(&mut buf)?;
+    Ok(read_hdf5_superblock(&buf[..n]))
 }
 
 const fn decode_hal_nibble(nibble: u8) -> u8 {
@@ -342,7 +376,8 @@ mod tests {
             Some(Hdf5Superblock {
                 version: 2,
                 offset_size: 8,
-                length_size: 8
+                length_size: 8,
+                root_group_addr: None,
             })
         );
     }
