@@ -502,7 +502,7 @@ fn main() -> Result<()> {
                     &pairwise_mafs[pw_j].1,
                     true,
                     12,
-                    60,
+                    70,
                 );
                 if !rescued_j.is_empty() {
                     rescues.push((pw_j, rescued_j));
@@ -515,7 +515,7 @@ fn main() -> Result<()> {
                     &pairwise_mafs[pw_i].1,
                     false,
                     12,
-                    60,
+                    70,
                 );
                 if !rescued_i.is_empty() {
                     rescues.push((pw_i, rescued_i));

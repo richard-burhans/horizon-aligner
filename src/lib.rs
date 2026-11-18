@@ -1304,18 +1304,24 @@ fn codon_to_aa(b0: u8, b1: u8, b2: u8) -> Option<u8> {
     if aa == 255 { None } else { Some(aa) }
 }
 
-fn index_aa5_frames(seq: &[u8], max_occ: usize, skip_softmasked: bool) -> HashMap<u32, Vec<usize>> {
+fn index_aa_spaced_4of6_frames(
+    seq: &[u8],
+    max_occ: usize,
+    skip_softmasked: bool,
+) -> HashMap<u32, Vec<usize>> {
+    // Spaced 4-of-6 amino-acid mask ("110101"): tolerates 2 AA substitutions across 6 codons (18 bp).
+    const AA_OFFSETS: [usize; 4] = [0, 1, 3, 5];
     let mut map: HashMap<u32, Vec<usize>> = HashMap::new();
     let mut counts: HashMap<u32, usize> = HashMap::new();
     for frame in 0..3 {
-        if seq.len() < frame + 15 {
+        if seq.len() < frame + 18 {
             continue;
         }
         let mut pos = frame;
-        while pos + 15 <= seq.len() {
+        while pos + 18 <= seq.len() {
             let mut key = 0_u32;
             let mut valid = true;
-            for c in 0..5 {
+            for &c in &AA_OFFSETS {
                 let s = &seq[pos + c * 3..pos + c * 3 + 3];
                 if skip_softmasked && s.iter().any(u8::is_ascii_lowercase) {
                     valid = false;
@@ -1342,15 +1348,15 @@ fn index_aa5_frames(seq: &[u8], max_occ: usize, skip_softmasked: bool) -> HashMa
     map
 }
 
-/// Find 2-hit translated amino-acid `5-mer` (15 bp) hits across all reading frames.
+/// Find spaced `4-of-6` translated amino-acid (18 bp) hits across all reading frames.
 fn find_translated_aa5_hits(
     seq_x: &[u8],
     seq_y: &[u8],
     max_occ: usize,
     skip_softmasked: bool,
 ) -> AnchorPairs {
-    let ix = index_aa5_frames(seq_x, max_occ, skip_softmasked);
-    let iy = index_aa5_frames(seq_y, max_occ, skip_softmasked);
+    let ix = index_aa_spaced_4of6_frames(seq_x, max_occ, skip_softmasked);
+    let iy = index_aa_spaced_4of6_frames(seq_y, max_occ, skip_softmasked);
     let mut hits = Vec::new();
     for (k, xs) in &ix {
         if let Some(ys) = iy.get(k) {
@@ -1807,11 +1813,11 @@ pub fn align_contig_pair_with_config(
         append_hsp_gated_lastz12_lcbs(&mut combined_fwd, seq_x, seq_y, &hits_w10_fwd, 200);
         append_hsp_gated_lastz12_lcbs(&mut combined_rc, seq_x, seq_y_rc, &hits_w10_rc, 200);
 
-        // Amino-acid HSP-gated 6-frame translated 5-mer seeding for divergent coding homologs.
+        // Amino-acid HSP-gated 6-frame translated spaced 4-of-6 seeding for divergent coding homologs.
         let aa_fwd = find_translated_aa5_hits(seq_x, seq_y, 2, cfg.skip_softmasked);
         let aa_rc = find_translated_aa5_hits(seq_x, seq_y_rc, 2, cfg.skip_softmasked);
-        append_hsp_gated_aa_lcbs(&mut combined_fwd, seq_x, seq_y, &aa_fwd, 120);
-        append_hsp_gated_aa_lcbs(&mut combined_rc, seq_x, seq_y_rc, &aa_rc, 120);
+        append_hsp_gated_aa_lcbs(&mut combined_fwd, seq_x, seq_y, &aa_fwd, 90);
+        append_hsp_gated_aa_lcbs(&mut combined_rc, seq_x, seq_y_rc, &aa_rc, 90);
     }
 
     // Transition-tolerant R/Y (1-bit purine/pyrimidine) fallback for divergent homologs.
@@ -2994,7 +3000,7 @@ mod tests {
         );
         let mut aa_gated = Vec::new();
         let aa_hits = find_translated_aa5_hits(sx, sy, 2, false);
-        append_hsp_gated_aa_lcbs(&mut aa_gated, sx, sy, &aa_hits, 120);
+        append_hsp_gated_aa_lcbs(&mut aa_gated, sx, sy, &aa_hits, 90);
         assert!(
             !aa_gated.is_empty(),
             "expected AA HSP gate to accept synonymous 12-codon stretch"

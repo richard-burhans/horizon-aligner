@@ -491,6 +491,39 @@ pub fn read_hdf5_v0_root_names(bytes: &[u8]) -> Option<Vec<String>> {
     Some(names)
 }
 
+/// Read contiguous dataset bytes from an HDF5 v1 object header (`DataLayout` `0x0008`, class `1`).
+#[must_use]
+pub fn read_hdf5_v0_contiguous_data(bytes: &[u8], obj_addr: usize) -> Option<&[u8]> {
+    let slice = bytes.get(obj_addr..)?;
+    if slice.len() < 16 || slice[0] != 1 {
+        return None;
+    }
+    let num_msgs = usize::from(u16::from_le_bytes([slice[2], slice[3]]));
+    let hdr_size = usize::try_from(u32::from_le_bytes([
+        slice[8], slice[9], slice[10], slice[11],
+    ]))
+    .ok()?;
+    let mut pos = 16usize;
+    let end = (16 + hdr_size).min(slice.len());
+    let mut seen = 0usize;
+    while seen < num_msgs && pos + 8 <= end {
+        let mtype = u16::from_le_bytes([slice[pos], slice[pos + 1]]);
+        let msize = usize::from(u16::from_le_bytes([slice[pos + 2], slice[pos + 3]]));
+        if mtype == 0x0008 && msize >= 18 && pos + 8 + 18 <= end {
+            let layout_ver = slice[pos + 8];
+            let layout_class = slice[pos + 9];
+            if layout_ver == 3 && layout_class == 1 {
+                let data_addr = usize::try_from(read_u64_le(slice, pos + 10)?).ok()?;
+                let data_size = usize::try_from(read_u64_le(slice, pos + 18)?).ok()?;
+                return bytes.get(data_addr..data_addr + data_size);
+            }
+        }
+        seen += 1;
+        pos += 8 + msize;
+    }
+    None
+}
+
 const fn decode_hal_nibble(nibble: u8) -> u8 {
     match nibble & 0x0f {
         0 => b'a',
