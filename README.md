@@ -93,3 +93,7 @@ target/release/horizon_merge <ref_species> <out.maf> <out.gfa> <pair1.maf> [pair
 ## Architecture
 See [ARCHITECTURE.md](ARCHITECTURE.md) for a map of the core abstractions and dependency flow.
 
+
+## Manual
+For a detailed explanation of the algorithmic stages (MDL, BOCPD, multi-shape seeding) and command-line usage, see the [Comprehensive Manual](docs/manual.md).
+
