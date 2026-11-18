@@ -97,3 +97,9 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for a map of the core abstractions and de
 ## Manual
 For a detailed explanation of the algorithmic stages (MDL, BOCPD, multi-shape seeding) and command-line usage, see the [Comprehensive Manual](docs/manual.md).
 
+
+
+## Documentation
+
+* [Technical Manual](docs/manual.md): Comprehensive documentation covering theory, processing stages, CLI usage, and outputs.
+* [Benchmark Datasets](docs/BENCHMARK_DATASETS.md): A complete listing of the UCSC and Ensembl datasets used to evaluate aligner performance across different evolutionary divergences.
