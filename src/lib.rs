@@ -1136,6 +1136,112 @@ pub fn find_lastz12_1transition_hits<S: std::hash::BuildHasher>(
     (hits_fwd, hits_rc)
 }
 
+#[inline]
+fn hsp_pair_score(a: u8, b: u8) -> i32 {
+    let (Some(ia), Some(ib)) = (base_to_idx(a), base_to_idx(b)) else {
+        return -15;
+    };
+    if ia == ib {
+        10
+    } else if (ia ^ ib) == 2 {
+        -3 // transition (A<->G, C<->T)
+    } else {
+        -12 // transversion
+    }
+}
+
+/// Extend a 19-bp seed hit `(px, py)` without gaps using transition-aware X-drop;
+/// returns `Some((start_x, start_y, end_x, end_y, score))` when `score >= min_score`.
+fn extend_ungapped_hsp(
+    seq_x: &[u8],
+    seq_y: &[u8],
+    px: usize,
+    py: usize,
+    min_score: i32,
+) -> Option<(usize, usize, usize, usize, i32)> {
+    const XDROP: i32 = 60;
+    if px + 19 > seq_x.len() || py + 19 > seq_y.len() {
+        return None;
+    }
+    let mut core = 0i32;
+    for off in 0..19 {
+        core += hsp_pair_score(seq_x[px + off], seq_y[py + off]);
+    }
+
+    let mut cur = 0i32;
+    let mut best_left = 0i32;
+    let mut lx = px;
+    let mut ly = py;
+    let mut ix = px;
+    let mut iy = py;
+    while ix > 0 && iy > 0 {
+        ix -= 1;
+        iy -= 1;
+        cur += hsp_pair_score(seq_x[ix], seq_y[iy]);
+        if cur > best_left {
+            best_left = cur;
+            lx = ix;
+            ly = iy;
+        } else if best_left - cur > XDROP {
+            break;
+        }
+    }
+
+    cur = 0;
+    let mut best_right = 0i32;
+    let mut rx = px + 19;
+    let mut ry = py + 19;
+    ix = px + 19;
+    iy = py + 19;
+    while ix < seq_x.len() && iy < seq_y.len() {
+        cur += hsp_pair_score(seq_x[ix], seq_y[iy]);
+        ix += 1;
+        iy += 1;
+        if cur > best_right {
+            best_right = cur;
+            rx = ix;
+            ry = iy;
+        } else if best_right - cur > XDROP {
+            break;
+        }
+    }
+
+    let total = core + best_left + best_right;
+    (total >= min_score).then_some((lx, ly, rx, ry, total))
+}
+
+fn append_hsp_gated_lastz12_lcbs(
+    target: &mut LcbList,
+    seq_x: &[u8],
+    seq_y: &[u8],
+    hits: &[(usize, usize)],
+    min_hsp_score: i32,
+) {
+    let mut filtered_hits: Vec<(usize, usize)> = Vec::new();
+    let mut strong_hsps: Vec<Vec<(usize, usize)>> = Vec::new();
+    for &(px, py) in hits {
+        if let Some((lx, ly, rx, ry, sc)) = extend_ungapped_hsp(seq_x, seq_y, px, py, min_hsp_score)
+        {
+            filtered_hits.push((px, py));
+            if sc >= min_hsp_score + 60 && rx >= lx + 20 && ry >= ly + 20 {
+                strong_hsps.push(vec![(lx, ly), (rx - 12, ry - 12)]);
+            }
+        }
+    }
+    let mut candidates = cluster_strand_lcbs(&filtered_hits, 1800, 200, 3, 30, 250.0);
+    candidates.extend(cluster_strand_lcbs(&filtered_hits, 150, 25, 2, 16, 150.0));
+    candidates.extend(strong_hsps);
+    for lcb in candidates {
+        let (sx, ex) = (lcb[0].0, lcb[lcb.len() - 1].0);
+        if !target
+            .iter()
+            .any(|c| sx <= c[c.len() - 1].0 && ex >= c[0].0)
+        {
+            target.push(lcb);
+        }
+    }
+}
+
 fn find_w12_raw_lcbs(idx_x: &ContigIndex, idx_y: &ContigIndex) -> (LcbList, LcbList) {
     let (hits_fwd, hits_rc) =
         intersect_seed_maps(&idx_x.seeds_fwd, &idx_y.seeds_fwd, &idx_y.seeds_rc);
@@ -1285,6 +1391,26 @@ pub fn align_contig_pair_with_config(
         cfg.fallback_min_anchors,
         cfg.fallback_min_span,
     );
+
+    // LASTZ-style 12-of-19 + 1-transition hits gated by ungapped X-drop HSP score (>=180).
+    let iy_lz_fwd = canonical_spaced_seeds_with_opts(
+        seq_y,
+        MASK_LASTZ12,
+        cfg.fallback_max_occ,
+        cfg.skip_softmasked,
+        false,
+    )?;
+    let iy_lz_rc = canonical_spaced_seeds_with_opts(
+        seq_y_rc,
+        MASK_LASTZ12,
+        cfg.fallback_max_occ,
+        cfg.skip_softmasked,
+        false,
+    )?;
+    let (hits_lz_fwd, hits_lz_rc) =
+        find_lastz12_1transition_hits(seq_x, &iy_lz_fwd, &iy_lz_rc, cfg.skip_softmasked);
+    append_hsp_gated_lastz12_lcbs(&mut combined_fwd, seq_x, seq_y, &hits_lz_fwd, 180);
+    append_hsp_gated_lastz12_lcbs(&mut combined_rc, seq_x, seq_y_rc, &hits_lz_rc, 180);
 
     // Transition-tolerant R/Y (1-bit purine/pyrimidine) fallback for divergent homologs.
     if cfg.use_ry_seeds {
