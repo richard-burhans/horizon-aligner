@@ -930,6 +930,8 @@ pub struct ContigIndex {
 }
 
 const MASK_RY20: &str = "1110110110111011011011011";
+/// Standard `LASTZ` `12-of-19` spaced-seed mask.
+pub const MASK_LASTZ12: &str = "1110100110010101111";
 
 /// Configurable parameters for [`align_contig_pair_with_config`].
 #[derive(Debug, Clone)]
@@ -1068,6 +1070,65 @@ fn intersect_seed_maps(
             for &px in pxs {
                 for &py in pys {
                     hits_rc.push((px, py));
+                }
+            }
+        }
+    }
+    (hits_fwd, hits_rc)
+}
+
+/// Find `12-of-19` (`MASK_LASTZ12`) seed hits including 1-transition (`A<->G`, `C<->T`) neighbors.
+#[must_use]
+pub fn find_lastz12_1transition_hits<S: std::hash::BuildHasher>(
+    seq_x: &[u8],
+    iy_fwd: &HashMap<u64, Vec<usize>, S>,
+    iy_rc: &HashMap<u64, Vec<usize>, S>,
+    skip_softmasked: bool,
+) -> (AnchorPairs, AnchorPairs) {
+    const OFFSETS: [usize; 12] = [0, 1, 2, 4, 7, 8, 11, 13, 15, 16, 17, 18];
+    const REV_OFFSETS: [usize; 12] = [0, 1, 2, 3, 5, 7, 10, 11, 14, 16, 17, 18];
+    let span = 19usize;
+    if seq_x.len() < span {
+        return (Vec::new(), Vec::new());
+    }
+    let mut hits_fwd = Vec::new();
+    let mut hits_rc = Vec::new();
+    for i in 0..=(seq_x.len() - span) {
+        let sub = &seq_x[i..i + span];
+        let mut fwd = 0_u64;
+        let mut rc = 0_u64;
+        let mut valid = true;
+        for (&fo, &ro) in OFFSETS.iter().zip(&REV_OFFSETS) {
+            if skip_softmasked && (sub[fo].is_ascii_lowercase() || sub[ro].is_ascii_lowercase()) {
+                valid = false;
+                break;
+            }
+            let (Some(bf), Some(br)) = (base_to_idx(sub[fo]), base_to_idx(sub[ro])) else {
+                valid = false;
+                break;
+            };
+            fwd = (fwd << 2) | (bf as u64);
+            rc = (rc << 2) | ((3 - br) as u64);
+        }
+        if !valid {
+            continue;
+        }
+        let mut keys = [0_u64; 13];
+        keys[0] = fwd.min(rc);
+        for (b, slot) in keys.iter_mut().skip(1).enumerate() {
+            let mf = fwd ^ (2_u64 << (2 * (11 - b)));
+            let mr = rc ^ (2_u64 << (2 * b));
+            *slot = mf.min(mr);
+        }
+        for key in keys {
+            if let Some(pys) = iy_fwd.get(&key) {
+                for &py in pys {
+                    hits_fwd.push((i, py));
+                }
+            }
+            if let Some(pys) = iy_rc.get(&key) {
+                for &py in pys {
+                    hits_rc.push((i, py));
                 }
             }
         }
@@ -2322,5 +2383,16 @@ mod tests {
         let skipped =
             canonical_spaced_seeds_with_opts(masked, MASK_RY20, 2, true, true).expect("valid");
         assert_eq!(skipped.len(), 0);
+    }
+
+    #[test]
+    fn lastz12_1transition_recovers_transition_hit() {
+        let sx = b"ACGTTGCACTGATCGTAGCTAGCTAAGGCCAT";
+        // Position 1 has C -> T transition; exact 12-of-19 misses, 1-transition recovers (0, 0).
+        let sy = b"ATGTTGCACTGATCGTAGCTAGCTAAGGCCAT";
+        let iy_fwd = canonical_spaced_seeds(sy, MASK_LASTZ12, 2).expect("valid");
+        let iy_rc = canonical_spaced_seeds(&revcomp(sy), MASK_LASTZ12, 2).expect("valid");
+        let (fwd, _) = find_lastz12_1transition_hits(sx, &iy_fwd, &iy_rc, false);
+        assert!(fwd.contains(&(0, 0)), "expected (0, 0) in {fwd:?}");
     }
 }
