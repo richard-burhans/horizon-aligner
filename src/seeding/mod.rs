@@ -705,6 +705,54 @@ type LcbList = Vec<Vec<(usize, usize)>>;
 
 type AnchorPairs = Vec<(usize, usize)>;
 
+/// Disjoint closed-interval set `[sx, ex]` backed by `BTreeMap` for `O(log K)` overlap checks.
+pub(crate) struct IntervalSet {
+    map: std::collections::BTreeMap<usize, usize>,
+}
+
+impl IntervalSet {
+    pub(crate) fn new() -> Self {
+        Self {
+            map: std::collections::BTreeMap::new(),
+        }
+    }
+
+    pub(crate) fn from_lcbs<'a, I>(lcbs: I) -> Self
+    where
+        I: IntoIterator<Item = &'a Vec<(usize, usize)>>,
+    {
+        let mut set = Self::new();
+        for c in lcbs {
+            if let (Some(first), Some(last)) = (c.first(), c.last()) {
+                set.insert_merge(first.0, last.0);
+            }
+        }
+        set
+    }
+
+    fn insert_merge(&mut self, mut sx: usize, mut ex: usize) {
+        while let Some((&s, &e)) = self.map.range(..=ex).next_back() {
+            if e < sx {
+                break;
+            }
+            self.map.remove(&s);
+            sx = sx.min(s);
+            ex = ex.max(e);
+        }
+        self.map.insert(sx, ex);
+    }
+
+    pub(crate) fn insert_if_disjoint(&mut self, sx: usize, ex: usize) -> bool {
+        if let Some((_, &e)) = self.map.range(..=ex).next_back()
+            && e >= sx
+        {
+            return false;
+        }
+        self.map.insert(sx, ex);
+        true
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn find_spaced_transition_hits<S: std::hash::BuildHasher>(
     seq_x: &[u8],
@@ -1017,12 +1065,10 @@ pub(crate) fn append_two_hit_diagonal_lcbs(
             j += 1;
         }
     }
+    let mut intervals = IntervalSet::from_lcbs(target.iter());
     for lcb in promoted {
         let (sx, ex) = (lcb[0].0, lcb[lcb.len() - 1].0);
-        if !target
-            .iter()
-            .any(|c| sx <= c[c.len() - 1].0 && ex >= c[0].0)
-        {
+        if intervals.insert_if_disjoint(sx, ex) {
             target.push(lcb);
         }
     }

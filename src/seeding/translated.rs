@@ -189,12 +189,10 @@ pub(crate) fn append_hsp_gated_aa_lcbs(
     }
     let mut candidates = cluster_strand_lcbs(&gated, 1800, 200, 2, 24, 250.0);
     candidates.extend(strong);
+    let mut intervals = super::IntervalSet::from_lcbs(target.iter());
     for lcb in candidates {
         let (sx, ex) = (lcb[0].0, lcb[lcb.len() - 1].0);
-        if !target
-            .iter()
-            .any(|c| sx <= c[c.len() - 1].0 && ex >= c[0].0)
-        {
+        if intervals.insert_if_disjoint(sx, ex) {
             target.push(lcb);
         }
     }
@@ -314,12 +312,10 @@ pub(crate) fn append_hsp_gated_lastz12_lcbs(
     let mut candidates = cluster_strand_lcbs(&filtered_hits, 1800, 200, 3, 30, 250.0);
     candidates.extend(cluster_strand_lcbs(&filtered_hits, 150, 25, 2, 16, 150.0));
     candidates.extend(strong_hsps);
+    let mut intervals = super::IntervalSet::from_lcbs(target.iter());
     for lcb in candidates {
         let (sx, ex) = (lcb[0].0, lcb[lcb.len() - 1].0);
-        if !target
-            .iter()
-            .any(|c| sx <= c[c.len() - 1].0 && ex >= c[0].0)
-        {
+        if intervals.insert_if_disjoint(sx, ex) {
             target.push(lcb);
         }
     }
@@ -342,13 +338,10 @@ pub(crate) fn append_nonoverlapping_lcbs(
     let mut candidates = cluster_strand_lcbs(hits, 1800, 200, min_anchors, min_span, 250.0);
     // Tight 2-hit diagonal pass (LASTZ-style): 2 nearby hits within 120bp and <=25bp drift.
     candidates.extend(cluster_strand_lcbs(hits, 120, 25, 2, 16, 120.0));
+    let mut intervals = super::IntervalSet::from_lcbs(existing.iter().chain(target.iter()));
     for lcb in candidates {
         let (sx, ex) = (lcb[0].0, lcb[lcb.len() - 1].0);
-        if !existing
-            .iter()
-            .chain(target.iter())
-            .any(|c| sx <= c[c.len() - 1].0 && ex >= c[0].0)
-        {
+        if intervals.insert_if_disjoint(sx, ex) {
             target.push(lcb);
         }
     }
