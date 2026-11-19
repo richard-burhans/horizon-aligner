@@ -3,6 +3,7 @@
 #[cfg(test)]
 use super::append_two_hit_diagonal_lcbs;
 use super::{AnchorPairs, ContigIndex, LcbList, base_to_idx, cluster_strand_lcbs, codon_to_aa};
+use rayon::prelude::*;
 use std::collections::HashMap;
 
 const fn aa_group(ax: u8) -> u8 {
@@ -307,12 +308,37 @@ pub(crate) fn append_hsp_gated_lastz12_lcbs(
     let strong_margin = (1.8 * space_bits).round() as i32;
     let mut filtered_hits: Vec<(usize, usize)> = Vec::new();
     let mut strong_hsps: Vec<Vec<(usize, usize)>> = Vec::new();
-    for &(px, py) in hits {
-        if let Some((lx, ly, rx, ry, sc)) = extend_ungapped_hsp(seq_x, seq_y, px, py, min_hsp_score)
-        {
+    if hits.len() >= 2048 {
+        let evaluated: Vec<_> = hits
+            .par_iter()
+            .filter_map(|&(px, py)| {
+                let (lx, ly, rx, ry, sc) =
+                    extend_ungapped_hsp(seq_x, seq_y, px, py, min_hsp_score)?;
+                let strong = if sc >= min_hsp_score + strong_margin && rx > lx + 19 && ry > ly + 19
+                {
+                    Some(vec![(lx, ly), (rx - 19, ry - 19)])
+                } else {
+                    None
+                };
+                Some((px, py, strong))
+            })
+            .collect();
+        filtered_hits.reserve(evaluated.len());
+        for (px, py, strong) in evaluated {
             filtered_hits.push((px, py));
-            if sc >= min_hsp_score + strong_margin && rx > lx + 19 && ry > ly + 19 {
-                strong_hsps.push(vec![(lx, ly), (rx - 19, ry - 19)]);
+            if let Some(hsp) = strong {
+                strong_hsps.push(hsp);
+            }
+        }
+    } else {
+        for &(px, py) in hits {
+            if let Some((lx, ly, rx, ry, sc)) =
+                extend_ungapped_hsp(seq_x, seq_y, px, py, min_hsp_score)
+            {
+                filtered_hits.push((px, py));
+                if sc >= min_hsp_score + strong_margin && rx > lx + 19 && ry > ly + 19 {
+                    strong_hsps.push(vec![(lx, ly), (rx - 19, ry - 19)]);
+                }
             }
         }
     }

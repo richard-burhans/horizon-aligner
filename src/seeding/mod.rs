@@ -2,6 +2,7 @@
 
 use crate::AlignError;
 use crate::bocpd::base_to_idx;
+use rayon::prelude::*;
 use std::collections::HashMap;
 
 /// KP-14 spaced seed mask (weight 11, span 15).
@@ -440,6 +441,8 @@ pub(crate) struct FlatSeedIndex {
     pub(crate) pos: Vec<u32>,
     pub(crate) span: usize,
     pub(crate) seq_len: usize,
+    buckets: Vec<u32>,
+    bucket_shift: u8,
 }
 
 impl FlatSeedIndex {
@@ -482,6 +485,8 @@ impl FlatSeedIndex {
                 pos: Vec::new(),
                 span,
                 seq_len: seq.len(),
+                buckets: Vec::new(),
+                bucket_shift: 0,
             });
         }
         if seq.len() > u32::MAX as usize {
@@ -557,21 +562,60 @@ impl FlatSeedIndex {
         keys.shrink_to_fit();
         pos.shrink_to_fit();
 
+        let (buckets, bucket_shift) = if keys.len() >= 4096 && u32::try_from(keys.len()).is_ok() {
+            let max_key = *keys.last().unwrap_or(&0);
+            let max_bits = 64 - max_key.leading_zeros();
+            let shift = u8::try_from(max_bits.saturating_sub(16)).unwrap_or(0);
+            let mut bkt = vec![0u32; 65_537];
+            let mut cur_b = 0usize;
+            for (idx, &k) in keys.iter().enumerate() {
+                let b = usize::try_from(k >> shift).unwrap_or(65_535).min(65_535);
+                let idx_u32 = u32::try_from(idx).unwrap_or(u32::MAX);
+                while cur_b <= b {
+                    bkt[cur_b] = idx_u32;
+                    cur_b += 1;
+                }
+            }
+            let total_u32 = u32::try_from(keys.len()).unwrap_or(u32::MAX);
+            while cur_b <= 65_536 {
+                bkt[cur_b] = total_u32;
+                cur_b += 1;
+            }
+            (bkt, shift)
+        } else {
+            (Vec::new(), 0)
+        };
+
         Ok(Self {
             keys,
             pos,
             span,
             seq_len: seq.len(),
+            buckets,
+            bucket_shift,
         })
     }
 
     pub(crate) fn get(&self, key: u64) -> &[u32] {
-        let start = self.keys.partition_point(|&k| k < key);
-        if start >= self.keys.len() || self.keys[start] != key {
+        let (lo, hi) = if self.buckets.is_empty() {
+            (0, self.keys.len())
+        } else {
+            let Ok(b) = usize::try_from(key >> self.bucket_shift) else {
+                return &[];
+            };
+            if b >= 65_536 {
+                return &[];
+            }
+            (self.buckets[b] as usize, self.buckets[b + 1] as usize)
+        };
+        let slice = &self.keys[lo..hi];
+        let rel = slice.partition_point(|&k| k < key);
+        let start = lo + rel;
+        if start >= hi || self.keys[start] != key {
             return &[];
         }
         let mut end = start + 1;
-        while end < self.keys.len() && self.keys[end] == key {
+        while end < hi && self.keys[end] == key {
             end += 1;
         }
         &self.pos[start..end]
@@ -912,70 +956,96 @@ pub(crate) fn find_spaced_transition_hits_flat(
     min_transitions: usize,
     max_transitions: usize,
 ) -> (AnchorPairs, AnchorPairs) {
+    const CHUNK_LEN: usize = 131_072;
     if seq_x.len() < span {
         return (Vec::new(), Vec::new());
     }
-    let w = offsets.len();
-    let mut hits_fwd = Vec::new();
-    let mut hits_rc = Vec::new();
-    let mut keys = Vec::with_capacity(w * w / 2 + w + 1);
-    for i in 0..=(seq_x.len() - span) {
-        if let Some(m) = sdust_x
-            && (m[i] || m[i + span / 2] || m[i + span - 1])
-        {
-            continue;
-        }
-        let sub = &seq_x[i..i + span];
-        if sdust_x.is_none() && span >= 12 && is_low_complexity_window(sub) {
-            continue;
-        }
-        let mut fwd = 0_u64;
-        let mut rc = 0_u64;
-        let mut valid = true;
-        for (&fo, &ro) in offsets.iter().zip(rev_offsets) {
-            if skip_softmasked && (sub[fo].is_ascii_lowercase() || sub[ro].is_ascii_lowercase()) {
-                valid = false;
-                break;
+    let n_pos = seq_x.len() - span + 1;
+    let scan_range = |start_i: usize, end_i: usize| -> (AnchorPairs, AnchorPairs) {
+        let w = offsets.len();
+        let mut hits_fwd = Vec::new();
+        let mut hits_rc = Vec::new();
+        let mut keys = Vec::with_capacity(w * w / 2 + w + 1);
+        for i in start_i..end_i {
+            if let Some(m) = sdust_x
+                && (m[i] || m[i + span / 2] || m[i + span - 1])
+            {
+                continue;
             }
-            let (Some(bf), Some(br)) = (base_to_idx(sub[fo]), base_to_idx(sub[ro])) else {
-                valid = false;
-                break;
-            };
-            fwd = (fwd << 2) | (bf as u64);
-            rc = (rc << 2) | ((3 - br) as u64);
-        }
-        if !valid {
-            continue;
-        }
-        keys.clear();
-        if min_transitions == 0 {
-            keys.push(fwd.min(rc));
-        }
-        if min_transitions <= 1 && max_transitions >= 1 {
-            for b in 0..w {
-                let mf = fwd ^ (2_u64 << (2 * (w - 1 - b)));
-                let mr = rc ^ (2_u64 << (2 * b));
-                keys.push(mf.min(mr));
+            let sub = &seq_x[i..i + span];
+            if sdust_x.is_none() && span >= 12 && is_low_complexity_window(sub) {
+                continue;
             }
-        }
-        if max_transitions >= 2 {
-            for a in 0..w {
-                let ma_f = fwd ^ (2_u64 << (2 * (w - 1 - a)));
-                let ma_r = rc ^ (2_u64 << (2 * a));
-                for b in (a + 1)..w {
-                    let mf = ma_f ^ (2_u64 << (2 * (w - 1 - b)));
-                    let mr = ma_r ^ (2_u64 << (2 * b));
+            let mut fwd = 0_u64;
+            let mut rc = 0_u64;
+            let mut valid = true;
+            for (&fo, &ro) in offsets.iter().zip(rev_offsets) {
+                if skip_softmasked && (sub[fo].is_ascii_lowercase() || sub[ro].is_ascii_lowercase())
+                {
+                    valid = false;
+                    break;
+                }
+                let (Some(bf), Some(br)) = (base_to_idx(sub[fo]), base_to_idx(sub[ro])) else {
+                    valid = false;
+                    break;
+                };
+                fwd = (fwd << 2) | (bf as u64);
+                rc = (rc << 2) | ((3 - br) as u64);
+            }
+            if !valid {
+                continue;
+            }
+            keys.clear();
+            if min_transitions == 0 {
+                keys.push(fwd.min(rc));
+            }
+            if min_transitions <= 1 && max_transitions >= 1 {
+                for b in 0..w {
+                    let mf = fwd ^ (2_u64 << (2 * (w - 1 - b)));
+                    let mr = rc ^ (2_u64 << (2 * b));
                     keys.push(mf.min(mr));
                 }
             }
-        }
-        for &key in &keys {
-            for &py in iy.get(key) {
-                let py_u = py as usize;
-                hits_fwd.push((i, py_u));
-                hits_rc.push((i, iy.seq_len - iy.span - py_u));
+            if max_transitions >= 2 {
+                for a in 0..w {
+                    let ma_f = fwd ^ (2_u64 << (2 * (w - 1 - a)));
+                    let ma_r = rc ^ (2_u64 << (2 * a));
+                    for b in (a + 1)..w {
+                        let mf = ma_f ^ (2_u64 << (2 * (w - 1 - b)));
+                        let mr = ma_r ^ (2_u64 << (2 * b));
+                        keys.push(mf.min(mr));
+                    }
+                }
+            }
+            for &key in &keys {
+                for &py in iy.get(key) {
+                    let py_u = py as usize;
+                    hits_fwd.push((i, py_u));
+                    hits_rc.push((i, iy.seq_len - iy.span - py_u));
+                }
             }
         }
+        (hits_fwd, hits_rc)
+    };
+
+    if n_pos < 16_384 {
+        return scan_range(0, n_pos);
+    }
+    let chunks: Vec<(usize, usize)> = (0..n_pos)
+        .step_by(CHUNK_LEN)
+        .map(|s| (s, (s + CHUNK_LEN).min(n_pos)))
+        .collect();
+    let per_chunk: Vec<(AnchorPairs, AnchorPairs)> = chunks
+        .into_par_iter()
+        .map(|(s, e)| scan_range(s, e))
+        .collect();
+    let total_fwd: usize = per_chunk.iter().map(|(f, _)| f.len()).sum();
+    let total_rc: usize = per_chunk.iter().map(|(_, r)| r.len()).sum();
+    let mut hits_fwd = Vec::with_capacity(total_fwd);
+    let mut hits_rc = Vec::with_capacity(total_rc);
+    for (mut f, mut r) in per_chunk {
+        hits_fwd.append(&mut f);
+        hits_rc.append(&mut r);
     }
     (hits_fwd, hits_rc)
 }
