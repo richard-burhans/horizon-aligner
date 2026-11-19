@@ -705,11 +705,11 @@ def make_fig5_pangenome_suite() -> None:
     # Panel B: 12 GB HPRC v1.0 Graph & Suite Scaling (Wall Time vs Peak RSS)
     suite_runs = [
         ("horizon_gfa stats\n(12 GB HPRC, 81.4M segs)", 99.97, 97.0, OI_PURPLE, (10, -2), "left"),
-        ("horizon_gfa extract\n(GRCh38+CHM13 chr22)", 183.29, 456.4, OI_PURPLE, (10, -6), "left"),
-        ("horizon_gfa extract\n(GRCh38+CHM13 chr6)", 244.93, 1255.1, OI_PURPLE, (10, 4), "left"),
-        ("horizon_lift --bridge-bp 10\n(500 chr22 windows)", 182.67, 619.7, OI_GREEN, (-10, 8), "right"),
+        ("horizon_gfa extract\n(GRCh38+CHM13 chr22)", 295.62, 455.8, OI_PURPLE, (10, -10), "left"),
+        ("horizon_gfa extract\n(GRCh38+CHM13 chr6)", 399.48, 1254.9, OI_PURPLE, (10, 4), "left"),
+        ("horizon_lift --to-chrom chr22\n(500 chr22 windows)", 178.93, 708.6, OI_GREEN, (-10, 12), "right"),
         ("horizon_wga --resolve-dups\n(chr22 50.8 × 35.6 Mbp)", 116.58, 3336.4, OI_BLUE, (10, 12), "left"),
-        ("horizon_wga --resolve-dups\n(chr6 170.8 × 110.7 Mbp)", 451.35, 10515.0, OI_BLUE, (-10, -8), "right"),
+        ("horizon_wga --resolve-dups\n(chr6 HEAD 170.8 × 110.7 Mbp)", 592.68, 12533.0, OI_BLUE, (-10, -12), "right"),
         ("horizon_wga --resolve-dups\n(chr6 20 Mbp q-arm)", 38.23, 2409.7, OI_SKY, (8, -18), "left"),
     ]
     for label, wt, rss, col, (dx, dy), ha in suite_runs:
@@ -727,8 +727,8 @@ def make_fig5_pangenome_suite() -> None:
         )
 
     ax2.set_yscale("log")
-    ax2.set_xlim(0, 500)
-    ax2.set_ylim(50, 22000)
+    ax2.set_xlim(0, 640)
+    ax2.set_ylim(50, 26000)
     ax2.set_xlabel("Wall-Clock Runtime (s)", fontsize=9.0)
     ax2.set_ylabel("Peak RSS Memory (MB, log scale)", fontsize=9.0)
     ax2.set_title("12 GB HPRC v1.0 Suite Runtime & Memory", loc="left", fontsize=9.8)
@@ -739,16 +739,86 @@ def make_fig5_pangenome_suite() -> None:
     save_both(fig, "fig5_pangenome_suite")
 
 
+def make_fig6_suite_and_vg() -> None:
+    """Two-panel BioVis figure: HPRC 10k-seg suite vs vg & BOCPD LCB gate calibration."""
+    fig, (ax1, ax2) = plt.subplots(
+        1, 2, figsize=(10.8, 4.2), gridspec_kw={"width_ratios": [1.2, 1.0], "wspace": 0.34}
+    )
+
+    # Panel A: 10,000-segment HPRC chr22 subgraph + multi-species suite (Runtime vs RSS)
+    tools = [
+        ("horizon_gfa stats", 0.0256, 22.7, OI_PURPLE, (10, -2), "left"),
+        ("horizon_clean", 0.0525, 36.9, OI_GREEN, (10, 8), "left"),
+        ("horizon_wga --graph\n(20k DAG nodes)", 0.821, 404.4, OI_BLUE, (10, 6), "left"),
+        ("vg convert -g -p\n(vg v1.60.0)", 1.8292, 76.6, OI_GRAY, (-8, 16), "right"),
+        ("vg stats -z -l -N\n(vg v1.60.0, 168× slower)", 4.2984, 77.0, OI_VERMILION, (0, 20), "center"),
+        ("horizon_guide\n(5-sp HAL)", 2.527, 610.1, OI_SKY, (8, -6), "left"),
+        ("horizon_merge\n(92-sp chrM)", 4.451, 26.8, OI_GREEN, (0, -20), "center"),
+        ("horizon_resolve\n(e-graph walks)", 8.106, 36.9, OI_ORANGE, (-10, 12), "right"),
+    ]
+    for label, wt, rss, col, (dx, dy), ha in tools:
+        ax1.scatter(wt, rss, color=col, s=68, edgecolor="white", linewidth=0.9, zorder=4)
+        ax1.annotate(
+            label,
+            (wt, rss),
+            xytext=(dx, dy),
+            textcoords="offset points",
+            ha=ha,
+            va="center",
+            fontsize=6.9,
+            color=OI_BLACK,
+            arrowprops=dict(arrowstyle="-", color="#9CA3AF", lw=0.6, shrinkA=2, shrinkB=4),
+        )
+    ax1.set_xscale("log")
+    ax1.set_yscale("log")
+    ax1.set_xlim(0.015, 20)
+    ax1.set_ylim(12, 1200)
+    ax1.set_xlabel("Wall-Clock Runtime (s, log scale)", fontsize=9.0)
+    ax1.set_ylabel("Peak RSS Memory (MB, log scale)", fontsize=9.0)
+    ax1.set_title("10k-Seg HPRC Subgraph (vs. vg) & Multi-Species Suite", loc="left", fontsize=9.6)
+    ax1.grid(True, which="major", linestyle=":", linewidth=0.5, color="#D1D5DB", alpha=0.7)
+    despine(ax1)
+    ax1.text(-0.15, 1.07, "A", transform=ax1.transAxes, fontsize=11.5, fontweight="bold", va="top")
+
+    # Panel B: R1-HMM BOCPD LCB gate precision gain & 18%-GC null suppression
+    cats = ["Random 18% GC\n(10 kb null, ÷100 pairs)", "Horse\n(Precision %)", "Macaque\n(Precision %)", "Marmoset\n(Precision %)"]
+    before = [180.77, 65.4, 84.6, 86.1]
+    after = [0.0, 72.3, 86.9, 87.7]
+    x = np.arange(len(cats))
+    w = 0.36
+    b1 = ax2.bar(x - w / 2, before, width=w, color=OI_GRAY, edgecolor="white", label="Before BOCPD LCB Gate")
+    b2 = ax2.bar(x + w / 2, after, width=w, color=OI_BLUE, edgecolor="white", label="After BOCPD LCB Gate (HEAD)")
+
+    for bar, val in zip(b1, before):
+        txt = "18,077" if val > 100 else f"{val:.1f}%"
+        ax2.text(bar.get_x() + bar.get_width() / 2, val + 2.5, txt, ha="center", va="bottom", fontsize=7.2, color=OI_BLACK)
+    for bar, val in zip(b2, after):
+        txt = "0" if val == 0 else f"{val:.1f}%"
+        ax2.text(bar.get_x() + bar.get_width() / 2, val + 2.5, txt, ha="center", va="bottom", fontsize=7.2, fontweight="bold", color=OI_BLUE)
+
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(cats, fontsize=7.5)
+    ax2.set_ylim(0, 205)
+    ax2.set_ylabel("Precision (%) / Null Pairs (×100)", fontsize=8.8)
+    ax2.set_title("BOCPD Composition-Aware LCB Gate (R1-HMM)", loc="left", fontsize=9.6)
+    ax2.legend(frameon=False, fontsize=7.2, loc="upper right")
+    despine(ax2)
+    ax2.text(-0.15, 1.07, "B", transform=ax2.transAxes, fontsize=11.5, fontweight="bold", va="top")
+
+    save_both(fig, "fig6_suite_and_vg")
+
+
 if __name__ == "__main__":
     make_fig1_architecture()
     make_fig2_benchmarks()
     make_fig3_abstention_speedup()
     make_fig4_ablation_profile()
     make_fig5_pangenome_suite()
+    make_fig6_suite_and_vg()
     make_fig_c1_bocpd_mdl_trace()
     make_fig_c2_bandgrid_egraph()
     make_fig_c3_hdf5_hal_seek()
     make_fig_g1_hoxd70_vs_mdl_gc()
     make_fig_g2_hal_binary_layouts()
     make_fig_g3_horizon_bubble_anatomy()
-    print(f"Generated 11 figures (.png + .svg + .pdf) in {OUT_DIR}")
+    print(f"Generated 12 figures (.png + .svg + .pdf) in {OUT_DIR}")
