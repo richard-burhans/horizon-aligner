@@ -368,10 +368,25 @@ fn pass2_rewrite<W: Write>(
     let mut reader = open_line_reader(gfa_path)?;
     let mut stats = ResolveStats::default();
     let mut line = String::new();
+    let mut raw_l_lines: Vec<String> = Vec::new();
+    let mut used_edges: HashSet<(String, bool, String, bool)> = HashSet::new();
+
+    let record_edges = |steps: &[(String, bool)], used: &mut HashSet<(String, bool, String, bool)>| {
+        for win in steps.windows(2) {
+            let (ref u, uf) = win[0];
+            let (ref v, vf) = win[1];
+            used.insert((u.clone(), uf, v.clone(), vf));
+            used.insert((v.clone(), !vf, u.clone(), !uf));
+        }
+    };
 
     while reader.read_line(&mut line)? > 0 {
         let trimmed = line.trim_end_matches(['\r', '\n']);
-        if trimmed.starts_with("P\t") {
+        if trimmed.starts_with("L\t") {
+            raw_l_lines.push(trimmed.to_string());
+            line.clear();
+            continue;
+        } else if trimmed.starts_with("P\t") {
             let cols: Vec<&str> = trimmed.split('\t').collect();
             if cols.len() >= 4 {
                 stats.paths_seen += 1;
@@ -385,6 +400,7 @@ fn pass2_rewrite<W: Write>(
                     cli.collapse_dups,
                     &mut stats,
                 );
+                record_edges(&resolved, &mut used_edges);
                 let mut seg_str = String::new();
                 for (idx, (s, fwd)) in resolved.iter().enumerate() {
                     if idx > 0 {
@@ -427,6 +443,7 @@ fn pass2_rewrite<W: Write>(
                     cli.collapse_dups,
                     &mut stats,
                 );
+                record_edges(&resolved, &mut used_edges);
                 let mut walk_str = String::new();
                 let mut resolved_bp = 0usize;
                 let mut all_known = true;
@@ -477,6 +494,44 @@ fn pass2_rewrite<W: Write>(
         }
         writeln!(out, "{trimmed}")?;
         line.clear();
+    }
+
+    let has_paths_or_walks = stats.paths_seen + stats.walks_seen > 0;
+    let mut seen_edges: HashSet<(String, bool, String, bool)> = HashSet::new();
+    for l_line in &raw_l_lines {
+        let cols: Vec<&str> = l_line.split('\t').collect();
+        if cols.len() >= 6 {
+            let uf = cols[2] != "-";
+            let vf = cols[4] != "-";
+            let fwd_edge = (cols[1].to_string(), uf, cols[3].to_string(), vf);
+            if !has_paths_or_walks || used_edges.contains(&fwd_edge) {
+                writeln!(out, "{l_line}")?;
+                seen_edges.insert((cols[3].to_string(), !vf, cols[1].to_string(), !uf));
+                seen_edges.insert(fwd_edge);
+            }
+        } else {
+            writeln!(out, "{l_line}")?;
+        }
+    }
+    let mut missing: Vec<(String, bool, String, bool)> = used_edges
+        .into_iter()
+        .filter(|e| !seen_edges.contains(e))
+        .collect();
+    missing.sort();
+    for (u, uf, v, vf) in missing {
+        let rc = (v.clone(), !vf, u.clone(), !uf);
+        if !seen_edges.contains(&(u.clone(), uf, v.clone(), vf)) && !seen_edges.contains(&rc) {
+            writeln!(
+                out,
+                "L\t{}\t{}\t{}\t{}\t0M",
+                u,
+                if uf { '+' } else { '-' },
+                v,
+                if vf { '+' } else { '-' }
+            )?;
+            seen_edges.insert((u, uf, v, vf));
+            seen_edges.insert(rc);
+        }
     }
 
     out.flush()?;
@@ -559,6 +614,9 @@ mod tests {
 
         let out_text = std::fs::read_to_string(&gfa_out)?;
         assert!(out_text.contains("W\tHG002\t1\tchr6\t0\t60\t>a>b>c\tEG:Z:"));
+        assert!(out_text.contains("L\ta\t+\tb\t+\t0M"));
+        assert!(out_text.contains("L\tb\t+\tc\t+\t0M"));
+        assert!(!out_text.contains("L\tb\t+\tb\t+\t0M"));
         let _ = std::fs::remove_dir_all(&dir);
         Ok(())
     }

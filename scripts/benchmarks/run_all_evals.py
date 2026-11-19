@@ -30,8 +30,8 @@ def evaluate_pair(dataset_name: str, maf_gz: Path, ref_prefix: str, tgt_prefix: 
         print(f"Missing {target_maf}, skipping.")
         return
 
-    # 2. Extract specific pairs
-    ref_fa = FASTA_DIR / f"{dataset_name}_{ref_prefix.replace('.', '_')}.fa"
+    # 2. Extract specific pairs (include tgt_prefix in ref_fa so multiple targets don't overwrite)
+    ref_fa = FASTA_DIR / f"{dataset_name}_{ref_prefix.replace('.', '_')}_vs_{tgt_prefix.replace('.', '_')}.fa"
     tgt_fa = FASTA_DIR / f"{dataset_name}_{tgt_prefix.replace('.', '_')}.fa"
     pw_maf = BENCH_DIR / f"{dataset_name}_{ref_prefix.replace('.', '_')}_{tgt_prefix.replace('.', '_')}.maf"
     

@@ -364,6 +364,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 fn estimate_dag_hmm_params(nodes: &[GraphNode], seq_y: &[u8]) -> HmmParams {
     use horizon_aligner::complement_base;
     use horizon_aligner::seeding::{MASK_W10, canonical_spaced_seeds_with_opts};
@@ -373,6 +374,9 @@ fn estimate_dag_hmm_params(nodes: &[GraphNode], seq_y: &[u8]) -> HmmParams {
     let span = MASK_W10.len();
     let mut matches = 0usize;
     let mut total = 0usize;
+    let mut indel_events = 0usize;
+    let mut total_indel_len = 0usize;
+    let mut total_span = 0usize;
     for nd in nodes {
         let Ok(n_seeds) = canonical_spaced_seeds_with_opts(&nd.seq, MASK_W10, 4, false, false)
         else {
@@ -380,11 +384,13 @@ fn estimate_dag_hmm_params(nodes: &[GraphNode], seq_y: &[u8]) -> HmmParams {
         };
         let mut keys: Vec<u64> = n_seeds.keys().copied().collect();
         keys.sort_unstable();
+        let mut node_hits: Vec<(usize, usize)> = Vec::new();
         for k in keys {
             if let (Some(n_pos), Some(q_pos)) = (n_seeds.get(&k), q_seeds.get(&k)) {
                 for &np in n_pos {
                     for &qp in q_pos {
                         if np + span <= nd.seq.len() && qp + span <= seq_y.len() {
+                            node_hits.push((np, qp));
                             let mut fwd_m = 0usize;
                             let mut rc_m = 0usize;
                             let mut valid_n = 0usize;
@@ -421,6 +427,18 @@ fn estimate_dag_hmm_params(nodes: &[GraphNode], seq_y: &[u8]) -> HmmParams {
                 break;
             }
         }
+        node_hits.sort_unstable();
+        for w in node_hits.windows(2).take(64) {
+            let dx = w[1].0.saturating_sub(w[0].0);
+            let dy = w[1].1.saturating_sub(w[0].1);
+            if dx > 0 && dy > 0 && dx <= 500 && dy <= 500 {
+                total_span += dx.max(dy);
+                if dx != dy {
+                    indel_events += 1;
+                    total_indel_len += dx.abs_diff(dy);
+                }
+            }
+        }
         if total >= 2000 {
             break;
         }
@@ -428,11 +446,31 @@ fn estimate_dag_hmm_params(nodes: &[GraphNode], seq_y: &[u8]) -> HmmParams {
     if total < 60 {
         return HmmParams::default();
     }
+    let defaults = HmmParams::default();
     #[allow(clippy::cast_precision_loss)]
     let identity_prior = ((matches as f64 + 195.0) / (total as f64 + 300.0)).clamp(0.60, 0.72);
+    #[allow(clippy::cast_precision_loss)]
+    let gap_open_bits = if total_span >= 200 {
+        ((indel_events as f64 + 1.0) / (total_span as f64 + 22.0))
+            .log2()
+            .clamp(-5.5, -4.0)
+    } else {
+        defaults.gap_open_bits
+    };
+    #[allow(clippy::cast_precision_loss)]
+    let gap_extend_bits = if indel_events >= 3 && total_indel_len > 0 {
+        let mean_len = (total_indel_len as f64 + 2.5) / (indel_events as f64 + 1.0);
+        ((mean_len - 1.0) / mean_len)
+            .max(0.01)
+            .log2()
+            .clamp(-1.8, -0.5)
+    } else {
+        defaults.gap_extend_bits
+    };
     HmmParams {
         identity_prior,
-        ..HmmParams::default()
+        gap_open_bits,
+        gap_extend_bits,
     }
 }
 
@@ -610,5 +648,40 @@ mod tests {
         assert_eq!(aln.kept_pairs.len(), query.len());
         let _ = std::fs::remove_dir_all(&dir);
         Ok(())
+    }
+
+    #[test]
+    fn estimate_dag_hmm_params_adapts_identity_and_gaps() {
+        let short_nodes = vec![GraphNode {
+            name: "s+".to_string(),
+            seq: b"ACGTACGTACGT".to_vec(),
+            preds: vec![],
+        }];
+        let def = HmmParams::default();
+        let fallback = estimate_dag_hmm_params(&short_nodes, b"ACGTACGTACGT");
+        assert!((fallback.identity_prior - def.identity_prior).abs() < 1e-9);
+
+        let bases = *b"ACGT";
+        let mut ref_seq = Vec::with_capacity(400);
+        for i in 0..400 {
+            ref_seq.push(bases[(i * 7 + (i / 11) * 3) % 4]);
+        }
+        // Introduce 4 small deletions in query so dx != dy across seed pairs
+        let mut query = Vec::new();
+        for (idx, &b) in ref_seq.iter().enumerate() {
+            if matches!(idx, 70 | 140 | 210 | 280 | 281 | 282) {
+                continue;
+            }
+            query.push(b);
+        }
+        let nodes = vec![GraphNode {
+            name: "n0+".to_string(),
+            seq: ref_seq,
+            preds: vec![],
+        }];
+        let adapted = estimate_dag_hmm_params(&nodes, &query);
+        assert!(adapted.identity_prior >= 0.65);
+        assert!(adapted.gap_open_bits >= -5.5 && adapted.gap_open_bits <= -4.0);
+        assert!(adapted.gap_extend_bits >= -1.8 && adapted.gap_extend_bits <= -0.5);
     }
 }
