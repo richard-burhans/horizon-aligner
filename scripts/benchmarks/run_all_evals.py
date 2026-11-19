@@ -7,7 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 ALIGNER_DIR = ROOT
-BENCH_DIR = ROOT.parent / "data" / "benchmarks"
+BENCH_DIR = ROOT.parent / "pg" / "data" / "benchmarks"
 FASTA_DIR = BENCH_DIR / "fastas"
 EXTRACT_SCRIPT = ROOT / "scripts" / "benchmarks" / "extract_fasta_from_maf.py"
 

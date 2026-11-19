@@ -1,0 +1,715 @@
+{
+  "round": 3,
+  "draft": "r3",
+  "subject": "Round 3: FlatSeedIndex, Adaptive X-Drop HMM, GFA Resolver/Cleaner & Review Fixes",
+  "date": "2026-11-19",
+  "claims": [
+    {
+      "id": "C1",
+      "kind": "capability",
+      "carries": [
+        "R1-GFA"
+      ],
+      "summary": "stream_gfa supports .gfa, .gfa.gz, and stdin with unit tests for empty L-line orientations, S-line optional tag preservation, UTF-8 safe parse_path_steps, and coord.rs wired into lib.rs.",
+      "source": {
+        "file": "docs/STRATEGIC_PLAN.md",
+        "quote": "`stream_gfa` provides a buffered line-streaming GFA v1.0/v1.1 reader (supporting `.gfa`, multi-member BGZF `.gfa.gz` via `MultiGzDecoder`, and `\"-\"` `stdin`, with unit tests for empty `L`-line orientations and `.gfa.gz`)."
+      }
+    },
+    {
+      "id": "C2",
+      "kind": "inference",
+      "carries": [
+        "R1-HMM",
+        "R2-HMM-XDROP"
+      ],
+      "summary": "Adaptive HmmParams and normalized Pair-HMM transitions are wired into mdl_xdrop_extend_with_params and horizon_wga --graph (estimate_dag_hmm_params), bocpd_gc_profile skips N bases, and cactus241way chr22 1MB Dog scores 62.3% recall / 60.3% precision in 17.16s.",
+      "source": {
+        "file": "docs/BENCHMARK_RESULTS.md",
+        "quote": "UCSC cactus241way `chr22 1MB`: **62.3%** recall / **60.3%** precision (Dog, across 129 target scaffolds; **61.3% F1** in **17.16s**)."
+      }
+    },
+    {
+      "id": "C3",
+      "kind": "capability",
+      "carries": [
+        "R1-IMPL",
+        "R2-RESOLVE-LIFT"
+      ],
+      "summary": "All 10 binaries in src/bin/ have unit tests (45 passing + 1 ignored, clippy --all-targets -- -D warnings clean), horizon_resolve updates W-line end coordinates and preserves P/W optional tags, horizon_clean supports sup <= 1 severing + S-tag preservation, and horizon_wga reports deduplicated unique_x_bp / unique_y_bp.",
+      "source": {
+        "file": "docs/STRATEGIC_PLAN.md",
+        "quote": "All target pangenome binaries (`horizon_wga`, `horizon_wga --graph`, `horizon_merge`, `horizon_guide`, `horizon_eval`, `horizon_gfa`, `horizon_clean`, `horizon_resolve`, `horizon_lift`, `bench_chr1`) are now implemented in `src/bin/` with unit tests in every binary (`45` passing tests + `1` ignored; `cargo clippy --all-targets -- -D warnings` clean)."
+      }
+    },
+    {
+      "id": "C4",
+      "kind": "empirical",
+      "carries": [
+        "R2-INDEX-RAM"
+      ],
+      "summary": "FlatSeedIndex (12 bytes/entry sorted Vec<u64> + Vec<u32> with on-the-fly RC coordinates and fixed rev_offsets) cuts 20 Mbp chr6 q-arm peak RSS from 5,863.3 MB to 2,409.7 MB (47.51s) and chr6 5 Mbp pericentromere RSS from 3,084.5 MB to 1,048.2 MB (9.82s).",
+      "source": {
+        "file": "docs/STRATEGIC_PLAN.md",
+        "quote": "`ContigIndex` (`src/seeding/mod.rs`) now uses a compact `FlatSeedIndex` (`12 bytes/entry` sorted `Vec<u64>` + `Vec<u32>` with on-the-fly reverse-complement coordinates, cutting `20 Mbp chr6 q-arm` peak RSS from `5,863.3 MB` to `2,409.7 MB` and `chr6` 5 Mbp pericentromere RSS from `3,084.5 MB` to `1,048.2 MB`)."
+      }
+    },
+    {
+      "id": "C5",
+      "kind": "empirical",
+      "carries": [
+        "R1-IMPL"
+      ],
+      "summary": "Real HPRC chr22 5 Mbp pericentromere aligns 5,106,541 pairs (unique_x_bp=4,387,655, unique_y_bp=4,549,858, 16,083 bubbles) in 14.57s at 1,861.9 MB peak RSS.",
+      "source": {
+        "file": "docs/BENCHMARK_RESULTS.md",
+        "quote": "Real HPRC `chr22` Pericentromere 5 Mbp (`GRCh38.chr22:15.5M-20.5M` vs `CHM13.chr22:15.73M-20.73M`): **14.57s**, **1,861.9 MB** peak RSS, **5,106,541** many-to-many `(x, y)` aligned pairs (`unique_x_bp=4,387,655`, `unique_y_bp=4,549,858`), `16,083` Horizon Bubbles."
+      }
+    },
+    {
+      "id": "C6",
+      "kind": "empirical",
+      "carries": [
+        "R1-IMPL"
+      ],
+      "summary": "12 GB HPRC graph streaming (88.84s, 97.1 MB RSS), chr22/chr6 extraction (456.1/1,255.1 MB), liftover (256.60s, 619.2 MB), synthetic e-graph resolver (4.48s, 24.0 MB), and seeded DAG alignment (96/96 bp, 0.0031s) are verified.",
+      "source": {
+        "file": "docs/BENCHMARK_RESULTS.md",
+        "quote": "Full-graph streaming (`horizon_gfa stats`): **88.84s**, **97.1 MB** peak RSS across `81,415,956` segments (`3.29 Gbp`), `112,955,105` links, `2,580` paths, and `24,456` walks."
+      }
+    }
+  ],
+  "lenses": [
+    "correctness",
+    "sampling",
+    "statistics",
+    "provenance",
+    "inference",
+    "prior-art",
+    "reproduction"
+  ],
+  "attacked": [
+    {
+      "path": "docs/STRATEGIC_PLAN.md",
+      "snapshot": "ATTACKED-STRATEGIC_PLAN.md",
+      "read": "working tree",
+      "pinned": true,
+      "sha256": "68e6a62f188139abfebd423480543793882fc36efd76979cedb2e84805ffd44d"
+    },
+    {
+      "path": "docs/BENCHMARK_RESULTS.md",
+      "snapshot": "ATTACKED-BENCHMARK_RESULTS.md",
+      "read": "working tree",
+      "pinned": true,
+      "sha256": "187d0ebf8a11871149a98ed19676723eceac9dd3e0daca811f23bef96d6e2d77"
+    }
+  ],
+  "code": {
+    "horizon-aligner": "488b020ccc0a73998915e975bad8e25599b16716"
+  },
+  "drift_reviewed": [
+    {
+      "path": "docs/STRATEGIC_PLAN.md",
+      "sha256": "fbe2535ac9b9338ef73d040fb4818468d004753af0c68fad26f18679bc317923",
+      "by": "runner",
+      "date": "2026-11-19",
+      "quotes": [
+        "> **Status Note (2026-11-19):** All 9 target pangenome binaries in `src/bin/` (`horizon_wga` including `--graph`, `horizon_merge`, `horizon_guide`, `horizon_eval`, `horizon_gfa`, `horizon_clean`, `horizon_resolve`, `horizon_lift`, `bench_chr1`) now have unit tests (`46` passing tests + `1` ignored: `37` in `src/lib.rs` and `1` in each of the `9` binaries; `cargo clippy --all-targets -- -D warnings` clean). Only `horizon_gfa stats` supports single-pass `\"-\"` `stdin` streaming; two-pass tools (`horizon_clean`, `horizon_resolve`, `horizon_lift`) and `horizon_wga` require seekable file paths. Remaining engineering limits (e.g., `KARLIN_MDL_COEFF = 0.55` and `LASTZ12` fallback `HashMap`s) are documented below.",
+        "* **MDL Bit-Savings (`src/bocpd.rs`, `src/mdl/`):** We replace classical substitution matrices with BOCPD joint-pair bit-savings (`joint_pair_bits`, skipping `'N'` bases in `bocpd_gc_profile`), use normalized Pair-HMM transitions (`src/mdl/dp.rs`, `src/mdl/dag.rs`: `M` and `Ix`/`Iy` outgoing probabilities sum to `1.0`), and adaptively estimate `identity_prior` (clamped `[0.60, 0.72]`), `gap_open_bits`, and `gap_extend_bits` from LCB anchors via `estimate_hmm_params` (`src/mdl/mod.rs`), wired into `mdl_xdrop_extend_with_params` (in `horizon_wga --graph`, `estimate_dag_hmm_params` adapts `identity_prior` from `<=2000` bp of exact `MASK_W10` seed hits and leaves `gap_open_bits`/`gap_extend_bits` at defaults). Structural chaining thresholds (`KARLIN_MDL_COEFF = 0.55`, `max_gap_bp = 2400`, `hsp_threshold`, `min_block_bits`) remain fixed heuristics. `ContigIndex` (`src/seeding/mod.rs`) now uses a compact `FlatSeedIndex` (`12 bytes/entry` post-build sorted `Vec<u64>` + `Vec<u32>`, peaking transiently at `~28 bytes/entry` during `build`, with on-the-fly reverse-complement coordinates; `ContigIndex` still retains `seq_rc` and `MASK_LASTZ12`/`MASK_LASTZ11` fallbacks still use `HashMap`s). Together with bundled `488b020` `rev_offsets`/`bocpd`/`dp` edits, `20 Mbp chr6 q-arm` peak RSS fell from `5,863.3 MB` to `2,409.7 MB` and `chr6` 5 Mbp pericentromere RSS fell from `3,084.5 MB` to `1,048.2 MB`.",
+        "* **E-Graphs for Structural Variants (`src/egraph.rs`, `src/bin/horizon_resolve.rs`):** Congruence-closure rewriting uses `MdlCostModel` (`extract_min_mdl_cost`: catalog pointer bits $\\log_2 K$, `seq`/`inv` `1.0` bit, `dup` copy header `2.5` bits + $H_2(d) + d \\log_2 3$ residual bits) and runs both inside `horizon_wga --resolve-dups` (benchmarked on 5 Mbp MHC/HLA and 20 Mbp `chr6` q-arm) and standalone `horizon_resolve` over anchor-bounded snarl/bubble windows in GFA `P`/`W` lines (`horizon_resolve --collapse-dups` updates `W`-line end coordinates and preserves `P`/`W` tags, while `L`-link rewriting remains open). Real HPRC `GRCh38` vs `CHM13` `chr22` and `chr6` pericentromere 5 Mbp loci are benchmarked in `docs/BENCHMARK_RESULTS.md`.",
+        "* **Buffered GFA Streaming Parser (`src/gfa/mod.rs`, `src/bin/horizon_gfa.rs`):** `stream_gfa` provides a buffered line-streaming reader for `H`/`S`/`L`/`P`/`W` GFA v1.0/v1.1 records (ignoring `C`/`J`/`U`/`O` records, coercing non-numeric `W` coordinates to `0`, and supporting `.gfa`, multi-member BGZF `.gfa.gz` via `MultiGzDecoder`, and uncompressed `\"-\"` `stdin`, with unit tests for empty `L`-line orientations and `.gfa.gz`). It is **not** zero-copy (it allocates owned `String`/`Vec<u8>` fields per record), but on the 12 GB HPRC v1.0 Minigraph-Cactus graph (measured at `b857377`, not re-timed on `488b020`) `horizon_gfa stats` streamed `81.4M` segments (`3.29 Gbp`) and `113.0M` links in `88.84s` at **97.1 MB peak RSS**, and `horizon_gfa extract` extracted `GRCh38.chr22` + `CHM13.chr22` in `166.73s` at **456.1 MB peak RSS**. While modern indexed/disk-backed representations (`GBZ` / `GBZ-base` by Sir\u00e9n et al., `gfaidx`) also address subgraph queries without full-graph RAM materialization, native streaming gives Horizon direct `H`/`S`/`L`/`P`/`W` interoperability without external `vg`/`odgi` dependencies."
+      ],
+      "note": "Applied Round 3 adjudicated free doc repairs to C1/C3/C4/estimate_dag_hmm_params/horizon_resolve."
+    },
+    {
+      "path": "docs/BENCHMARK_RESULTS.md",
+      "sha256": "670392f13ff2cac880c8a5caf3ab665ce22bafc1ca090842567173e17f79e135",
+      "by": "runner",
+      "date": "2026-11-19",
+      "quotes": [
+        "Pairwise WGA results use the divergence-adaptive Pair-HMM (`HmmParams`: `identity_prior`, `gap_open_bits`, and `gap_extend_bits` estimated from LCB anchors with Beta prior shrinkage in `src/mdl/mod.rs`), BOCPD compositional profiles (`src/bocpd.rs`, ignoring non-ACGT `'N'` bases), and normalized Pair-HMM transitions (`src/mdl/dp.rs`, `src/mdl/dag.rs`), including `mdl_xdrop_extend_with_params` (in `horizon_wga --graph`, `estimate_dag_hmm_params` adapts `identity_prior` from `<=2000` bp of exact `MASK_W10` seed hits and leaves `gap_open_bits`/`gap_extend_bits` at defaults). Note that `KARLIN_MDL_COEFF = 0.55` remains a fixed constant, and MAF-extracted FASTAs sample homologous blocks (`horizon_eval` evaluates reference-MAF `(ref_id, tgt_id)` contig pairs individually rather than all-vs-all across scaffolds). Earlier WGA rows (`multiz100way`, `cactus447way`, `multiz470way`, `cactus241way chr22_random`, `GRCh38.chr22 vs CHM13.chr22`) are **stale** (recorded prior to `488b020` `FlatSeedIndex` / `rev_offsets` / `dp` edits), and `horizon_gfa stats`/`extract`/`horizon_lift`/`horizon_resolve` rows were recorded at `b857377` (not re-timed on `488b020`). `cactus241way chr22 1MB`, `chr22_peri_5m`, `chr6_peri_5m`, and `chr6_q20m` below were measured on `488b020` (bundling `FlatSeedIndex` with `rev_offsets`/`bocpd`/`dp` edits).",
+        "  * UCSC cactus241way `chr22 1MB`: **62.3%** recall / **60.3%** precision (Dog, across 31 target contigs evaluated per-pair vs reference MAF; **61.3% F1** in **17.16s**).",
+        "  * Full-graph streaming (`horizon_gfa stats`, counter-only pass at `b857377`): **88.84s**, **97.1 MB** peak RSS across `81,415,956` segments (`3.29 Gbp`), `112,955,105` links, `2,580` paths, and `24,456` walks.",
+        "  * Real HPRC `chr22` Pericentromere 5 Mbp (`GRCh38.chr22:15.5M-20.5M` vs `CHM13.chr22:15.73M-20.73M`): **14.57s**, **1,861.9 MB** peak RSS, **5,106,541** many-to-many `(x, y)` aligned pairs (`1.164x` multiplicity; `unique_x_bp=4,387,655`, `unique_y_bp=4,549,858`; no external truth baseline), `16,083` Horizon Bubbles.",
+        "  * `chr6` q-arm 20 Mbp (`GRCh38.chr6:65M-85M` vs `CHM13.chr6:61M-81M`): **47.51s**, **2,409.7 MB** peak RSS (`0.120 GB/Mbp`, down from `5,863.3 MB` / `0.293 GB/Mbp` via `488b020` bundling `FlatSeedIndex` [`12 bytes/entry` post-build, `~28 bytes/entry` build peak] + `rev_offsets`/`bocpd`/`dp` fixes), **15,025,501** many-to-many `(x, y)` aligned pairs (`unique_x_bp=14,999,823`, `unique_y_bp=14,998,488`, `75.0%` deduplicated coverage), `16,877` Horizon Bubbles. (Prior to `FlatSeedIndex`, full `GRCh38.chr6` `170.8 Mbp` vs `CHM13.chr6` `110.7 Mbp` hit `26.5 GB` RSS; a completed full-`chr6` run with `FlatSeedIndex` remains pending \u2014 `10.09 GB` was only an unfinished mid-run check.)",
+        "| Dataset | Reference | Target | Clade | Recall vs Reference MAF | Precision | Horizon Bubbles | Alignment Time |",
+        "| `multiz100way` (chrM, pre-`488b020`, stale) | Human (`hg38`) | Chimp (`panTro4`) | Very Close Primate | **95.3%** | 100.0% | 64 | ~0.04s |",
+        "| `multiz100way` (chrM, pre-`488b020`, stale) | Human (`hg38`) | Mouse (`mm10`) | Distant Mammal | **81.8%** | 94.5% | 177 | ~0.23s |",
+        "| Dataset | Reference | Target | Clade | Recall vs Reference MAF | Precision | Horizon Bubbles | Alignment Time |",
+        "| `cactus447way` (pre-`488b020`, stale) | Human (`hg38`) | Horse (`Equus_caballus`) | Distant Mammal | **50.5%** | 64.1% | 157 | ~0.29s |",
+        "| `cactus447way` (pre-`488b020`, stale) | Human (`hg38`) | Macaque (`Macaca_mulatta`) | Close Primate | **92.6%** | 85.4% | 280 | ~0.43s |",
+        "| `multiz470way` (pre-`488b020`, stale) | Human (`hg38`) | Marmoset (`HLcalPym1`) | Medium Primate | **89.6%** | 88.0% | 536 | ~0.40s |",
+        "| `cactus241way` (chr22_random, pre-`488b020`, stale) | Human (`hg38`) | Dog (`Canis_lupus`) | Distant Mammal | **57.9%** | 75.9% | 266 | ~0.31s |",
+        "| `cactus241way` (chr22 1MB, `488b020`) | Human (`hg38`) | Dog (`Canis_lupus`, 31 contigs) | Distant Mammal | **62.3%** | **60.3%** | 3,490 | 17.16s |",
+        "| Full BGZF Graph Stream (`b857377`) | `horizon_gfa stats` | `81.4M` segments (`3.29 Gbp`), `113.0M` links, `2,580` `P`, `24,456` `W` | Counter-only pass | **97.1 MB** | 88.84s |",
+        "| Chr6 q-arm 20 Mbp Alignment | `horizon_wga --resolve-dups` | `GRCh38.chr6:65M-85M` vs `CHM13.chr6:61M-81M` | `15,025,501` pairs (`15.00M`/`15.00M` unique bp, `16,877` bubbles) | **2,409.7 MB** | 47.51s |"
+      ],
+      "note": "Applied Round 3 adjudicated free doc repairs to C2/C4/C5/C6, stale WGA rows, and CHM13.chr6:61M-81M."
+    },
+    {
+      "path": "docs/STRATEGIC_PLAN.md",
+      "sha256": "d2d1be8c5ef53305f595e5ab8a410e647966b10e5bf0617bf4a624d6030d9eae",
+      "by": "runner",
+      "date": "2026-11-19",
+      "quotes": [
+        "> **Status Note (2026-11-19):** All 9 target pangenome binaries in `src/bin/` (`horizon_wga` including `--graph`, `horizon_merge`, `horizon_guide`, `horizon_eval`, `horizon_gfa`, `horizon_clean`, `horizon_resolve`, `horizon_lift`, `bench_chr1`) now have unit tests (`46` passing tests + `1` ignored: `37` in `src/lib.rs` and `1` in each of the `9` binaries; `cargo clippy --all-targets -- -D warnings` clean). Only `horizon_gfa stats` supports single-pass `\"-\"` `stdin` streaming; two-pass tools (`horizon_clean`, `horizon_resolve`, `horizon_lift`) and `horizon_wga` require seekable file paths. Remaining engineering limits (e.g., `KARLIN_MDL_COEFF = 0.55` and `LASTZ12` fallback `HashMap`s) are documented below.",
+        "* **MDL Bit-Savings (`src/bocpd.rs`, `src/mdl/`):** We replace classical substitution matrices with BOCPD joint-pair bit-savings (`joint_pair_bits`, skipping `'N'` bases in `bocpd_gc_profile`), use normalized Pair-HMM transitions (`src/mdl/dp.rs`, `src/mdl/dag.rs`: `M` and `Ix`/`Iy` outgoing probabilities sum to `1.0`), and adaptively estimate `identity_prior` (clamped `[0.60, 0.72]`), `gap_open_bits`, and `gap_extend_bits` from LCB anchors via `estimate_hmm_params` (`src/mdl/mod.rs`), wired into `mdl_xdrop_extend_with_params` (in `horizon_wga --graph`, `estimate_dag_hmm_params` adapts `identity_prior` from `<=2000` bp of exact `MASK_W10` seed hits and leaves `gap_open_bits`/`gap_extend_bits` at defaults). Structural chaining thresholds (`KARLIN_MDL_COEFF = 0.55`, `max_gap_bp = 2400`, `hsp_threshold`, `min_block_bits`) remain fixed heuristics. `ContigIndex` (`src/seeding/mod.rs`) now uses a compact `FlatSeedIndex` (`12 bytes/entry` post-build sorted `Vec<u64>` + `Vec<u32>`, peaking transiently at `~28 bytes/entry` during `build`, with on-the-fly reverse-complement coordinates; `ContigIndex` still retains `seq_rc` and `MASK_LASTZ12`/`MASK_LASTZ11` fallbacks still use `HashMap`s). Together with bundled `488b020` `rev_offsets`/`bocpd`/`dp` edits, `20 Mbp chr6 q-arm` peak RSS fell from `5,863.3 MB` to `2,409.7 MB` and `chr6` 5 Mbp pericentromere RSS fell from `3,084.5 MB` to `1,048.2 MB`.",
+        "* **E-Graphs for Structural Variants (`src/egraph.rs`, `src/bin/horizon_resolve.rs`):** Congruence-closure rewriting uses `MdlCostModel` (`extract_min_mdl_cost`: catalog pointer bits $\\log_2 K$, `seq`/`inv` `1.0` bit, `dup` copy header `2.5` bits + $H_2(d) + d \\log_2 3$ residual bits) and runs both inside `horizon_wga --resolve-dups` (benchmarked on 5 Mbp MHC/HLA and 20 Mbp `chr6` q-arm) and standalone `horizon_resolve` over anchor-bounded snarl/bubble windows in GFA `P`/`W` lines (`horizon_resolve --collapse-dups` updates `W`-line end coordinates and preserves `P`/`W` tags, while `L`-link rewriting remains open). Real HPRC `GRCh38` vs `CHM13` `chr22` and `chr6` pericentromere 5 Mbp loci are benchmarked in `docs/BENCHMARK_RESULTS.md`.",
+        "* **Buffered GFA Streaming Parser (`src/gfa/mod.rs`, `src/bin/horizon_gfa.rs`):** `stream_gfa` provides a buffered line-streaming reader for `H`/`S`/`L`/`P`/`W` GFA v1.0/v1.1 records (ignoring `C`/`J`/`U`/`O` records, coercing non-numeric `W` coordinates to `0`, and supporting `.gfa`, multi-member BGZF `.gfa.gz` via `MultiGzDecoder`, and uncompressed `\"-\"` `stdin`, with unit tests for empty `L`-line orientations and `.gfa.gz`). It is **not** zero-copy (it allocates owned `String`/`Vec<u8>` fields per record), but on the 12 GB HPRC v1.0 Minigraph-Cactus graph (measured at `b857377`, not re-timed on `488b020`) `horizon_gfa stats` streamed `81.4M` segments (`3.29 Gbp`) and `113.0M` links in `88.84s` at **97.1 MB peak RSS**, and `horizon_gfa extract` extracted `GRCh38.chr22` + `CHM13.chr22` in `166.73s` at **456.1 MB peak RSS**. While modern indexed/disk-backed representations (`GBZ` / `GBZ-base` by Sir\u00e9n et al., `gfaidx`) also address subgraph queries without full-graph RAM materialization, native streaming gives Horizon direct `H`/`S`/`L`/`P`/`W` interoperability without external `vg`/`odgi` dependencies.",
+        "**Mitigation:** Support `stdin`/`stdout` GFA/MAF streaming on single-pass linear filter/transform tools (`horizon_gfa stats`), while acknowledging that multi-input or two-pass random-access stages (`horizon_wga --graph --query`, `horizon_clean`, `horizon_resolve`, `horizon_lift`) require seekable file paths or sidecar indices rather than pure single-pass `stdin` piping.",
+        "**Mitigation:** Focus our next implementation and benchmarking milestones on pangenome graph tooling (`horizon_clean` real-data severing, `horizon_resolve` `L`-link rewriting, `horizon_lift` truth baselines, and completed full-chromosome HPRC `GRCh38` vs. `CHM13` evaluation), where MDL abstention and bounded structural resolution address concrete pain points in complex loci."
+      ],
+      "note": "Applied Round 3 adjudicated free doc repairs and cold-audit stale-prose fixes in docs/STRATEGIC_PLAN.md."
+    }
+  ],
+  "sealed": {
+    "attack-L1-correctness.md": "71d2ec66776b67ca40c0f189a75736c3ec01ac2edeeba6f78e4501695d368dd0",
+    "attack-L2-sampling.md": "5b713c18796277cd90bb339b66e10d467f0763aee24b8d1dfd9f28a415bed971",
+    "attack-L3-statistics.md": "f112216c66926cc765119ec9bcdc597d3afcdff0840cf16a826b2bc3e1577e4e",
+    "attack-L4-provenance.md": "e1e85bbbf1081118b3ce392d61cb53c29ee1c7083e8f994b3c03857cad867e93",
+    "attack-L5-inference.md": "c3f8bb931ad00042a46e45089245254b459014ecfdf773c455984afd49bb157e",
+    "attack-L6-prior-art.md": "2817e0412c42c6e842e83dfa30ea70a11de4f2a34701c9af81839758f44507a4",
+    "attack-L7-reproduction.md": "13037802171d82106806ecf5c8f78d414efc2dcb38f0e642bb01cd58d7eb2c44"
+  },
+  "aborted": [],
+  "unbriefed": [],
+  "lens_drops": {},
+  "briefs_required": true,
+  "runner_is_author": true,
+  "claim_list_author": "runner",
+  "human_claim": "FlatSeedIndex cuts 20 Mbp chr6 q-arm peak RSS from 5,863.3 MB to 2,409.7 MB and fixes non-palindromic reverse-complement spaced seeding.",
+  "carried": [
+    {
+      "from": 1,
+      "kind": "open",
+      "item": "{\"id\": \"R1-IMPL\", \"summary\": \"Implement and benchmark horizon_clean, horizon_resolve, horizon_lift, and horizon_wga --graph on HPRC v1.0/v1.1 (GRCh38 vs CHM13) and HLA/centromere loci.\"}",
+      "id": "R1-IMPL"
+    },
+    {
+      "from": 1,
+      "kind": "open",
+      "item": "{\"id\": \"R1-GFA\", \"summary\": \"Fix empty L-line orientation panic in src/gfa/mod.rs:94,96, add unit tests, and wire src/coord.rs into src/lib.rs.\"}",
+      "id": "R1-GFA"
+    },
+    {
+      "from": 1,
+      "kind": "open",
+      "item": "{\"id\": \"R1-HMM\", \"summary\": \"Normalize HMM transition weights in src/mdl/dp.rs:105-167 (currently summing >1.0 from M and Ix/Iy) and derive/calibrate gap-bit penalties.\"}",
+      "id": "R1-HMM"
+    },
+    {
+      "from": 2,
+      "kind": "open",
+      "item": "{\"id\": \"R2-HMM-XDROP\", \"summary\": \"Wire HmmParams and normalized transitions into mdl_xdrop_extend (src/mdl/dp.rs) and horizon_wga --graph, fix N-base handling in bocpd_gc_profile, and re-run all WGA benchmarks on a single pinned commit (partially carries R1-HMM).\"}",
+      "id": "R2-HMM-XDROP"
+    },
+    {
+      "from": 2,
+      "kind": "open",
+      "item": "{\"id\": \"R2-RESOLVE-LIFT\", \"summary\": \"Update W-line start/end coordinates and L links in horizon_resolve --collapse-dups, add horizon_clean sup>0 severing + S-tag preservation, and add unique-base coverage + head-to-head pangenome baselines (minimap2/odgi/vg) and unit tests for the 4 untested binaries.\"}",
+      "id": "R2-RESOLVE-LIFT"
+    },
+    {
+      "from": 2,
+      "kind": "open",
+      "item": "{\"id\": \"R2-INDEX-RAM\", \"summary\": \"Replace ContigIndex per-position HashMap<u64, Vec<usize>> with minimizer/flat-sorted k-mer indexing to bring full >100 Mbp chromosome alignment well below 26.5 GB RSS.\"}",
+      "id": "R2-INDEX-RAM"
+    }
+  ],
+  "dropped": [],
+  "corrections": [
+    {
+      "id": "COR-1",
+      "finding": "L1-F1 / L5-F1",
+      "claim": "C1",
+      "kind": "doc-precision",
+      "status": "applied",
+      "file": "docs/STRATEGIC_PLAN.md",
+      "absent": "buffered line-streaming GFA v1.0/v1.1 reader (supporting `.gfa`, multi-member BGZF `.gfa.gz` via `MultiGzDecoder`, and `\"-\"` `stdin`",
+      "present": "buffered line-streaming reader for `H`/`S`/`L`/`P`/`W` GFA v1.0/v1.1 records (ignoring `C`/`J`/`U`/`O` records",
+      "note": "Narrowed stream_gfa to H/S/L/P/W records, uncompressed stdin only, and noted 88.84s/97.1 MB was measured at b857377.",
+      "repair": {
+        "free": true,
+        "endorsed": "adjudication-L1.md, adjudication-L5.md"
+      }
+    },
+    {
+      "id": "COR-2",
+      "finding": "L1-F2 / L3-F1 / L4-F2 / L5-F2 / L6-F2 / L7-F1",
+      "claim": "C2",
+      "kind": "doc-precision",
+      "status": "applied",
+      "file": "docs/BENCHMARK_RESULTS.md",
+      "absent": "Dog, across 129 target scaffolds",
+      "present": "Dog, across 31 target contigs evaluated per-pair vs reference MAF",
+      "note": "Corrected Dog target count from 129 scaffolds to 31 contigs evaluated per-pair, renamed Truth MAF to Reference MAF, marked 5 pre-488b020 WGA rows stale, and qualified estimate_dag_hmm_params.",
+      "repair": {
+        "free": true,
+        "endorsed": "adjudication-L1.md, adjudication-L3.md, adjudication-L6.md, adjudication-L7.md, adjudication-completeness.md"
+      }
+    },
+    {
+      "id": "COR-3",
+      "finding": "L1-F3 / L2-F2 / L3-F2 / L4-F3 / L7-F2 / C-Gap2",
+      "claim": "C3",
+      "kind": "doc-precision",
+      "status": "applied",
+      "file": "docs/STRATEGIC_PLAN.md",
+      "absent": "`45` passing tests + `1` ignored",
+      "present": "`46` passing tests + `1` ignored: `37` in `src/lib.rs` and `1` in each of the `9` binaries",
+      "note": "Corrected unit test count from 45 to 46 passing (37 lib + 9 binaries, horizon_wga --graph as submode) and noted horizon_resolve L-link rewriting remains open.",
+      "repair": {
+        "free": true,
+        "endorsed": "adjudication-L1.md, adjudication-L4.md, adjudication-L7.md, adjudication-completeness.md"
+      }
+    },
+    {
+      "id": "COR-4",
+      "finding": "L1-F4 / L3-F3 / L4-F4 / L5-F4 / L7-F3",
+      "claim": "C4",
+      "kind": "doc-precision",
+      "status": "applied",
+      "file": "docs/STRATEGIC_PLAN.md",
+      "absent": "now uses a compact `FlatSeedIndex` (`12 bytes/entry` sorted `Vec<u64>` + `Vec<u32>` with on-the-fly reverse-complement coordinates, cutting `20 Mbp chr6 q-arm`",
+      "present": "now uses a compact `FlatSeedIndex` (`12 bytes/entry` post-build sorted `Vec<u64>` + `Vec<u32>`, peaking transiently at `~28 bytes/entry` during `build`",
+      "note": "Qualified FlatSeedIndex 12 bytes/entry as post-build (~28 bytes/entry build peak), noted seq_rc and LASTZ12/LASTZ11 HashMap fallbacks remain, and attributed RSS drop to bundled 488b020 changes.",
+      "repair": {
+        "free": true,
+        "endorsed": "adjudication-L1.md, adjudication-L3.md, adjudication-L4.md, adjudication-L5.md"
+      }
+    },
+    {
+      "id": "COR-5",
+      "finding": "L7-F3",
+      "claim": "C4",
+      "kind": "doc-precision",
+      "status": "applied",
+      "file": "docs/BENCHMARK_RESULTS.md",
+      "absent": "CHM13.chr6:61.4M-81.4M",
+      "present": "CHM13.chr6:61M-81M",
+      "note": "Fixed CHM13.chr6 coordinate window to 61M-81M and clarified 10.09 GB was an unfinished mid-run check.",
+      "repair": {
+        "free": true,
+        "endorsed": "adjudication-L7.md"
+      }
+    },
+    {
+      "id": "COR-6",
+      "finding": "L2-F4 / L3-F4 / L5-F5",
+      "claim": "C5",
+      "kind": "doc-precision",
+      "status": "applied",
+      "file": "docs/BENCHMARK_RESULTS.md",
+      "absent": "aligned pairs (`unique_x_bp=4,387,655`, `unique_y_bp=4,549,858`), `16,083`",
+      "present": "aligned pairs (`1.164x` multiplicity; `unique_x_bp=4,387,655`, `unique_y_bp=4,549,858`; no external truth baseline), `16,083`",
+      "note": "Added 1.164x multiplicity and no external truth baseline note for chr22 5 Mbp pericentromere.",
+      "repair": {
+        "free": true,
+        "endorsed": "adjudication-L2.md, adjudication-L3.md, adjudication-L5.md"
+      }
+    },
+    {
+      "id": "COR-7",
+      "finding": "L3-F5 / L4-F6 / L5-F6 / L6-F6",
+      "claim": "C6",
+      "kind": "doc-precision",
+      "status": "applied",
+      "file": "docs/BENCHMARK_RESULTS.md",
+      "absent": "Full-graph streaming (`horizon_gfa stats`): **88.84s**",
+      "present": "Full-graph streaming (`horizon_gfa stats`, counter-only pass at `b857377`): **88.84s**",
+      "note": "Labeled horizon_gfa stats 88.84s/97.1 MB as a counter-only pass measured at b857377, and aligned docs/BENCHMARK_DATASETS.md to hprc-v1.0-mc-grch38.gfa.gz.",
+      "repair": {
+        "free": true,
+        "endorsed": "adjudication-L3.md, adjudication-L4.md, adjudication-L5.md, adjudication-L6.md"
+      }
+    },
+    {
+      "id": "COR-8",
+      "finding": "L4-F2 / L7-F5",
+      "claim": "C2",
+      "kind": "script-path",
+      "status": "applied",
+      "file": "scripts/benchmarks/run_all_evals.py",
+      "absent": "ROOT.parent / \"data\" / \"benchmarks\"",
+      "present": "ROOT.parent / \"pg\" / \"data\" / \"benchmarks\"",
+      "note": "Updated BENCH_DIR from ../data/benchmarks to ../pg/data/benchmarks.",
+      "repair": {
+        "free": false,
+        "endorsed": "adjudication-L4.md, adjudication-L7.md"
+      }
+    }
+  ],
+  "findings": [
+    {
+      "lens": "correctness",
+      "id": "F1",
+      "flaw": "C1 stream_gfa wording overclaims GFA v1.0/v1.1 vs H/S/L/P/W and stdin .gfa.gz"
+    },
+    {
+      "lens": "correctness",
+      "id": "F2",
+      "flaw": "C2 Dog target scaffold count is 31 not 129 and run_all_evals.py/scripts omit cactus241way_chr22_1MB.maf"
+    },
+    {
+      "lens": "correctness",
+      "id": "F3",
+      "flaw": "C3 test count is 46 passing not 45 and 9 binaries not 10"
+    },
+    {
+      "lens": "correctness",
+      "id": "F4",
+      "flaw": "C4 FlatSeedIndex peaks at 28 bytes/entry during build and RSS reduction confounds 488b020 changes"
+    },
+    {
+      "lens": "correctness",
+      "id": "F5",
+      "flaw": "C5 (chr22 Pericentromere 5 Mbp): reproduced exact pair, unique-bp, and bubble counts"
+    },
+    {
+      "lens": "correctness",
+      "id": "F6",
+      "flaw": "C6 (horizongfa stats on 12 GB HPRC graph): input .gfa.gz absent on disk; no code defect found"
+    },
+    {
+      "lens": "correctness",
+      "id": "F7",
+      "flaw": "Framing bias: claim list steers away from open R2 items, stale WGA rows, and missing baselines"
+    },
+    {
+      "lens": "sampling",
+      "id": "F1",
+      "flaw": "C2 REFUTED: cactus241way chr22 1MB samples only 15% homologous blocks, bifurcates seeding at Nx  Ny < 10^9, and l"
+    },
+    {
+      "lens": "sampling",
+      "id": "F2",
+      "flaw": "C3 test count is 46 passing not 45 and 9 binaries not 10"
+    },
+    {
+      "lens": "sampling",
+      "id": "F3",
+      "flaw": "C4 REFUTED: FlatSeedIndex censors all >= 3-copy seeds on >= 100 kb contigs and C4 samples sub-chromosome slices ("
+    },
+    {
+      "lens": "sampling",
+      "id": "F4",
+      "flaw": "C5 5,106,541 pairs includes 14.1% many-to-many multiplicity with no accuracy/truth baseline"
+    },
+    {
+      "lens": "sampling",
+      "id": "F5",
+      "flaw": "C6 horizon_gfa stats (88.84s, 97.1 MB) is a stale b857377 n=1 counter-only pass"
+    },
+    {
+      "lens": "sampling",
+      "id": "F6",
+      "flaw": "C1 SURVIVED: streamgfa streams all GFA records without subsampling (confirming Round 2 L2 F7)"
+    },
+    {
+      "lens": "sampling",
+      "id": "F7",
+      "flaw": "Framing bias: claim list steers away from open R2 items, stale WGA rows, and missing baselines"
+    },
+    {
+      "lens": "statistics",
+      "id": "F1",
+      "flaw": "C2 horizon_eval oracle-pairs target scaffolds with zero cross-scaffold FPs"
+    },
+    {
+      "lens": "statistics",
+      "id": "F2",
+      "flaw": "C3 test count is 46 passing not 45 and 9 binaries not 10"
+    },
+    {
+      "lens": "statistics",
+      "id": "F3",
+      "flaw": "C4 FlatSeedIndex peaks at 28 bytes/entry during build and RSS reduction confounds 488b020 changes"
+    },
+    {
+      "lens": "statistics",
+      "id": "F4",
+      "flaw": "C5 5,106,541 pairs includes 14.1% many-to-many multiplicity with no accuracy/truth baseline"
+    },
+    {
+      "lens": "statistics",
+      "id": "F5",
+      "flaw": "C6 horizon_gfa stats (88.84s, 97.1 MB) is a stale b857377 n=1 counter-only pass"
+    },
+    {
+      "lens": "statistics",
+      "id": "F6",
+      "flaw": "C1: No statistical content under the statistics lens"
+    },
+    {
+      "lens": "statistics",
+      "id": "F7",
+      "flaw": "Framing bias: claim list steers away from open R2 items, stale WGA rows, and missing baselines"
+    },
+    {
+      "lens": "provenance",
+      "id": "F1",
+      "flaw": "C1: streamgfa implementation and unit tests match the quoted claim"
+    },
+    {
+      "lens": "provenance",
+      "id": "F2",
+      "flaw": "C2 Dog target scaffold count is 31 not 129 and run_all_evals.py/scripts omit cactus241way_chr22_1MB.maf"
+    },
+    {
+      "lens": "provenance",
+      "id": "F3",
+      "flaw": "C3 test count is 46 passing not 45 and 9 binaries not 10"
+    },
+    {
+      "lens": "provenance",
+      "id": "F4",
+      "flaw": "C4 FlatSeedIndex peaks at 28 bytes/entry during build and RSS reduction confounds 488b020 changes"
+    },
+    {
+      "lens": "provenance",
+      "id": "F5",
+      "flaw": "C5: chr22 5 Mbp pericentromere 488b020 run has no saved script, output artifact, or timing/RSS log"
+    },
+    {
+      "lens": "provenance",
+      "id": "F6",
+      "flaw": "C6 horizon_gfa stats (88.84s, 97.1 MB) is a stale b857377 n=1 counter-only pass"
+    },
+    {
+      "lens": "provenance",
+      "id": "F7",
+      "flaw": "Framing bias: claim list steers away from open R2 items, stale WGA rows, and missing baselines"
+    },
+    {
+      "lens": "inference",
+      "id": "F1",
+      "flaw": "C1 stream_gfa wording overclaims GFA v1.0/v1.1 vs H/S/L/P/W and stdin .gfa.gz"
+    },
+    {
+      "lens": "inference",
+      "id": "F2",
+      "flaw": "C2 horizon_eval oracle-pairs target scaffolds with zero cross-scaffold FPs"
+    },
+    {
+      "lens": "inference",
+      "id": "F3",
+      "flaw": "C3: Helper-only binary unit tests do not license pipeline correctness or R2-RESOLVE-LIFT discharge"
+    },
+    {
+      "lens": "inference",
+      "id": "F4",
+      "flaw": "C4 FlatSeedIndex peaks at 28 bytes/entry during build and RSS reduction confounds 488b020 changes"
+    },
+    {
+      "lens": "inference",
+      "id": "F5",
+      "flaw": "C5 5,106,541 pairs includes 14.1% many-to-many multiplicity with no accuracy/truth baseline"
+    },
+    {
+      "lens": "inference",
+      "id": "F6",
+      "flaw": "C6 horizon_gfa stats (88.84s, 97.1 MB) is a stale b857377 n=1 counter-only pass"
+    },
+    {
+      "lens": "inference",
+      "id": "F7",
+      "flaw": "Framing bias: claim list steers away from open R2 items, stale WGA rows, and missing baselines"
+    },
+    {
+      "lens": "prior-art",
+      "id": "F1",
+      "flaw": "C1: streamgfa matches round 2's C1 with no new prior-art defect"
+    },
+    {
+      "lens": "prior-art",
+      "id": "F2",
+      "flaw": "C2: cactus241way \"Truth MAF\" framing treats Progressive Cactus as ground truth and omits LASTZ/minimap2 baselines"
+    },
+    {
+      "lens": "prior-art",
+      "id": "F3",
+      "flaw": "C3: Binary inventory and test/clippy counts make no prior-art assertion"
+    },
+    {
+      "lens": "prior-art",
+      "id": "F4",
+      "flaw": "C4: FlatSeedIndex adapts standard sorted flat (key, pos) canonical indexing (minimap2, lastdb) while still omitt"
+    },
+    {
+      "lens": "prior-art",
+      "id": "F5",
+      "flaw": "C5: HPRC chr22 pericentromere benchmark makes no prior-art assertion"
+    },
+    {
+      "lens": "prior-art",
+      "id": "F6",
+      "flaw": "C6: horizongfa stats benchmark makes no prior-art assertion (though gfatools stat baseline is omitted)"
+    },
+    {
+      "lens": "prior-art",
+      "id": "F7",
+      "flaw": "Framing bias: claim list steers away from open R2 items, stale WGA rows, and missing baselines"
+    },
+    {
+      "lens": "reproduction",
+      "id": "F1",
+      "flaw": "C2 Dog target scaffold count is 31 not 129 and run_all_evals.py/scripts omit cactus241way_chr22_1MB.maf"
+    },
+    {
+      "lens": "reproduction",
+      "id": "F2",
+      "flaw": "C3 test count is 46 passing not 45 and 9 binaries not 10"
+    },
+    {
+      "lens": "reproduction",
+      "id": "F3",
+      "flaw": "C4 and C5 rely on untracked /tmp/.fa slices with no extraction script, and C4 misstates the CHM13.chr6 coordinate w"
+    },
+    {
+      "lens": "reproduction",
+      "id": "F4",
+      "flaw": "C1 and C6 survive direct reproduction"
+    },
+    {
+      "lens": "reproduction",
+      "id": "F5",
+      "flaw": "Framing bias: claim list steers away from open R2 items, stale WGA rows, and missing baselines"
+    }
+  ],
+  "open": [
+    {
+      "id": "R1-IMPL",
+      "summary": "Implement and benchmark horizon_clean, horizon_resolve, horizon_lift, and horizon_wga --graph on HPRC v1.0/v1.1 (GRCh38 vs CHM13) and HLA/centromere loci (4 of 5 C6 benchmarks un-reproduced on 488b020)."
+    },
+    {
+      "id": "R1-HMM",
+      "summary": "Normalize HMM transition weights in src/mdl/dp.rs and derive/calibrate gap-bit penalties (estimate_dag_hmm_params leaves gap_open_bits/gap_extend_bits at defaults)."
+    },
+    {
+      "id": "R2-HMM-XDROP",
+      "summary": "Re-run all 5 stale pre-488b020 WGA benchmark rows and test/calibrate estimate_dag_hmm_params."
+    },
+    {
+      "id": "R2-RESOLVE-LIFT",
+      "summary": "Rewrite L links alongside W coordinates in horizon_resolve --collapse-dups, fix horizon_clean real-data no-op and two-pass stdin, and add minimap2/odgi/vg/LASTZ head-to-head baselines."
+    },
+    {
+      "id": "R2-INDEX-RAM",
+      "summary": "Complete full >100 Mbp chromosome alignment (e.g. full chr6) and isolate FlatSeedIndex RSS ablation."
+    }
+  ],
+  "unchallenged": [
+    {
+      "claim": "C6",
+      "lens": "correctness",
+      "reason": "hprc-v1.0-mc-grch38.gfa.gz absent on disk"
+    },
+    {
+      "claim": "C1",
+      "lens": "statistics",
+      "reason": "no statistical content"
+    },
+    {
+      "claim": "C3",
+      "lens": "prior-art",
+      "reason": "no prior-art assertion"
+    },
+    {
+      "claim": "C5",
+      "lens": "prior-art",
+      "reason": "no prior-art assertion"
+    },
+    {
+      "claim": "C6",
+      "lens": "prior-art",
+      "reason": "no prior-art assertion"
+    }
+  ],
+  "discharges": {
+    "488b020": [
+      "R1-GFA"
+    ]
+  },
+  "decisions": [],
+  "sealed_blobs": {
+    "attack-L1-correctness.md": {
+      "blob": "5a3473c86bdea75fca40d408c988aeba430f93cf",
+      "ref": "refs/round/seal/3/attack-L1-correctness.md"
+    },
+    "attack-L2-sampling.md": {
+      "blob": "b82f22ee0100bdd6cec1ec37dc4062197adada3c",
+      "ref": "refs/round/seal/3/attack-L2-sampling.md"
+    },
+    "attack-L3-statistics.md": {
+      "blob": "6126def1e77fba46a43bca75e6df14b5a546055b",
+      "ref": "refs/round/seal/3/attack-L3-statistics.md"
+    },
+    "attack-L4-provenance.md": {
+      "blob": "2a5d108ed0f58ce40afe466d422543935e479313",
+      "ref": "refs/round/seal/3/attack-L4-provenance.md"
+    },
+    "attack-L5-inference.md": {
+      "blob": "31493720477ec0820f64a8a065b75f7009dc762d",
+      "ref": "refs/round/seal/3/attack-L5-inference.md"
+    },
+    "attack-L6-prior-art.md": {
+      "blob": "cc2e310d53e97c15e8ed173c6b3753086def2e61",
+      "ref": "refs/round/seal/3/attack-L6-prior-art.md"
+    },
+    "attack-L7-reproduction.md": {
+      "blob": "08a631bf3eeac6e7bb48fd598fb40d4761dae6ed",
+      "ref": "refs/round/seal/3/attack-L7-reproduction.md"
+    }
+  },
+  "diversity": {
+    "attacks": 7,
+    "lenses": [
+      "correctness",
+      "sampling",
+      "statistics",
+      "provenance",
+      "inference",
+      "prior-art",
+      "reproduction"
+    ],
+    "mean_pairwise_similarity": 0.267,
+    "max_pairwise_similarity": 0.38,
+    "most_similar_pair": [
+      "attack-L4-provenance.md",
+      "attack-L7-reproduction.md"
+    ],
+    "claims_answered": 6,
+    "claims_corroborated": 6,
+    "claims_single_voter": 0,
+    "claims_unanimous": 0,
+    "verdict_agreement": 0.0,
+    "findings_mode": "synthesized",
+    "findings_filed": 47,
+    "findings_per_attacker": {
+      "attack-L1-correctness.md": 7,
+      "attack-L2-sampling.md": 7,
+      "attack-L3-statistics.md": 7,
+      "attack-L4-provenance.md": 7,
+      "attack-L5-inference.md": 7,
+      "attack-L6-prior-art.md": 7,
+      "attack-L7-reproduction.md": 5
+    },
+    "distinct_flaws": 25,
+    "flaws_named_by_more_than_one_attacker": 8,
+    "duplicate_rate": 0.32
+  },
+  "post_round_audit": {
+    "by": "cold-auditor-subagent (d28cf266)",
+    "date": "2026-11-19",
+    "evidence": "reports/rounds/round-3/audit.md"
+  },
+  "outcome": "narrowed",
+  "landed": 18,
+  "overturned": 8,
+  "class": "W",
+  "survived": [
+    "C1 stream_gfa H/S/L/P/W buffered line-streaming (.gfa, .gfa.gz, uncompressed stdin) and unit tests survive.",
+    "C4 FlatSeedIndex 12 bytes/entry post-build struct and rev_offsets fix survive (with ~28 bytes/entry build peak and bundled 488b020 RSS attribution).",
+    "C6 horizon_gfa stats 81.4M segments / 113.0M links counts survive (measured at b857377)."
+  ]
+}

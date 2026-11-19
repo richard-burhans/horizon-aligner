@@ -43,9 +43,9 @@ These are specific slice files downloaded to evaluate mammalian and vertebrate a
   - **Purpose:** Testing deep avian and reptilian genomic splits, assessing scaling to hundreds of compact genomes.
 
 - **HPRC Pangenome (Minigraph-Cactus)**
-  - **File:** `hprc-v1.1-mc-grch38.gfa.gz`
+  - **File:** `hprc-v1.0-mc-grch38.gfa.gz`
   - **Source:** `https://s3-us-west-2.amazonaws.com/human-pangenomics/pangenomes/freeze/freeze1/minigraph-cactus/`
-  - **Purpose:** Validating GFA v1.1 graph generation natively against the Human Pangenome Reference Consortium graphs.
+  - **Purpose:** Validating `H`/`S`/`L`/`P`/`W` GFA v1.0/v1.1 graph streaming against the Human Pangenome Reference Consortium graphs.
 
 ## Recovery Script
 To quickly re-download the core UCSC slice files after a sandbox reset, run:
