@@ -726,5 +726,9 @@
     "by": "c6984f02-88f5-4d44-a551-08c22c194b5d",
     "date": "2026-11-19",
     "evidence": "reports/rounds/round-4/cold-audit.md: PASS; cargo fmt --check, cargo clippy --all-targets --all-features -- -D warnings, cargo test --all-features (59 passed, 0 failed, 1 ignored), scripts/round corrections 4 (6/6 APPLIED), scripts/round check 4 --full (exit 0)."
+  },
+  "closed": "2026-11-19",
+  "closed_at_code": {
+    "horizon-aligner": "a25a8a66925ba6d0daa797e47fff917940cc51b2"
   }
 }
