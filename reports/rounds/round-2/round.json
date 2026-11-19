@@ -603,5 +603,9 @@
   "class": "implementation-benchmarks-and-documentation-provenance",
   "landed": "All 7 lenses + completeness critic ran and were adjudicated; 51 findings narrowed C2-C8, separating verified implementations from stale pre-b18f25b WGA rows, synthetic E-graph fixtures, many-to-many pair counts, and unimplemented stdin/walk-splitting edge cases; free doc repairs applied across STRATEGIC_PLAN.md, PANGENOME_SUITE.md, and BENCHMARK_RESULTS.md.",
   "overturned": "L7 overturned L7-F3 premise that 0e70693 changed horizon_lift GFA parsing (0e70693 only removed unused variables and test unwrap()s).",
-  "survived": "stream_gfa (.gfa/.gfa.gz/stdin) and coord.rs (R1-GFA discharged); all 9 binaries in src/bin/ including horizon_clean, horizon_resolve, horizon_lift, horizon_wga --graph with 40 passing tests; real 5 Mbp HPRC chr22/chr6 pericentromere alignments; Vec<(usize,usize)> pair-collection replacement."
+  "survived": "stream_gfa (.gfa/.gfa.gz/stdin) and coord.rs (R1-GFA discharged); all 9 binaries in src/bin/ including horizon_clean, horizon_resolve, horizon_lift, horizon_wga --graph with 40 passing tests; real 5 Mbp HPRC chr22/chr6 pericentromere alignments; Vec<(usize,usize)> pair-collection replacement.",
+  "closed": "2026-11-19",
+  "closed_at_code": {
+    "horizon-aligner": "41482bf1c139b961105384cbdffcc2e2f9bd01b6"
+  }
 }
