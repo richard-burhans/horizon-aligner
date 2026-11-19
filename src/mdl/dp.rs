@@ -135,14 +135,6 @@ pub fn banded_mdl_gap_with_min_post(
             score_bits: 0.0,
         };
     }
-    if n.min(m) <= 4 {
-        let k = n.min(m);
-        return GapResult {
-            kept_pairs: (0..k).map(|i| (i, i)).collect(),
-            bubbles: 0,
-            score_bits: 0.0,
-        };
-    }
 
     let gc_x = bocpd_gc_profile(seq_x, 1.0 / 120.0, 80);
     let gc_y = bocpd_gc_profile(seq_y, 1.0 / 120.0, 80);

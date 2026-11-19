@@ -205,43 +205,49 @@ pub fn align_contig_pair_with_config(
         }
     };
 
-    // Sparse-exon fallback: w=10 exact seeds in intervals not covered by w=12 LCBs.
-    let x10_idx = FlatSeedIndex::build_with_sdust(
-        seq_x,
-        MASK_W10,
-        cfg.fallback_max_occ,
-        cfg.skip_softmasked,
-        false,
-        Some(&idx_x.sdust),
-    )?;
-    let y10_idx = FlatSeedIndex::build_with_sdust(
-        seq_y,
-        MASK_W10,
-        cfg.fallback_max_occ,
-        cfg.skip_softmasked,
-        false,
-        Some(&idx_y.sdust),
-    )?;
-    let (mut hits10_fwd, mut hits10_rc) = x10_idx.intersect(&y10_idx);
-    let t_w10 = t_start.elapsed();
-    filter_uncovered(&mut hits10_fwd);
-    filter_uncovered(&mut hits10_rc);
+    // Sparse-exon fallback: w=10 exact seeds in intervals not covered by w=12 LCBs
+    // (skip when w=12 already covers >= min_fallback_cov of the reference contig).
     let mut combined_fwd = raw_fwd.clone();
     let mut combined_rc = raw_rc.clone();
-    append_nonoverlapping_lcbs(
-        &mut combined_fwd,
-        &raw_fwd,
-        &hits10_fwd,
-        cfg.fallback_min_anchors,
-        cfg.fallback_min_span,
-    );
-    append_nonoverlapping_lcbs(
-        &mut combined_rc,
-        &raw_rc,
-        &hits10_rc,
-        cfg.fallback_min_anchors,
-        cfg.fallback_min_span,
-    );
+    let y10_idx_opt = if primary_cov < min_fallback_cov {
+        let x10_idx = FlatSeedIndex::build_with_sdust(
+            seq_x,
+            MASK_W10,
+            cfg.fallback_max_occ,
+            cfg.skip_softmasked,
+            false,
+            Some(&idx_x.sdust),
+        )?;
+        let y10_idx = FlatSeedIndex::build_with_sdust(
+            seq_y,
+            MASK_W10,
+            cfg.fallback_max_occ,
+            cfg.skip_softmasked,
+            false,
+            Some(&idx_y.sdust),
+        )?;
+        let (mut hits10_fwd, mut hits10_rc) = x10_idx.intersect(&y10_idx);
+        filter_uncovered(&mut hits10_fwd);
+        filter_uncovered(&mut hits10_rc);
+        append_nonoverlapping_lcbs(
+            &mut combined_fwd,
+            &raw_fwd,
+            &hits10_fwd,
+            cfg.fallback_min_anchors,
+            cfg.fallback_min_span,
+        );
+        append_nonoverlapping_lcbs(
+            &mut combined_rc,
+            &raw_rc,
+            &hits10_rc,
+            cfg.fallback_min_anchors,
+            cfg.fallback_min_span,
+        );
+        Some(y10_idx)
+    } else {
+        None
+    };
+    let t_w10 = t_start.elapsed();
 
     // LASTZ-style 12-of-19 + 1-transition hits gated by ungapped X-drop HSP score
     // (skip when w=12 already covers >= 85% of the target contig).
@@ -409,24 +415,26 @@ pub fn align_contig_pair_with_config(
             );
 
             // HSP-gated w=10 (10-of-14) 1-transition seeding.
-            let (mut hits_w10_fwd, mut hits_w10_rc) =
-                find_w10_1transition_hits_flat(seq_x, &y10_idx, cfg.skip_softmasked);
-            filter_uncovered(&mut hits_w10_fwd);
-            filter_uncovered(&mut hits_w10_rc);
-            append_hsp_gated_lastz12_lcbs(
-                &mut combined_fwd,
-                seq_x,
-                seq_y,
-                &hits_w10_fwd,
-                base_hsp_thresh + 40 + hsp_bonus,
-            );
-            append_hsp_gated_lastz12_lcbs(
-                &mut combined_rc,
-                seq_x,
-                seq_y_rc,
-                &hits_w10_rc,
-                base_hsp_thresh + 40 + hsp_bonus,
-            );
+            if let Some(ref y10_idx) = y10_idx_opt {
+                let (mut hits_w10_fwd, mut hits_w10_rc) =
+                    find_w10_1transition_hits_flat(seq_x, y10_idx, cfg.skip_softmasked);
+                filter_uncovered(&mut hits_w10_fwd);
+                filter_uncovered(&mut hits_w10_rc);
+                append_hsp_gated_lastz12_lcbs(
+                    &mut combined_fwd,
+                    seq_x,
+                    seq_y,
+                    &hits_w10_fwd,
+                    base_hsp_thresh + 40 + hsp_bonus,
+                );
+                append_hsp_gated_lastz12_lcbs(
+                    &mut combined_rc,
+                    seq_x,
+                    seq_y_rc,
+                    &hits_w10_rc,
+                    base_hsp_thresh + 40 + hsp_bonus,
+                );
+            }
         }
 
         // Amino-acid HSP-gated 6-frame translated spaced 5-of-6 seeding for divergent coding homologs.

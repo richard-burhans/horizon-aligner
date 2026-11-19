@@ -1,9 +1,8 @@
 //! Six-frame biochemical amino-acid (5-of-6) spaced seeding.
 
-use super::{
-    AnchorPairs, ContigIndex, LcbList, append_two_hit_diagonal_lcbs, base_to_idx,
-    cluster_strand_lcbs, codon_to_aa,
-};
+#[cfg(test)]
+use super::append_two_hit_diagonal_lcbs;
+use super::{AnchorPairs, ContigIndex, LcbList, base_to_idx, cluster_strand_lcbs, codon_to_aa};
 use std::collections::HashMap;
 
 const fn aa_group(ax: u8) -> u8 {
@@ -207,7 +206,7 @@ pub(crate) fn append_hsp_gated_aa_lcbs(
 }
 
 /// Find 2-hit translated amino-acid `5-mer` (15 bp) anchors across all reading frames.
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn append_translated_aa5_lcbs(
     target: &mut LcbList,
     seq_x: &[u8],

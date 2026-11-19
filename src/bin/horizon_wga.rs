@@ -54,30 +54,40 @@ fn parse_args() -> Result<CliArgs> {
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
-            "--maf" if i + 1 < args.len() => {
-                maf_out = Some(PathBuf::from(&args[i + 1]));
+            "--maf" => {
+                maf_out = Some(PathBuf::from(
+                    args.get(i + 1).context("missing value for --maf")?,
+                ));
                 i += 2;
             }
-            "--gfa" if i + 1 < args.len() => {
-                gfa_out = Some(PathBuf::from(&args[i + 1]));
+            "--gfa" => {
+                gfa_out = Some(PathBuf::from(
+                    args.get(i + 1).context("missing value for --gfa")?,
+                ));
                 i += 2;
             }
-            "--min-shared-seeds" if i + 1 < args.len() => {
-                if let Ok(v) = args[i + 1].parse() {
-                    min_shared_seeds = v;
-                }
+            "--min-shared-seeds" => {
+                min_shared_seeds = args
+                    .get(i + 1)
+                    .context("missing value for --min-shared-seeds")?
+                    .parse()
+                    .context("parsing --min-shared-seeds")?;
                 i += 2;
             }
-            "--min-top-lcb" if i + 1 < args.len() => {
-                if let Ok(v) = args[i + 1].parse() {
-                    min_top_lcb = v;
-                }
+            "--min-top-lcb" => {
+                min_top_lcb = args
+                    .get(i + 1)
+                    .context("missing value for --min-top-lcb")?
+                    .parse()
+                    .context("parsing --min-top-lcb")?;
                 i += 2;
             }
-            "--top-k" if i + 1 < args.len() => {
-                if let Ok(v) = args[i + 1].parse() {
-                    top_k = v;
-                }
+            "--top-k" => {
+                top_k = args
+                    .get(i + 1)
+                    .context("missing value for --top-k")?
+                    .parse()
+                    .context("parsing --top-k")?;
                 i += 2;
             }
             "--resolve-dups" => {
@@ -100,26 +110,38 @@ fn parse_args() -> Result<CliArgs> {
                 use_ry_seeds = false;
                 i += 1;
             }
-            "--min-fallback-cov" if i + 1 < args.len() => {
-                if let Ok(v) = args[i + 1].parse() {
-                    min_fallback_cov = Some(v);
-                }
+            "--min-fallback-cov" => {
+                min_fallback_cov = Some(
+                    args.get(i + 1)
+                        .context("missing value for --min-fallback-cov")?
+                        .parse()
+                        .context("parsing --min-fallback-cov")?,
+                );
                 i += 2;
             }
-            "--hsp-threshold" if i + 1 < args.len() => {
-                if let Ok(v) = args[i + 1].parse() {
-                    hsp_threshold = Some(v);
-                }
+            "--hsp-threshold" => {
+                hsp_threshold = Some(
+                    args.get(i + 1)
+                        .context("missing value for --hsp-threshold")?
+                        .parse()
+                        .context("parsing --hsp-threshold")?,
+                );
                 i += 2;
             }
-
-            "--hal-info" if i + 1 < args.len() => {
-                hal_info = Some(PathBuf::from(&args[i + 1]));
+            "--hal-info" => {
+                hal_info = Some(PathBuf::from(
+                    args.get(i + 1).context("missing value for --hal-info")?,
+                ));
                 i += 2;
             }
-            "--graph" if i + 1 < args.len() => {
-                graph_path = Some(PathBuf::from(&args[i + 1]));
+            "--graph" => {
+                graph_path = Some(PathBuf::from(
+                    args.get(i + 1).context("missing value for --graph")?,
+                ));
                 i += 2;
+            }
+            other if other.starts_with('-') => {
+                bail!("unknown flag '{other}'");
             }
             _ => {
                 pos.push(args[i].clone());
@@ -134,16 +156,20 @@ fn parse_args() -> Result<CliArgs> {
         );
     }
     let (fa_x, fa_y, max_contigs) = if graph_path.is_some() && (pos.len() == 1 || pos.len() == 2) {
-        (
-            PathBuf::new(),
-            PathBuf::from(&pos[0]),
-            pos.get(1).and_then(|s| s.parse().ok()).unwrap_or(1),
-        )
+        let mc = match pos.get(1) {
+            Some(s) => s.parse().context("parsing max_contigs")?,
+            None => 1,
+        };
+        (PathBuf::new(), PathBuf::from(&pos[0]), mc)
     } else {
+        let mc = match pos.get(2) {
+            Some(s) => s.parse().context("parsing max_contigs")?,
+            None => 1,
+        };
         (
             pos.first().map_or_default(PathBuf::from),
             pos.get(1).map_or_default(PathBuf::from),
-            pos.get(2).and_then(|s| s.parse().ok()).unwrap_or(1),
+            mc,
         )
     };
 

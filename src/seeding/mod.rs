@@ -490,6 +490,9 @@ impl FlatSeedIndex {
             ));
         }
 
+        if let Some(m) = sdust {
+            debug_assert!(m.len() >= seq.len(), "sdust mask shorter than sequence");
+        }
         let rev_offsets: Vec<usize> = offsets.iter().map(|&o| span - 1 - o).collect();
         let mut pairs: Vec<(u64, u32)> = Vec::with_capacity((seq.len() - span + 1).min(1 << 24));
 
@@ -575,6 +578,28 @@ impl FlatSeedIndex {
     }
 
     pub(crate) fn shared_unique_keys(&self, other: &Self) -> usize {
+        let (small, large) = if self.keys.len() <= other.keys.len() {
+            (self, other)
+        } else {
+            (other, self)
+        };
+        if small.keys.is_empty() || large.keys.is_empty() {
+            return 0;
+        }
+        if small.keys.len().saturating_mul(8) < large.keys.len() {
+            let mut count = 0;
+            let mut i = 0;
+            while i < small.keys.len() {
+                let k = small.keys[i];
+                if large.keys.binary_search(&k).is_ok() {
+                    count += 1;
+                }
+                while i < small.keys.len() && small.keys[i] == k {
+                    i += 1;
+                }
+            }
+            return count;
+        }
         let mut i = 0;
         let mut j = 0;
         let mut count = 0;

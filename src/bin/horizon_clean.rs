@@ -212,31 +212,51 @@ fn clean_gfa<W: Write>(gfa_path: &str, cfg: &CleanConfig, out: &mut W) -> Result
     let links = links.into_inner();
     let walk_support = walk_support.into_inner();
 
-    // Score links and decide which edges survive.
+    // Score links symmetrically per canonical bidirected edge pair so L u+ v+ and L v- u-
+    // never receive asymmetric sever/keep decisions.
     let mut kept_edges: HashSet<DirectedEdge> = HashSet::new();
     let mut severed_info: HashMap<DirectedEdge, f64> = HashMap::new();
+    let mut canon_decisions: HashMap<DirectedEdge, (bool, f64)> = HashMap::new();
     let mut kept_links = 0usize;
     let mut severed_links = 0usize;
 
     for l in &links {
         let edge = DirectedEdge::new(&l.from, l.from_orient != b'-', &l.to, l.to_orient != b'-');
         let rev_edge = edge.rev();
-        let sup = walk_support.get(&edge).copied().unwrap_or(0);
-
-        let cp_bits = match (seg_flanks.get(&l.from), seg_flanks.get(&l.to)) {
-            (Some(fu), Some(fv)) => {
-                let u3 = oriented_3p_flank(fu, edge.from_fwd);
-                let v5 = oriented_5p_flank(fv, edge.to_fwd);
-                score_junction_cp_bits(&u3, &v5)
-            }
-            _ => 0.0,
+        let canon = if (&edge.from, edge.from_fwd, &edge.to, edge.to_fwd)
+            <= (
+                &rev_edge.from,
+                rev_edge.from_fwd,
+                &rev_edge.to,
+                rev_edge.to_fwd,
+            ) {
+            edge.clone()
+        } else {
+            rev_edge.clone()
         };
 
-        let should_sever =
-            (cfg.prune_unsupported && sup == 0) || (sup <= 1 && cp_bits >= cfg.min_cp_bits);
+        let (should_sever, cp_bits) = *canon_decisions.entry(canon.clone()).or_insert_with(|| {
+            let sup = walk_support
+                .get(&canon)
+                .copied()
+                .unwrap_or(0)
+                .max(walk_support.get(&canon.rev()).copied().unwrap_or(0));
+            let cp = match (seg_flanks.get(&canon.from), seg_flanks.get(&canon.to)) {
+                (Some(fu), Some(fv)) => {
+                    let u3 = oriented_3p_flank(fu, canon.from_fwd);
+                    let v5 = oriented_5p_flank(fv, canon.to_fwd);
+                    score_junction_cp_bits(&u3, &v5)
+                }
+                _ => 0.0,
+            };
+            let sever = (cfg.prune_unsupported && sup == 0) || (sup <= 1 && cp >= cfg.min_cp_bits);
+            (sever, cp)
+        });
+
         if should_sever {
             severed_links += 1;
             severed_info.insert(edge, cp_bits);
+            severed_info.insert(rev_edge, cp_bits);
         } else {
             kept_links += 1;
             kept_edges.insert(edge);
@@ -439,20 +459,24 @@ fn main() -> Result<()> {
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
-            "--gfa" | "-i" if i + 1 < args.len() => {
-                gfa_path = Some(args[i + 1].clone());
+            "--gfa" | "-i" => {
+                let val = args.get(i + 1).context("missing value for --gfa")?;
+                gfa_path = Some(val.clone());
                 i += 2;
             }
-            "--out" | "-o" if i + 1 < args.len() => {
-                out_path = Some(args[i + 1].clone());
+            "--out" | "-o" => {
+                let val = args.get(i + 1).context("missing value for --out")?;
+                out_path = Some(val.clone());
                 i += 2;
             }
-            "--flank" if i + 1 < args.len() => {
-                flank_bp = args[i + 1].parse().context("parsing --flank")?;
+            "--flank" => {
+                let val = args.get(i + 1).context("missing value for --flank")?;
+                flank_bp = val.parse().context("parsing --flank")?;
                 i += 2;
             }
-            "--min-cp-bits" if i + 1 < args.len() => {
-                min_cp_bits = args[i + 1].parse().context("parsing --min-cp-bits")?;
+            "--min-cp-bits" => {
+                let val = args.get(i + 1).context("missing value for --min-cp-bits")?;
+                min_cp_bits = val.parse().context("parsing --min-cp-bits")?;
                 i += 2;
             }
             "--prune-unsupported" => {

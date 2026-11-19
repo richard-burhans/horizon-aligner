@@ -497,10 +497,11 @@ fn run_lift<W1: Write, W2: Write>(
         |_| Ok(()),
     )?;
 
-    // Build source StepSpan tables keyed by match_keys.
-    let mut source_tables: HashMap<String, (Vec<StepSpan>, usize)> = HashMap::new();
+    // Build source StepSpan tables keyed by match_keys (retaining all walks per key).
+    let mut source_tables: HashMap<String, Vec<(Vec<StepSpan>, usize, usize)>> = HashMap::new();
     for p in source_paths {
-        let mut cur = p.start_offset;
+        let start_off = p.start_offset;
+        let mut cur = start_off;
         let mut spans = Vec::with_capacity(p.steps.len());
         for (seg, is_fwd) in p.steps {
             let slen = seg_lens.get(&seg).copied().unwrap_or(0);
@@ -515,7 +516,8 @@ fn run_lift<W1: Write, W2: Write>(
         for key in p.match_keys {
             source_tables
                 .entry(key)
-                .or_insert_with(|| (spans.clone(), cur));
+                .or_default()
+                .push((spans.clone(), start_off, cur));
         }
     }
 
@@ -550,7 +552,7 @@ fn run_lift<W1: Write, W2: Write>(
     };
 
     for feat in cfg.features {
-        let Some((src_steps, _src_len)) = source_tables.get(&feat.chrom) else {
+        let Some(src_walks) = source_tables.get(&feat.chrom) else {
             summary.unmapped += 1;
             if let Some(u) = unmapped_out.as_deref_mut() {
                 writeln!(
@@ -561,6 +563,10 @@ fn run_lift<W1: Write, W2: Write>(
             }
             continue;
         };
+        let (src_steps, _s0, _s1) = src_walks
+            .iter()
+            .find(|(_, s0, s1)| feat.start >= *s0 && feat.start < *s1)
+            .unwrap_or(&src_walks[0]);
 
         let pieces = lift_feature(
             feat,
@@ -644,42 +650,54 @@ fn main() -> Result<()> {
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
-            "--gfa" if i + 1 < args.len() => {
-                gfa_path = Some(args[i + 1].clone());
+            "--gfa" => {
+                gfa_path = Some(args.get(i + 1).context("missing value for --gfa")?.clone());
                 i += 2;
             }
-            "--from" if i + 1 < args.len() => {
-                from_sample = Some(args[i + 1].clone());
+            "--from" => {
+                from_sample = Some(args.get(i + 1).context("missing value for --from")?.clone());
                 i += 2;
             }
-            "--to" if i + 1 < args.len() => {
-                to_sample = Some(args[i + 1].clone());
+            "--to" => {
+                to_sample = Some(args.get(i + 1).context("missing value for --to")?.clone());
                 i += 2;
             }
-            "--bed" if i + 1 < args.len() => {
-                input_path = Some(args[i + 1].clone());
+            "--bed" => {
+                input_path = Some(args.get(i + 1).context("missing value for --bed")?.clone());
                 is_gff = false;
                 i += 2;
             }
-            "--gff" | "--gff3" if i + 1 < args.len() => {
-                input_path = Some(args[i + 1].clone());
+            "--gff" | "--gff3" => {
+                input_path = Some(args.get(i + 1).context("missing value for --gff")?.clone());
                 is_gff = true;
                 i += 2;
             }
-            "--out" | "-o" if i + 1 < args.len() => {
-                out_path = Some(args[i + 1].clone());
+            "--out" | "-o" => {
+                out_path = Some(args.get(i + 1).context("missing value for --out")?.clone());
                 i += 2;
             }
-            "--unmapped" if i + 1 < args.len() => {
-                unmapped_path = Some(args[i + 1].clone());
+            "--unmapped" => {
+                unmapped_path = Some(
+                    args.get(i + 1)
+                        .context("missing value for --unmapped")?
+                        .clone(),
+                );
                 i += 2;
             }
-            "--min-frac" if i + 1 < args.len() => {
-                min_frac = args[i + 1].parse().context("parsing --min-frac")?;
+            "--min-frac" => {
+                min_frac = args
+                    .get(i + 1)
+                    .context("missing value for --min-frac")?
+                    .parse()
+                    .context("parsing --min-frac")?;
                 i += 2;
             }
-            "--bridge-bp" if i + 1 < args.len() => {
-                bridge_bp = args[i + 1].parse().context("parsing --bridge-bp")?;
+            "--bridge-bp" => {
+                bridge_bp = args
+                    .get(i + 1)
+                    .context("missing value for --bridge-bp")?
+                    .parse()
+                    .context("parsing --bridge-bp")?;
                 i += 2;
             }
             _ => bail!("unknown argument '{}'", args[i]),

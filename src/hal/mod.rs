@@ -110,13 +110,17 @@ impl HalAlignment {
             let b_idx = bottom_segments.len();
             let mut child_links = vec![None; queries.len()];
             for (q_idx, q_start, rev) in hits {
+                if q_idx >= queries.len() {
+                    continue;
+                }
                 let t_idx = child_tops_per_q[q_idx].len();
+                let prev_paralog = child_links[q_idx].map(|(prev_t, _)| prev_t);
                 child_tops_per_q[q_idx].push(HalTopSegment {
                     start: q_start,
                     length: len,
                     parent_bottom_idx: Some(b_idx),
                     parent_reversed: rev,
-                    next_paralog: None,
+                    next_paralog: prev_paralog,
                 });
                 child_links[q_idx] = Some((t_idx, rev));
             }
@@ -166,6 +170,55 @@ impl HalAlignment {
         }
     }
 
+    fn write_leaf_maf(leaf: &HalGenome, parent: &HalGenome, out: &mut String) {
+        for tseg in &leaf.top_segments {
+            let Some(b_idx) = tseg.parent_bottom_idx else {
+                continue;
+            };
+            let Some(bseg) = parent.bottom_segments.get(b_idx) else {
+                continue;
+            };
+            let c_end = tseg.start.saturating_add(tseg.length).min(leaf.dna.len());
+            let p_end = bseg.start.saturating_add(bseg.length).min(parent.dna.len());
+            if c_end <= tseg.start || p_end <= bseg.start {
+                continue;
+            }
+            let q_seq = String::from_utf8_lossy(&leaf.dna[tseg.start..c_end]);
+            let p_slice = &parent.dna[bseg.start..p_end];
+            let p_seq = if tseg.parent_reversed {
+                String::from_utf8_lossy(&crate::revcomp(p_slice)).into_owned()
+            } else {
+                String::from_utf8_lossy(p_slice).into_owned()
+            };
+            let p_strand = if tseg.parent_reversed { '-' } else { '+' };
+            let p_start = if tseg.parent_reversed {
+                parent.dna.len().saturating_sub(p_end)
+            } else {
+                bseg.start
+            };
+            let _ = writeln!(out, "a score=2.0");
+            let _ = writeln!(
+                out,
+                "s {} {} {} + {} {}",
+                leaf.name,
+                tseg.start,
+                c_end - tseg.start,
+                leaf.dna.len(),
+                q_seq
+            );
+            let _ = writeln!(
+                out,
+                "s {} {} {} {} {} {}\n",
+                parent.name,
+                p_start,
+                p_end - bseg.start,
+                p_strand,
+                parent.dna.len(),
+                p_seq
+            );
+        }
+    }
+
     /// Project the HAL alignment onto `target_genome_name` as MAF v1 text.
     #[must_use]
     pub fn to_maf_for_genome(&self, target_genome_name: &str) -> Option<String> {
@@ -175,6 +228,14 @@ impl HalAlignment {
             .position(|g| g.name == target_genome_name)?;
         let root = &self.genomes[g_idx];
         let mut out = String::from("##maf version=1 scoring=horizon_hal\n");
+
+        if root.bottom_segments.is_empty()
+            && let Some(p_idx) = root.parent
+            && let Some(parent) = self.genomes.get(p_idx)
+        {
+            Self::write_leaf_maf(root, parent, &mut out);
+            return Some(out);
+        }
 
         for bseg in &root.bottom_segments {
             let r_end = bseg.start.saturating_add(bseg.length).min(root.dna.len());
@@ -333,7 +394,7 @@ const fn decode_hal_nibble(nibble: u8) -> u8 {
 /// Decode HAL 4-bit nibble-packed `DNA_ARRAY` bytes (high nibble first) into ASCII DNA.
 #[must_use]
 pub fn decode_hal_dna(packed: &[u8], length: usize) -> Vec<u8> {
-    let mut out = Vec::with_capacity(length);
+    let mut out = Vec::with_capacity(length.min(packed.len().saturating_mul(2)));
     for &b in packed {
         if out.len() >= length {
             break;

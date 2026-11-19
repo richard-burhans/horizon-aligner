@@ -158,12 +158,19 @@ pub fn read_hdf5_object_header(slice: &[u8]) -> Option<Hdf5ObjectHeader> {
         }
         pos += chunk_sz_bytes;
         let end = pos.saturating_add(chunk_sz).min(slice.len());
+        let msg_hdr_len = if flags & 0x04 != 0 { 6usize } else { 4usize };
         let mut msg_types = Vec::new();
-        while pos + 4 <= end {
+        while pos.saturating_add(msg_hdr_len) <= end {
             let mtype = u16::from(slice[pos]);
             let msize = usize::from(u16::from_le_bytes([slice[pos + 1], slice[pos + 2]]));
             msg_types.push(mtype);
-            pos += 4 + msize;
+            let Some(next) = pos
+                .checked_add(msg_hdr_len)
+                .and_then(|p| p.checked_add(msize))
+            else {
+                break;
+            };
+            pos = next;
         }
         return Some(Hdf5ObjectHeader {
             version: 2,
@@ -379,22 +386,23 @@ pub struct HalFileInfo {
     pub root_names: Vec<String>,
 }
 
+const MAX_HDF5_READ_BYTES: usize = 256 * 1024 * 1024;
+
 pub(super) fn read_at<R: std::io::Read + std::io::Seek>(
     r: &mut R,
     offset: u64,
     len: usize,
 ) -> std::io::Result<Vec<u8>> {
-    r.seek(std::io::SeekFrom::Start(offset))?;
-    let mut buf = vec![0u8; len];
-    let mut filled = 0usize;
-    while filled < len {
-        let n = r.read(&mut buf[filled..])?;
-        if n == 0 {
-            break;
-        }
-        filled += n;
+    use std::io::Read;
+    if len > MAX_HDF5_READ_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("HDF5 read length {len} exceeds limit {MAX_HDF5_READ_BYTES}"),
+        ));
     }
-    buf.truncate(filled);
+    r.seek(std::io::SeekFrom::Start(offset))?;
+    let mut buf = Vec::with_capacity(len.min(64 * 1024));
+    r.take(len as u64).read_to_end(&mut buf)?;
     Ok(buf)
 }
 
@@ -420,7 +428,10 @@ where
     if hdr_size > MAX_HDF5_META_BYTES {
         return Ok(None);
     }
-    let first_buf = read_at(r, obj_addr + 16, hdr_size)?;
+    let Some(msg_off) = obj_addr.checked_add(16) else {
+        return Ok(None);
+    };
+    let first_buf = read_at(r, msg_off, hdr_size)?;
     let mut chunks = std::collections::VecDeque::from([first_buf]);
     let mut visited_addrs = std::collections::HashSet::from([obj_addr]);
     let mut seen = 0usize;
@@ -469,7 +480,10 @@ fn collect_snod_entries_seek<R: std::io::Read + std::io::Seek>(
         return Ok(());
     }
     let n_syms = usize::from(u16::from_le_bytes([hdr[6], hdr[7]]));
-    let entries_buf = read_at(r, snod_addr + 8, n_syms * 40)?;
+    let Some(entries_off) = snod_addr.checked_add(8) else {
+        return Ok(());
+    };
+    let entries_buf = read_at(r, entries_off, n_syms * 40)?;
     for i in 0..n_syms {
         let Some(name_off_u64) = read_u64_le(&entries_buf, i * 40) else {
             break;

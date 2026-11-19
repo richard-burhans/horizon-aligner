@@ -7,6 +7,10 @@ use std::fs;
 use std::path::Path;
 use std::time::Instant;
 
+fn matches_species(id: &str, target: &str) -> bool {
+    id == target || id.starts_with(&format!("{target}."))
+}
+
 fn read_named_contigs(path: &Path, target: &str) -> Result<HashMap<String, Vec<u8>>> {
     let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let mut contigs: HashMap<String, Vec<u8>> = HashMap::new();
@@ -14,7 +18,7 @@ fn read_named_contigs(path: &Path, target: &str) -> Result<HashMap<String, Vec<u
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix('>') {
             let id = rest.split_whitespace().next().unwrap_or("");
-            if id == target || id.starts_with(&format!("{target}.")) {
+            if matches_species(id, target) {
                 active_id = Some(id.to_string());
                 contigs.entry(id.to_string()).or_default();
             } else {
@@ -41,8 +45,8 @@ fn parse_maf_pairs_by_contig(path: &Path, cx: &str, cy: &str) -> Result<MafPairM
         if cur.len() == 2
             && cur[0].len() >= 7
             && cur[1].len() >= 7
-            && cur[0][1].contains(cx)
-            && cur[1][1].contains(cy)
+            && matches_species(&cur[0][1], cx)
+            && matches_species(&cur[1][1], cy)
         {
             let ref_id = cur[0][1].clone();
             let tgt_id = cur[1][1].clone();
@@ -113,14 +117,22 @@ fn main() -> Result<()> {
     let mut hsp_threshold = None;
     let mut i = 6;
     while i < args.len() {
-        if args[i] == "--min-fallback-cov" && i + 1 < args.len() {
-            min_fallback_cov = Some(args[i + 1].parse()?);
-            i += 2;
-        } else if args[i] == "--hsp-threshold" && i + 1 < args.len() {
-            hsp_threshold = Some(args[i + 1].parse()?);
-            i += 2;
-        } else {
-            i += 1;
+        match args[i].as_str() {
+            "--min-fallback-cov" => {
+                let val = args
+                    .get(i + 1)
+                    .context("missing value for --min-fallback-cov")?;
+                min_fallback_cov = Some(val.parse().context("parsing --min-fallback-cov")?);
+                i += 2;
+            }
+            "--hsp-threshold" => {
+                let val = args
+                    .get(i + 1)
+                    .context("missing value for --hsp-threshold")?;
+                hsp_threshold = Some(val.parse().context("parsing --hsp-threshold")?);
+                i += 2;
+            }
+            other => anyhow::bail!("unknown argument '{other}'"),
         }
     }
 
@@ -149,11 +161,15 @@ fn main() -> Result<()> {
     pairs.sort_by(|a, b| a.0.cmp(&b.0));
 
     for ((ref_id, tgt_id), maf_set) in &pairs {
-        total_maf += maf_set.len();
         let (Some(idx_r), Some(idx_t)) = (ref_idx_cache.get(ref_id), tgt_idx_cache.get(tgt_id))
         else {
+            eprintln!(
+                "horizon_eval: warning: skipping MAF pair ({ref_id}, {tgt_id}) missing from FASTA inputs ({} pairs)",
+                maf_set.len()
+            );
             continue;
         };
+        total_maf += maf_set.len();
         let aln = align_contig_pair_with_config(idx_r, idx_t, &cfg)?;
         let proto_set: HashSet<(usize, usize)> = aln.aligned_pairs.iter().copied().collect();
         total_proto += proto_set.len();
