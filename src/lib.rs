@@ -1,8 +1,10 @@
 //! Horizon Aligner: KP-14 spaced-seed + BOCPD/MDL genome aligner and GFA/MAF/HAL toolkit.
 
 pub mod bocpd;
+pub mod coord;
 pub mod egraph;
 pub mod formats;
+pub mod gfa;
 pub mod hal;
 pub mod mdl;
 pub mod merge;
@@ -15,9 +17,10 @@ pub use formats::{
     resolve_lcb_duplications,
 };
 pub use mdl::{
-    AlignConfig, ContigAlignment, GapResult, align_contig_pair, align_contig_pair_indexed,
-    align_contig_pair_indexed_with_min_lcb, align_contig_pair_with_config, banded_mdl_gap,
-    mdl_xdrop_extend,
+    AlignConfig, ContigAlignment, GapResult, GraphAlignment, GraphNode, HmmParams,
+    align_contig_pair, align_contig_pair_indexed, align_contig_pair_indexed_with_min_lcb,
+    align_contig_pair_with_config, align_seq_to_dag_mdl, banded_mdl_gap,
+    banded_mdl_gap_with_params, mdl_xdrop_extend,
 };
 pub use merge::merge_pairwise_mafs;
 pub use seeding::{
@@ -391,5 +394,3 @@ mod tests {
         );
     }
 }
-pub mod coord;
-pub mod gfa;

@@ -154,11 +154,13 @@ pub fn align_contig_pair_with_config(
         .log2()
         .max(10.0);
     // Continuous Karlin-Altschul / MDL scaling with log2(N * M), avoiding fixed size cutoffs.
+    /// Karlin-Altschul / MDL random-search threshold coefficient (`~0.5 * log2(N*M)` + overhead).
+    const KARLIN_MDL_COEFF: f64 = 0.55;
     #[allow(clippy::cast_possible_truncation)]
     let hsp_bonus = ((search_space_bits - 20.0).max(0.0) * 3.8).round() as i32;
     #[allow(clippy::cast_possible_truncation)]
     let aa_bonus = ((search_space_bits - 20.0).max(0.0) * 1.7).round() as i32;
-    let effective_min_bits = cfg.min_delta_bits.max(0.55 * search_space_bits);
+    let effective_min_bits = cfg.min_delta_bits.max(KARLIN_MDL_COEFF * search_space_bits);
 
     let mut covered_x = vec![false; seq_x.len()];
     let mut covered_bp = 0usize;
@@ -656,17 +658,21 @@ pub fn align_contig_pair_with_config(
         }
     }
 
+    // Estimate divergence-adaptive Pair-HMM parameters empirically from LCB anchors (with Beta prior shrinkage).
+    let hmm_params = estimate_hmm_params(seq_x, seq_y, seq_y_rc, &lcbs_fwd, &lcbs_rc, span);
+
     // Run banded MDL DP gaps in parallel via rayon.
     let t_dp_start = std::time::Instant::now();
     let dp_results: Vec<(bool, usize, usize, GapResult)> = dp_jobs
         .par_iter()
         .map(|&(is_rc, x0, x1, y0, y1)| {
             let y_work = if is_rc { seq_y_rc } else { seq_y };
-            let res = banded_mdl_gap(
+            let res = banded_mdl_gap_with_params(
                 &seq_x[x0..x1],
                 &y_work[y0..y1],
                 cfg.band_w,
                 effective_min_bits,
+                &hmm_params,
             );
             (is_rc, x0, y0, res)
         })
@@ -741,4 +747,79 @@ pub fn align_contig_pair_with_config(
         macro_bubbles,
         internal_bubbles,
     })
+}
+
+/// Estimate divergence-adaptive Pair-HMM parameters from LCB anchors with Bayesian shrinkage.
+fn estimate_hmm_params(
+    seq_x: &[u8],
+    seq_y: &[u8],
+    seq_y_rc: &[u8],
+    lcbs_fwd: &[Vec<(usize, usize)>],
+    lcbs_rc: &[Vec<(usize, usize)>],
+    span: usize,
+) -> HmmParams {
+    let mut matches = 0usize;
+    let mut total_bases = 0usize;
+    let mut indel_events = 0usize;
+    let mut total_span = 0usize;
+
+    for (y_work, lcbs) in [(seq_y, lcbs_fwd), (seq_y_rc, lcbs_rc)] {
+        for lcb in lcbs {
+            for &(ax, ay) in lcb.iter().take(64) {
+                if ax + span <= seq_x.len() && ay + span <= y_work.len() {
+                    for off in 0..span {
+                        let bx = seq_x[ax + off].to_ascii_uppercase();
+                        let by = y_work[ay + off].to_ascii_uppercase();
+                        if matches!(bx, b'A' | b'C' | b'G' | b'T')
+                            && matches!(by, b'A' | b'C' | b'G' | b'T')
+                        {
+                            total_bases += 1;
+                            if bx == by {
+                                matches += 1;
+                            }
+                        }
+                    }
+                }
+                if total_bases >= 4000 {
+                    break;
+                }
+            }
+            for w in lcb.windows(2).take(64) {
+                let dx = w[1].0.saturating_sub(w[0].0);
+                let dy = w[1].1.saturating_sub(w[0].1);
+                if dx > 0 && dy > 0 && dx <= 500 && dy <= 500 {
+                    total_span += dx.max(dy);
+                    if dx != dy {
+                        indel_events += 1;
+                    }
+                }
+            }
+            if total_bases >= 4000 {
+                break;
+            }
+        }
+    }
+
+    if total_bases < 60 {
+        return HmmParams::default();
+    }
+
+    // LCB anchors are enriched for conserved exons; cap upper identity_prior at 0.72
+    // so inter-anchor gaps in divergent mammals still receive adequate homology sensitivity.
+    #[allow(clippy::cast_precision_loss)]
+    let identity_prior = ((matches as f64 + 195.0) / (total_bases as f64 + 300.0)).clamp(0.60, 0.72);
+    #[allow(clippy::cast_precision_loss)]
+    let gap_open_bits = if total_span >= 200 {
+        ((indel_events as f64 + 1.0) / (total_span as f64 + 22.0))
+            .log2()
+            .clamp(-5.5, -4.0)
+    } else {
+        HmmParams::default().gap_open_bits
+    };
+
+    HmmParams {
+        identity_prior,
+        gap_open_bits,
+        gap_extend_bits: HmmParams::default().gap_extend_bits,
+    }
 }

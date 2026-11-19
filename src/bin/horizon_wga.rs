@@ -1,12 +1,15 @@
 //! Multi-contig whole-genome aligner CLI using KP-14 + parallel MDL/BOCPD.
 
 use anyhow::{Context, Result, bail};
+use horizon_aligner::gfa::stream_gfa;
 use horizon_aligner::{
-    AlignConfig, ContigIndex, align_contig_pair_with_config, format_gfa_blocks,
-    format_gfa_paralog_tags, format_gfa_summary, format_maf_blocks, prepare_contig_index_opts,
-    read_fasta_contigs, resolve_alignment_duplications, select_top_k_pairs, shared_seed_count,
+    AlignConfig, ContigIndex, GraphNode, HmmParams, align_contig_pair_with_config,
+    align_seq_to_dag_mdl, format_gfa_blocks, format_gfa_paralog_tags, format_gfa_summary,
+    format_maf_blocks, prepare_contig_index_opts, read_fasta_contigs,
+    resolve_alignment_duplications, select_top_k_pairs, shared_seed_count,
 };
 use rayon::prelude::*;
+use std::collections::{HashMap, VecDeque};
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
@@ -25,6 +28,7 @@ struct CliArgs {
     respect_softmask: bool,
     use_ry_seeds: bool,
     hal_info: Option<PathBuf>,
+    graph_path: Option<PathBuf>,
     min_fallback_cov: Option<f64>,
     hsp_threshold: Option<i32>,
 }
@@ -41,6 +45,7 @@ fn parse_args() -> Result<CliArgs> {
     let mut respect_softmask = false;
     let mut use_ry_seeds = false;
     let mut hal_info = None;
+    let mut graph_path = None;
     let mut min_fallback_cov = None;
     let mut hsp_threshold = None;
 
@@ -110,6 +115,10 @@ fn parse_args() -> Result<CliArgs> {
                 hal_info = Some(PathBuf::from(&args[i + 1]));
                 i += 2;
             }
+            "--graph" if i + 1 < args.len() => {
+                graph_path = Some(PathBuf::from(&args[i + 1]));
+                i += 2;
+            }
             _ => {
                 pos.push(args[i].clone());
                 i += 1;
@@ -117,14 +126,20 @@ fn parse_args() -> Result<CliArgs> {
         }
     }
 
-    if pos.len() < 2 && hal_info.is_none() {
+    if pos.len() < 2 && hal_info.is_none() && (graph_path.is_none() || pos.is_empty()) {
         bail!(
-            "usage: horizon_wga <target.fa> <query.fa> [max_contigs] [--maf out.maf] [--gfa out.gfa] [--hal-info file.hal] [--top-k K] [--rbest] [--resolve-dups] [--respect-softmask] [--ry-seeds|--no-ry-seeds]"
+            "usage: horizon_wga <target.fa> <query.fa> [max_contigs] [--maf out.maf] [--gfa out.gfa] [--graph target.gfa] [--hal-info file.hal] [--top-k K] [--rbest] [--resolve-dups] [--respect-softmask] [--ry-seeds|--no-ry-seeds]"
         );
     }
-    let fa_x = pos.first().map_or_default(PathBuf::from);
-    let fa_y = pos.get(1).map_or_default(PathBuf::from);
-    let max_contigs = pos.get(2).and_then(|s| s.parse().ok()).unwrap_or(1);
+    let (fa_x, fa_y, max_contigs) = if graph_path.is_some() && pos.len() == 1 {
+        (PathBuf::new(), PathBuf::from(&pos[0]), 1)
+    } else {
+        (
+            pos.first().map_or_default(PathBuf::from),
+            pos.get(1).map_or_default(PathBuf::from),
+            pos.get(2).and_then(|s| s.parse().ok()).unwrap_or(1),
+        )
+    };
 
     Ok(CliArgs {
         fa_x,
@@ -139,6 +154,7 @@ fn parse_args() -> Result<CliArgs> {
         respect_softmask,
         use_ry_seeds,
         hal_info,
+        graph_path,
         min_fallback_cov,
         hsp_threshold,
     })
@@ -165,6 +181,41 @@ fn main() -> Result<()> {
                 info.root_names[..info.root_names.len().min(10)].join(",")
             );
         }
+        return Ok(());
+    }
+    if let Some(graph_p) = &cli.graph_path {
+        let t0 = Instant::now();
+        let dag_nodes = load_gfa_dag(graph_p)?;
+        let queries = read_fasta_contigs(&cli.fa_y, cli.max_contigs)?;
+        let mut total_pairs = 0usize;
+        let mut total_bubbles = 0usize;
+        for (qname, qseq) in &queries {
+            let aln = align_seq_to_dag_mdl(&dag_nodes, qseq, &HmmParams::default(), 10.0);
+            total_pairs += aln.kept_pairs.len();
+            total_bubbles += aln.bubbles;
+            let path_str: String = aln
+                .path_nodes
+                .iter()
+                .map(|&idx| format!(">{}", dag_nodes[idx].name))
+                .collect();
+            println!(
+                "{}\t{}\t{}\tkept_bp={}\tscore_bits={:.1}\tbubbles={}",
+                qname,
+                qseq.len(),
+                path_str,
+                aln.kept_pairs.len(),
+                aln.score_bits,
+                aln.bubbles
+            );
+        }
+        println!(
+            "graph_nodes={} query_contigs={} aligned_pairs={} total_bubbles={} elapsed_s={:.4}",
+            dag_nodes.len(),
+            queries.len(),
+            total_pairs,
+            total_bubbles,
+            t0.elapsed().as_secs_f64()
+        );
         return Ok(());
     }
     let t0 = Instant::now();
@@ -284,4 +335,92 @@ fn main() -> Result<()> {
         print!("{summary_out}");
     }
     Ok(())
+}
+
+fn load_gfa_dag(path: &std::path::Path) -> Result<Vec<GraphNode>> {
+    let segs = std::cell::RefCell::new(Vec::<(String, Vec<u8>)>::new());
+    let name_to_raw = std::cell::RefCell::new(HashMap::<String, usize>::new());
+    let raw_edges = std::cell::RefCell::new(Vec::<(String, String)>::new());
+
+    stream_gfa(
+        path,
+        |s| {
+            if s.sequence != b"*" {
+                let idx = segs.borrow().len();
+                name_to_raw.borrow_mut().insert(s.name.clone(), idx);
+                segs.borrow_mut().push((s.name, s.sequence));
+            }
+            Ok(())
+        },
+        |l| {
+            if l.from_orient == b'+' && l.to_orient == b'+' {
+                raw_edges.borrow_mut().push((l.from, l.to));
+            }
+            Ok(())
+        },
+        |_| Ok(()),
+        |_| Ok(()),
+    )?;
+
+    let segs = segs.into_inner();
+    let name_to_raw = name_to_raw.into_inner();
+    let raw_edges = raw_edges.into_inner();
+    let n = segs.len();
+    let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut indeg: Vec<usize> = vec![0; n];
+
+    for (u_name, v_name) in raw_edges {
+        if let (Some(&u), Some(&v)) = (name_to_raw.get(&u_name), name_to_raw.get(&v_name))
+            && u != v
+        {
+            adj[u].push(v);
+            indeg[v] += 1;
+        }
+    }
+
+    let mut q: VecDeque<usize> = (0..n).filter(|&i| indeg[i] == 0).collect();
+    let mut order = Vec::with_capacity(n);
+    while let Some(u) = q.pop_front() {
+        order.push(u);
+        for &v in &adj[u] {
+            indeg[v] = indeg[v].saturating_sub(1);
+            if indeg[v] == 0 {
+                q.push_back(v);
+            }
+        }
+    }
+    // Append any remaining nodes (if cycles existed) in input order
+    if order.len() < n {
+        let seen: std::collections::HashSet<usize> = order.iter().copied().collect();
+        for i in 0..n {
+            if !seen.contains(&i) {
+                order.push(i);
+            }
+        }
+    }
+
+    let mut raw_to_topo = vec![0usize; n];
+    for (topo_i, &raw_i) in order.iter().enumerate() {
+        raw_to_topo[raw_i] = topo_i;
+    }
+
+    let mut nodes: Vec<GraphNode> = order
+        .iter()
+        .map(|&raw_i| GraphNode {
+            name: segs[raw_i].0.clone(),
+            seq: segs[raw_i].1.clone(),
+            preds: Vec::new(),
+        })
+        .collect();
+
+    for (u_raw, vs) in adj.iter().enumerate() {
+        let u_topo = raw_to_topo[u_raw];
+        for &v_raw in vs {
+            let v_topo = raw_to_topo[v_raw];
+            if u_topo < v_topo {
+                nodes[v_topo].preds.push(u_topo);
+            }
+        }
+    }
+    Ok(nodes)
 }

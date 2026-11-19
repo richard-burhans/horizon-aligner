@@ -272,9 +272,113 @@ pub fn saturate_synteny(eg: &mut EGraph, max_iters: usize, max_nodes: usize) {
     }
 }
 
-/// Extract minimum-parsimony synteny expression rooted at `root`.
+/// MDL bit-cost parameters for e-graph extraction.
+#[derive(Debug, Clone)]
+pub struct MdlCostModel {
+    /// Number of distinct block classes (for `log2(K)` catalog pointer bits).
+    pub num_blocks: usize,
+    /// Optional per-block `(length_bp, divergence)` for sequence-aware MDL bit costs.
+    pub block_stats: HashMap<String, (usize, f64)>,
+    /// Bit cost for a `seq` concatenation node.
+    pub seq_op_bits: f64,
+    /// Bit cost for an `inv` strand-flip node.
+    pub inv_op_bits: f64,
+    /// Bit overhead for a `dup` copy header (op tag + Elias-gamma copy count).
+    pub dup_header_bits: f64,
+}
+
+impl Default for MdlCostModel {
+    fn default() -> Self {
+        Self {
+            num_blocks: 4,
+            block_stats: HashMap::new(),
+            seq_op_bits: 1.0,
+            inv_op_bits: 1.0,
+            dup_header_bits: 2.5,
+        }
+    }
+}
+
+impl MdlCostModel {
+    /// Construct an MDL cost model calibrated to the distinct `blk:` leaves in `eg`.
+    #[must_use]
+    pub fn from_egraph(eg: &EGraph) -> Self {
+        let mut labels = HashSet::new();
+        for nodes in eg.classes.values() {
+            for n in nodes {
+                if let Some(lbl) = n.op.strip_prefix("blk:") {
+                    labels.insert(lbl);
+                }
+            }
+        }
+        Self {
+            num_blocks: labels.len().max(2),
+            ..Self::default()
+        }
+    }
+
+    /// Description length (bits) of a leaf block `label`.
+    #[must_use]
+    pub fn block_bits(&self, label: &str) -> f64 {
+        #[allow(clippy::cast_precision_loss)]
+        let catalog_bits = (self.num_blocks.max(2) as f64).log2().max(1.0);
+        if let Some(&(len_bp, _div)) = self.block_stats.get(label) {
+            #[allow(clippy::cast_precision_loss)]
+            let seq_bits = 2.0 * (len_bp as f64);
+            catalog_bits + seq_bits
+        } else {
+            // Structural minimum: catalog pointer + 1.0 bit length-tag floor
+            catalog_bits + 1.0
+        }
+    }
+
+    /// Incremental bit cost of collapsing a second copy via `dup(expr)`.
+    #[must_use]
+    pub fn dup_cost(&self, child_cost: f64, child_expr: &Expr) -> f64 {
+        let residual_bits = if self.block_stats.is_empty() {
+            0.0
+        } else {
+            Self::expr_residual_bits(child_expr, &self.block_stats)
+        };
+        child_cost + self.dup_header_bits + residual_bits
+    }
+
+    fn expr_residual_bits(expr: &Expr, stats: &HashMap<String, (usize, f64)>) -> f64 {
+        match expr {
+            Expr::Block(lbl) => {
+                if let Some(&(len_bp, div)) = stats.get(lbl) {
+                    let p = div.clamp(1e-6, 0.75);
+                    let h2 = -p * p.log2() - (1.0 - p) * (1.0 - p).log2() + p * 3.0_f64.log2();
+                    #[allow(clippy::cast_precision_loss)]
+                    {
+                        (len_bp as f64) * h2
+                    }
+                } else {
+                    0.0
+                }
+            }
+            Expr::Inv(inner) | Expr::Dup(inner) => Self::expr_residual_bits(inner, stats),
+            Expr::Seq(a, b) => {
+                Self::expr_residual_bits(a, stats) + Self::expr_residual_bits(b, stats)
+            }
+        }
+    }
+}
+
+/// Extract minimum-MDL-bit-cost synteny expression rooted at `root`.
 #[must_use]
 pub fn extract_min_cost(eg: &mut EGraph, root: usize) -> Option<(f64, Expr)> {
+    let model = MdlCostModel::from_egraph(eg);
+    extract_min_mdl_cost(eg, root, &model)
+}
+
+/// Extract minimum-parsimony synteny expression rooted at `root` under an explicit [`MdlCostModel`].
+#[must_use]
+pub fn extract_min_mdl_cost(
+    eg: &mut EGraph,
+    root: usize,
+    model: &MdlCostModel,
+) -> Option<(f64, Expr)> {
     let mut best: HashMap<usize, (f64, Expr)> = HashMap::new();
     let max_rounds = eg.classes.len() + 2;
     let class_ids: Vec<usize> = eg.classes.keys().copied().collect();
@@ -289,19 +393,19 @@ pub fn extract_min_cost(eg: &mut EGraph, root: usize) -> Option<(f64, Expr)> {
                 .map_or_default(|s| s.iter().cloned().collect());
             for node in nodes {
                 let cand: Option<(f64, Expr)> = if let Some(lbl) = node.op.strip_prefix("blk:") {
-                    Some((1.0, Expr::Block(lbl.to_owned())))
+                    Some((model.block_bits(lbl), Expr::Block(lbl.to_owned())))
                 } else if node.op == "inv" && node.children.len() == 1 {
                     best.get(&eg.find(node.children[0]))
-                        .map(|(c, e)| (c + 1.2, Expr::Inv(Box::new(e.clone()))))
+                        .map(|(c, e)| (c + model.inv_op_bits, Expr::Inv(Box::new(e.clone()))))
                 } else if node.op == "dup" && node.children.len() == 1 {
                     best.get(&eg.find(node.children[0]))
-                        .map(|(c, e)| (c + 1.3, Expr::Dup(Box::new(e.clone()))))
+                        .map(|(c, e)| (model.dup_cost(*c, e), Expr::Dup(Box::new(e.clone()))))
                 } else if node.op == "seq" && node.children.len() == 2 {
                     let left = best.get(&eg.find(node.children[0]));
                     let right = best.get(&eg.find(node.children[1]));
                     match (left, right) {
                         (Some((c1, e1)), Some((c2, e2))) => Some((
-                            c1 + c2 + 1.0,
+                            c1 + c2 + model.seq_op_bits,
                             Expr::Seq(Box::new(e1.clone()), Box::new(e2.clone())),
                         )),
                         _ => None,
@@ -381,5 +485,24 @@ mod tests {
         saturate_synteny(&mut eg, 4, 800);
         let (_, expr) = extract_min_cost(&mut eg, root).expect("extracted");
         assert!(has_dup_of(&expr, "B"), "expected dup(B) in {expr:?}");
+    }
+
+    #[test]
+    fn mdl_cost_model_gates_dup_by_sequence_divergence() {
+        let haplotype = [("B", 1), ("B", 1)];
+        let mut eg = EGraph::new();
+        let root = build_seq_expr(&mut eg, &haplotype).expect("nonempty");
+        saturate_synteny(&mut eg, 3, 200);
+
+        let mut low_div = MdlCostModel::from_egraph(&eg);
+        low_div.block_stats.insert("B".to_owned(), (1000, 0.02));
+        let (cost_low, expr_low) = extract_min_mdl_cost(&mut eg, root, &low_div).expect("extracted");
+        assert!(has_dup_of(&expr_low, "B"), "2% div should collapse dup: {expr_low:?}");
+        assert!(cost_low < 2500.0, "expected <2500 bits, got {cost_low}");
+
+        let mut high_div = MdlCostModel::from_egraph(&eg);
+        high_div.block_stats.insert("B".to_owned(), (1000, 0.75));
+        let (_, expr_high) = extract_min_mdl_cost(&mut eg, root, &high_div).expect("extracted");
+        assert!(!has_dup_of(&expr_high, "B"), "75% (JC-saturated) div should NOT collapse dup: {expr_high:?}");
     }
 }
