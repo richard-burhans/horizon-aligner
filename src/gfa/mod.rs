@@ -49,14 +49,15 @@ impl SpoolableGfaInput {
                 Err(e) => return Err(e.into()),
             }
         };
+        let spooled = Self {
+            path: tmp_path.to_string_lossy().into_owned(),
+            temp_file: Some(tmp_path),
+        };
         let stdin = io::stdin();
         let mut locked = stdin.lock();
         io::copy(&mut locked, &mut file)?;
         file.flush()?;
-        Ok(Self {
-            path: tmp_path.to_string_lossy().into_owned(),
-            temp_file: Some(tmp_path),
-        })
+        Ok(spooled)
     }
 
     /// Path to pass to single- or multi-pass GFA readers.

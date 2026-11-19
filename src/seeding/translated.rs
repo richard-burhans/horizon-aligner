@@ -311,7 +311,7 @@ pub(crate) fn append_hsp_gated_lastz12_lcbs(
         if let Some((lx, ly, rx, ry, sc)) = extend_ungapped_hsp(seq_x, seq_y, px, py, min_hsp_score)
         {
             filtered_hits.push((px, py));
-            if sc >= min_hsp_score + strong_margin && rx >= lx + 19 && ry >= ly + 19 {
+            if sc >= min_hsp_score + strong_margin && rx > lx + 19 && ry > ly + 19 {
                 strong_hsps.push(vec![(lx, ly), (rx - 19, ry - 19)]);
             }
         }

@@ -8,7 +8,10 @@ use std::path::Path;
 use std::time::Instant;
 
 fn matches_species(id: &str, target: &str) -> bool {
-    id == target || id.starts_with(&format!("{target}."))
+    id == target
+        || id
+            .strip_prefix(target)
+            .is_some_and(|rest| rest.starts_with('.'))
 }
 
 fn read_named_contigs(path: &Path, target: &str) -> Result<HashMap<String, Vec<u8>>> {

@@ -180,9 +180,14 @@ impl HalAlignment {
             };
             let c_end = tseg.start.saturating_add(tseg.length).min(leaf.dna.len());
             let p_end = bseg.start.saturating_add(bseg.length).min(parent.dna.len());
-            if c_end <= tseg.start || p_end <= bseg.start {
+            let aln_len = c_end
+                .saturating_sub(tseg.start)
+                .min(p_end.saturating_sub(bseg.start));
+            if aln_len == 0 {
                 continue;
             }
+            let c_end = tseg.start + aln_len;
+            let p_end = bseg.start + aln_len;
             let q_seq = String::from_utf8_lossy(&leaf.dna[tseg.start..c_end]);
             let p_slice = &parent.dna[bseg.start..p_end];
             let p_seq = if tseg.parent_reversed {
@@ -202,7 +207,7 @@ impl HalAlignment {
                 "s {} {} {} + {} {}",
                 leaf.name,
                 tseg.start,
-                c_end - tseg.start,
+                aln_len,
                 leaf.dna.len(),
                 q_seq
             );
@@ -211,7 +216,7 @@ impl HalAlignment {
                 "s {} {} {} {} {} {}\n",
                 parent.name,
                 p_start,
-                p_end - bseg.start,
+                aln_len,
                 p_strand,
                 parent.dna.len(),
                 p_seq
@@ -754,5 +759,43 @@ mod tests {
         assert!(entries.iter().any(|e| e.name == "ref0"));
         assert!(entries.iter().any(|e| e.name == "q_0000"));
         assert!(entries.iter().any(|e| e.name == "q_0299"));
+    }
+
+    #[test]
+    fn hal_leaf_to_maf_paralog_chaining_and_ohdr_v2_flags() {
+        let ref_dna = b"ACGTACGTACGT";
+        let q1_dna = b"ACGTACGTACGTACGT";
+        // Two hits for q_idx=0 on the same ref interval (0, 8) exercises next_paralog chaining,
+        // plus one out-of-range q_idx=99 that must be safely ignored.
+        let hal = HalAlignment::from_star_blocks(
+            "hg38",
+            ref_dna,
+            &[("mm10".to_owned(), q1_dna.to_vec())],
+            &[
+                (0, 0, 0, 8, true),
+                (0, 0, 8, 8, false),
+                (99, 0, 0, 8, false),
+            ],
+        );
+        assert_eq!(hal.genomes[1].top_segments.len(), 2);
+        assert_eq!(hal.genomes[1].top_segments[1].next_paralog, Some(0));
+
+        let leaf_maf = hal.to_maf_for_genome("mm10").expect("leaf MAF");
+        assert!(leaf_maf.contains("s mm10 0 8 + 16 ACGTACGT"));
+        assert!(leaf_maf.contains("s hg38 4 8 - 12 ACGTACGT"));
+
+        // Exercise HDF5 v2 OHDR with flags & 0x04 != 0 (6-byte message headers with creation order).
+        let ohdr_v2: Vec<u8> = vec![
+            b'O', b'H', b'D', b'R', // magic
+            2,    // version 2
+            0x04, // flags: 1-byte chunk size (0), creation order tracked (0x04)
+            12,   // chunk size = 12 bytes (two 6-byte empty messages)
+            0x01, 0, 0, 0, 0, 0, // msg type 1, size 0, flags 0, creation_order 0
+            0x08, 0, 0, 0, 1, 0, // msg type 8, size 0, flags 0, creation_order 1
+            0, 0, 0, 0, // padding to >= 16 bytes
+        ];
+        let parsed = read_hdf5_object_header(&ohdr_v2).expect("OHDR v2");
+        assert_eq!(parsed.version, 2);
+        assert_eq!(parsed.message_types, vec![0x01, 0x08]);
     }
 }

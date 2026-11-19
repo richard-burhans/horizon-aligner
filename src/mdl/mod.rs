@@ -288,6 +288,7 @@ pub fn align_contig_pair_with_config(
     };
     let t_lz1 = t_start.elapsed();
 
+    let mut cached_ry_hits = None;
     if cfg.use_multi_shape_seeds && primary_cov < min_fallback_cov {
         // Skip O(N * 264) 2-transition scan once search space exceeds ~10^9 cell lookups
         // where single-transition + AA5 + BOCPD/MDL already dominate runtime.
@@ -374,7 +375,6 @@ pub fn align_contig_pair_with_config(
 
         // Apply R/Y (1-bit) and w=10 1-transition only while random-collision density
         // stays tractable (< 10^9 search space cells).
-        let mut cached_ry: Option<(FlatSeedIndex, FlatSeedIndex)> = None;
         if (seq_x.len() as u128) * (seq_y.len() as u128) < 1_000_000_000 {
             // HSP-gated 1-bit purine/pyrimidine (R/Y) seeding for multi-transition divergent homologs.
             let x_ry = FlatSeedIndex::build_with_sdust(
@@ -395,7 +395,7 @@ pub fn align_contig_pair_with_config(
             )?;
             let (mut hits_ry_fwd, mut hits_ry_rc) = x_ry.intersect(&y_ry);
             if cfg.use_ry_seeds {
-                cached_ry = Some((x_ry, y_ry));
+                cached_ry_hits = Some((hits_ry_fwd.clone(), hits_ry_rc.clone()));
             }
             filter_uncovered(&mut hits_ry_fwd);
             filter_uncovered(&mut hits_ry_rc);
@@ -456,78 +456,41 @@ pub fn align_contig_pair_with_config(
             &aa_rc,
             (base_hsp_thresh / 2) + aa_bonus,
         );
+    }
 
-        // Transition-tolerant R/Y (1-bit purine/pyrimidine) fallback for divergent homologs.
-        if cfg.use_ry_seeds {
-            let (x_ry, y_ry) = match cached_ry {
-                Some(pair) => pair,
-                None => (
-                    FlatSeedIndex::build_with_sdust(
-                        seq_x,
-                        MASK_RY20,
-                        2,
-                        cfg.skip_softmasked,
-                        true,
-                        Some(&idx_x.sdust),
-                    )?,
-                    FlatSeedIndex::build_with_sdust(
-                        seq_y,
-                        MASK_RY20,
-                        2,
-                        cfg.skip_softmasked,
-                        true,
-                        Some(&idx_y.sdust),
-                    )?,
-                ),
-            };
-            let (hits_ry_fwd, hits_ry_rc) = x_ry.intersect(&y_ry);
-            let prev_fwd = combined_fwd.clone();
-            let prev_rc = combined_rc.clone();
-            append_nonoverlapping_lcbs(
-                &mut combined_fwd,
-                &prev_fwd,
-                &hits_ry_fwd,
-                cfg.fallback_min_anchors,
-                cfg.fallback_min_span,
-            );
-            append_nonoverlapping_lcbs(
-                &mut combined_rc,
-                &prev_rc,
-                &hits_ry_rc,
-                cfg.fallback_min_anchors,
-                cfg.fallback_min_span,
-            );
-        }
-    } else if cfg.use_ry_seeds {
-        let x_ry = FlatSeedIndex::build_with_sdust(
-            seq_x,
-            MASK_RY20,
-            2,
-            cfg.skip_softmasked,
-            true,
-            Some(&idx_x.sdust),
-        )?;
-        let y_ry = FlatSeedIndex::build_with_sdust(
-            seq_y,
-            MASK_RY20,
-            2,
-            cfg.skip_softmasked,
-            true,
-            Some(&idx_y.sdust),
-        )?;
-        let (hits_ry_fwd, hits_ry_rc) = x_ry.intersect(&y_ry);
-        let prev_fwd = combined_fwd.clone();
-        let prev_rc = combined_rc.clone();
+    // Transition-tolerant R/Y (1-bit purine/pyrimidine) fallback for divergent homologs.
+    if cfg.use_ry_seeds {
+        let (hits_ry_fwd, hits_ry_rc) = if let Some(hits) = cached_ry_hits {
+            hits
+        } else {
+            let x_ry = FlatSeedIndex::build_with_sdust(
+                seq_x,
+                MASK_RY20,
+                2,
+                cfg.skip_softmasked,
+                true,
+                Some(&idx_x.sdust),
+            )?;
+            let y_ry = FlatSeedIndex::build_with_sdust(
+                seq_y,
+                MASK_RY20,
+                2,
+                cfg.skip_softmasked,
+                true,
+                Some(&idx_y.sdust),
+            )?;
+            x_ry.intersect(&y_ry)
+        };
         append_nonoverlapping_lcbs(
             &mut combined_fwd,
-            &prev_fwd,
+            &[],
             &hits_ry_fwd,
             cfg.fallback_min_anchors,
             cfg.fallback_min_span,
         );
         append_nonoverlapping_lcbs(
             &mut combined_rc,
-            &prev_rc,
+            &[],
             &hits_ry_rc,
             cfg.fallback_min_anchors,
             cfg.fallback_min_span,

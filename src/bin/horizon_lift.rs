@@ -903,4 +903,45 @@ W\tCHM13\t0\tchr1\t0\t80\t>d1>dup>d2>d1>s1>s2>dup>s4>s5
         );
         assert!(out_str.contains(";DUP"), "expected ;DUP tag in: {out_str}");
     }
+
+    #[test]
+    fn lifts_across_multiple_walks_sharing_seq_id() {
+        let gfa_path = std::env::temp_dir().join("horizon_lift_multiwalk_test.gfa");
+        let gfa = "\
+H\tVN:Z:1.1
+S\ts1\tACGTACGTAC
+S\ts2\tTGCATGCATG
+W\tGRCh38\t0\tchr1\t0\t10\t>s1
+W\tGRCh38\t0\tchr1\t100\t110\t>s2
+W\tCHM13\t0\tchr1\t0\t20\t>s1>s2
+";
+        std::fs::write(&gfa_path, gfa).expect("write test GFA");
+
+        let features = vec![InputFeature {
+            chrom: "chr1".into(),
+            start: 102,
+            end: 108,
+            name: "f_walk2".into(),
+            score: "50".into(),
+            strand: '+',
+        }];
+        let cfg = LiftConfig {
+            gfa_path: gfa_path.to_str().expect("valid utf8 temp path"),
+            from_sample: "GRCh38",
+            to_sample: "CHM13",
+            features: &features,
+            min_frac: 0.0,
+            bridge_bp: 0,
+        };
+        let mut out = Vec::new();
+        let summary = run_lift(&cfg, &mut out, None::<&mut Vec<u8>>).expect("run_lift succeeds");
+        let _ = std::fs::remove_file(&gfa_path);
+
+        assert_eq!(summary.lifted_exact, 1);
+        let out_str = String::from_utf8(out).expect("valid utf8 output");
+        assert!(
+            out_str.starts_with("CHM13.chr1\t12\t18\tf_walk2\t50\t+"),
+            "expected [12, 18) via second walk, got: {out_str}"
+        );
+    }
 }

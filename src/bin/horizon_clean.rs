@@ -575,4 +575,34 @@ mod tests {
         assert!(out_str.contains("HB:i:1"));
         assert!(out_str.contains("W\tCHM13\t0\tchr22\t0\t120\t>s1>s2"));
     }
+
+    #[test]
+    fn severs_bidirected_link_pair_symmetrically() {
+        let gfa_path = std::env::temp_dir().join("horizon_clean_sym_test.gfa");
+        let s1 = "ATATATATATATATATATATATATATATATATATATATATATATATATATATATATATAT";
+        let s2 = "GCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGC";
+        let gfa = format!(
+            "H\tVN:Z:1.1\n\
+             S\ts1\t{s1}\n\
+             S\ts2\t{s2}\n\
+             L\ts1\t+\ts2\t+\t0M\n\
+             L\ts2\t-\ts1\t-\t0M\n"
+        );
+        std::fs::write(&gfa_path, gfa).unwrap();
+
+        let cfg = CleanConfig {
+            flank_bp: 60,
+            min_cp_bits: 12.0,
+            prune_unsupported: false,
+        };
+        let mut out = Vec::new();
+        let stats = clean_gfa(gfa_path.to_str().unwrap(), &cfg, &mut out).unwrap();
+        let _ = std::fs::remove_file(&gfa_path);
+
+        assert_eq!(stats.total_links, 2);
+        assert_eq!(stats.kept_links, 0);
+        assert_eq!(stats.severed_links, 2);
+        let out_str = String::from_utf8(out).unwrap();
+        assert!(!out_str.contains("\nL\t"));
+    }
 }
