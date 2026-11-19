@@ -562,7 +562,7 @@ impl FlatSeedIndex {
         keys.shrink_to_fit();
         pos.shrink_to_fit();
 
-        let (buckets, bucket_shift) = if keys.len() >= 4096 && u32::try_from(keys.len()).is_ok() {
+        let (buckets, bucket_shift) = if keys.len() >= 32_768 && u32::try_from(keys.len()).is_ok() {
             let max_key = *keys.last().unwrap_or(&0);
             let max_bits = 64 - max_key.leading_zeros();
             let shift = u8::try_from(max_bits.saturating_sub(16)).unwrap_or(0);
@@ -956,7 +956,7 @@ pub(crate) fn find_spaced_transition_hits_flat(
     min_transitions: usize,
     max_transitions: usize,
 ) -> (AnchorPairs, AnchorPairs) {
-    const CHUNK_LEN: usize = 131_072;
+    const CHUNK_LEN: usize = 32_768;
     if seq_x.len() < span {
         return (Vec::new(), Vec::new());
     }
@@ -1028,7 +1028,7 @@ pub(crate) fn find_spaced_transition_hits_flat(
         (hits_fwd, hits_rc)
     };
 
-    if n_pos < 16_384 {
+    if n_pos < 65_536 {
         return scan_range(0, n_pos);
     }
     let chunks: Vec<(usize, usize)> = (0..n_pos)
@@ -1321,5 +1321,33 @@ mod tests {
             mask[rep_end + 16..].iter().all(|&m| !m),
             "unique suffix was masked"
         );
+    }
+
+    #[test]
+    fn flat_seed_index_buckets_and_parallel_transition_hits_match_expected() {
+        // Deterministic pseudo-random 70 kb sequence (>= 32_768 keys and >= 65_536 positions).
+        let bases = *b"ACGT";
+        let mut state: u64 = 0x1234_5678_9abc_def0;
+        let mut seq = Vec::with_capacity(70_000);
+        for _ in 0..70_000 {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
+            seq.push(bases[((state >> 32) & 3) as usize]);
+        }
+
+        let idx = FlatSeedIndex::build_with_sdust(&seq, MASK_LASTZ12, 8, false, false, None)
+            .expect("build FlatSeedIndex");
+        assert!(idx.keys.len() >= 32_768);
+        assert_eq!(idx.buckets.len(), 65_537);
+        for (k_i, &k) in idx.keys.iter().enumerate().step_by(257) {
+            let got = idx.get(k);
+            assert!(got.contains(&idx.pos[k_i]));
+        }
+        assert_eq!(idx.get(u64::MAX), []);
+
+        let (hits_fwd, hits_rc) = find_lastz12_1transition_hits_flat(&seq, None, &idx, false);
+        assert!(hits_fwd.len() >= 60_000);
+        assert_eq!(hits_fwd.len(), hits_rc.len());
     }
 }

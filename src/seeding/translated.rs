@@ -308,38 +308,22 @@ pub(crate) fn append_hsp_gated_lastz12_lcbs(
     let strong_margin = (1.8 * space_bits).round() as i32;
     let mut filtered_hits: Vec<(usize, usize)> = Vec::new();
     let mut strong_hsps: Vec<Vec<(usize, usize)>> = Vec::new();
-    if hits.len() >= 2048 {
-        let evaluated: Vec<_> = hits
-            .par_iter()
-            .filter_map(|&(px, py)| {
-                let (lx, ly, rx, ry, sc) =
-                    extend_ungapped_hsp(seq_x, seq_y, px, py, min_hsp_score)?;
-                let strong = if sc >= min_hsp_score + strong_margin && rx > lx + 19 && ry > ly + 19
-                {
-                    Some(vec![(lx, ly), (rx - 19, ry - 19)])
-                } else {
-                    None
-                };
-                Some((px, py, strong))
-            })
-            .collect();
-        filtered_hits.reserve(evaluated.len());
-        for (px, py, strong) in evaluated {
-            filtered_hits.push((px, py));
-            if let Some(hsp) = strong {
-                strong_hsps.push(hsp);
-            }
-        }
+    let eval_hit = |&(px, py): &(usize, usize)| {
+        let (lx, ly, rx, ry, sc) = extend_ungapped_hsp(seq_x, seq_y, px, py, min_hsp_score)?;
+        let strong = (sc >= min_hsp_score + strong_margin && rx > lx + 19 && ry > ly + 19)
+            .then_some(((lx, ly), (rx - 19, ry - 19)));
+        Some((px, py, strong))
+    };
+    let evaluated: Vec<_> = if hits.len() >= 2048 {
+        hits.par_iter().filter_map(eval_hit).collect()
     } else {
-        for &(px, py) in hits {
-            if let Some((lx, ly, rx, ry, sc)) =
-                extend_ungapped_hsp(seq_x, seq_y, px, py, min_hsp_score)
-            {
-                filtered_hits.push((px, py));
-                if sc >= min_hsp_score + strong_margin && rx > lx + 19 && ry > ly + 19 {
-                    strong_hsps.push(vec![(lx, ly), (rx - 19, ry - 19)]);
-                }
-            }
+        hits.iter().filter_map(eval_hit).collect()
+    };
+    filtered_hits.reserve(evaluated.len());
+    for (px, py, strong) in evaluated {
+        filtered_hits.push((px, py));
+        if let Some((p0, p1)) = strong {
+            strong_hsps.push(vec![p0, p1]);
         }
     }
     let mut candidates = cluster_strand_lcbs(&filtered_hits, 1800, 200, 3, 30, 250.0);
@@ -382,7 +366,7 @@ pub(crate) fn append_nonoverlapping_lcbs(
 
 #[cfg(test)]
 mod tests {
-    use super::append_hsp_gated_aa_lcbs;
+    use super::{append_hsp_gated_aa_lcbs, append_hsp_gated_lastz12_lcbs};
     use crate::seeding::LcbList;
 
     #[test]
@@ -392,6 +376,19 @@ mod tests {
         y[9..12].copy_from_slice(b"TAA");
         let mut lcbs: LcbList = Vec::new();
         append_hsp_gated_aa_lcbs(&mut lcbs, &x, &y, &[(0, 0)], 30);
+        assert_ne!(lcbs.len(), 0);
+    }
+
+    #[test]
+    fn hsp_gated_lastz12_parallel_branch_handles_2048_plus_hits() {
+        let unit = b"ACGTTGCATGCAACTGGTCAGTCGATCGTAGCTAGCTGAT";
+        let mut seq = Vec::with_capacity(2400);
+        while seq.len() < 2400 {
+            seq.extend_from_slice(unit);
+        }
+        let hits: Vec<(usize, usize)> = (0..2200).map(|i| (i, i)).collect();
+        let mut lcbs: LcbList = Vec::new();
+        append_hsp_gated_lastz12_lcbs(&mut lcbs, &seq, &seq, &hits, 120);
         assert_ne!(lcbs.len(), 0);
     }
 }
