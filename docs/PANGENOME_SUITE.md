@@ -1,6 +1,6 @@
 # Horizon Pangenome Suite
 
-> **Implementation Status (2026-11-19):** `horizon_gfa`, `horizon_lift`, `horizon_clean`, `horizon_resolve`, `horizon_wga --graph` (seeded DAG/POA MDL DP in `src/mdl/dag.rs` with bidirected `-` GFA links), `src/gfa/mod.rs`, `src/coord.rs`, and MDL-calibrated `src/egraph.rs` (`MdlCostModel`) are implemented (`40` passing tests + `1` ignored; `4` of `9` binaries lack binary unit tests). Note that `stream_gfa` parses `S`/`L`/`P`/`W` records while skipping `C`/`J` records and defaulting empty `L` orientations to `+`.
+> **Implementation Status (2026-11-19):** `horizon_gfa`, `horizon_lift`, `horizon_clean`, `horizon_resolve`, `horizon_wga --graph` (seeded DAG/POA MDL DP in `src/mdl/dag.rs` with bidirected `-` GFA links), `src/gfa/mod.rs` (bounded `SpoolableGfaInput` stdin spooling), `src/coord.rs`, `src/seeding/flat_index.rs` (16-bit prefix-bucketed `FlatSeedIndex`), and MDL-calibrated `src/egraph.rs` (`MdlCostModel`) are implemented (**58** passing tests + `1` ignored; all `9` binaries in `src/bin/` have unit tests). Note that `stream_gfa` parses `S`/`L`/`P`/`W` records while skipping `C`/`J` records and defaulting empty `L` orientations to `+`.
 
 The `horizon` suite extends beyond pairwise whole-genome alignment (WGA) by building on our buffered GFA v1.0/v1.1 streaming reader (`src/gfa/mod.rs`, `MultiGzDecoder` + single-pass `stdin`) to provide a composable toolkit grounded in Minimum Description Length (MDL) and E-graphs.
 

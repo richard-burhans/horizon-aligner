@@ -1,14 +1,18 @@
 # horizon-aligner
 
-A whole-genome aligner and multi-species alignment toolkit written in Rust, combining **KP-14 spaced-seed indexing**, **Bayesian Online Change-Point Detection (BOCPD)** compositional segmentation, and **Minimum Description Length (MDL)** banded dynamic programming with explicit abstention (**Horizon Bubbles**).
+A pure-Rust **information-theoretic genome alignment and pangenome suite** combining **strand-symmetric spaced-seed indexing (`FlatSeedIndex`)**, **Bayesian Online Change-Point Detection (BOCPD)** compositional segmentation, **Minimum Description Length (MDL)** banded & DAG dynamic programming with explicit epistemic abstention (**Horizon Bubbles**), **MDL-calibrated e-graph paralog resolution**, and **streaming `GFA v1.0/v1.1` + pure-Rust `HAL`/HDF5** interoperability.
 
-## Key Features
+## Key Capabilities
 
-- **Strand-symmetric spaced-seed & multi-shape seeding** (`src/seeding/`): KP-14 (`11-of-15`) primary indexing with low-complexity repeat filtering, plus transition-tolerant `12-of-19` / `11-of-18`, `w=10`, 1-bit `R/Y`, and 6-frame translated `AA5` fallback seeding in unanchored gaps.
-- **BOCPD + MDL banded alignment** (`src/bocpd.rs`, `src/mdl/`): Online GC/composition segmentation coupled with log-odds Viterbi DP and X-drop flank extension. Regions whose MDL bit gain falls below the search-space-scaled threshold abstain as explicit **Horizon Bubbles** rather than emitting spurious alignments.
-- **Reference-guided multi-species merging** (`src/merge.rs`): Parallel projection and threading of pairwise MAFs onto a reference coordinate frame with net-style overlap resolution (`horizon_merge`).
-- **E-graph synteny & paralog collapse** (`src/egraph.rs`): Equality-saturation rules over signed block expressions to identify and tag tandem/inverted duplications (`EG:Z:` in GFA v1.1).
-- **Pure-Rust HDF5 / HAL inspection & decoding** (`src/hal/`): Native streaming superblock, `v1` object-header (including `0x0010` continuation messages), `TREE`/`SNOD`/`HEAP` group traversal, contiguous and zlib-deflated chunked dataset reading, and `SEQNAME_ARRAY` / `BOTTOM_ARRAY` decoding—zero `libhdf5` dependency.
+- **Pairwise & DAG/POA MDL alignment (`horizon_wga`):** Strand-symmetric `KP-14` (`11-of-15`) indexing in `FlatSeedIndex` (`12 bytes/entry` + 16-bit prefix buckets) with SDUST repeat masking, Rayon-parallel `LASTZ12`/`LASTZ11` transition seeding, `w=10`/`w=9`, 1-bit `R/Y`, and 6-frame `AA5` fallback seeding, driving flat `BandGrid` Pair-HMM forward-backward alignment (`src/mdl/dp.rs`) and seeded DAG/POA alignment (`horizon_wga --graph`, `src/mdl/dag.rs`).
+- **Calibrated epistemic abstention (Horizon Bubbles):** Intervals falling below the search-space-scaled MDL floor (`0.55 log2(N*M)` + conformal `10.0`-bit floor) or `min_post_prob` abstain explicitly as `# HB:Z:` / `HB:i:1` Horizon Bubbles rather than forcing spurious base pairs.
+- **Streaming `12 GB+` GFA pangenome toolkit (`src/gfa/mod.rs`, `src/coord.rs`):**
+  - `horizon_gfa`: Single-pass BGZF/gzip (`MultiGzDecoder`) `stats` (`99.97 s`, `97.0 MB` RSS across `81.4M` segments / `3.29 Gbp`) and two-pass chromosome `extract`.
+  - `horizon_lift`: Graph-aware BED/GFF3 coordinate liftover with `--bridge-bp` micro-bubble coalescing and UCSC reverse-strand arithmetic.
+  - `horizon_clean`: Two-pass `S`-flank-indexed BOCPD+MDL junction scoring that severs unsupported (`sup=0`) discordant links into Horizon Bubbles.
+  - `horizon_resolve`: Standalone MDL-calibrated e-graph resolution (`MdlCostModel`) over GFA `P`/`W` walks (`--collapse-dups`, `--tag-walks`).
+- **Multi-species merging & progressive guide-tree WGA (`horizon_merge`, `horizon_guide`):** `O(N log N)` coordinate sweep-line MAF/rGFA merging with best-score interval netting (`src/merge.rs`) and iterative ancestral consensus rescue.
+- **Pure-Rust HDF5 / HAL reader & writer (`src/hal/`):** Streaming `Read + Seek` HDF5 `v0`/`v1` parser (`hdf5_read.rs`) and `libhdf5`-compatible HDF5 `v0` writer (`hdf5_write.rs`) with zero `libhdf5` dependency.
 
 ## Repository Structure
 
@@ -16,33 +20,39 @@ A whole-genome aligner and multi-species alignment toolkit written in Rust, comb
 src/
 ├── lib.rs              # Public API re-exports and core unit tests
 ├── bocpd.rs            # BOCPD compositional segmentation & MDL pair scoring
-├── seeding/            # Spaced-seed indexing, transition/AA/R-Y seeding, LIS & LCB chaining
-├── mdl/                # Banded MDL+BOCPD DP, X-drop extension, contig-pair pipeline
-├── merge.rs            # Multi-species reference-guided MAF merging
+├── coord.rs            # 0-based half-open & UCSC reverse-strand coordinate arithmetic
+├── egraph.rs           # Congruence-closed e-graph & MdlCostModel paralog resolution
 ├── formats.rs          # MAF v1, GFA v1.1, FASTA I/O, and e-graph paralog formatting
-├── egraph.rs           # E-graph synteny / duplication collapse
-├── hal/                # Pure-Rust HDF5/HAL reader and HDF5 v0 writer
+├── merge.rs            # Multi-species reference-guided MAF/rGFA sweep-line merger
+├── gfa/
+│   └── mod.rs          # Streaming GFA v1.0/v1.1 reader (MultiGzDecoder + SpoolableGfaInput)
+├── seeding/
+│   ├── mod.rs          # SDUST masking, multi-shape seeding, LIS & LCB clustering
+│   ├── flat_index.rs   # Compact FlatSeedIndex with 16-bit prefix buckets
+│   └── translated.rs   # 6-frame biochemical AA5 seeding & HSP-gated LASTZ12
+├── mdl/
+│   ├── mod.rs          # Contig-pair alignment pipeline & adaptive HmmParams shrinkage
+│   ├── dp.rs           # Flat BandGrid Pair-HMM Forward-Backward & X-drop extension
+│   └── dag.rs          # Seeded topological DAG/POA MDL alignment (--graph)
+├── hal/
+│   ├── mod.rs          # In-memory HalAlignment model, paralog chaining, MAF export
+│   ├── hdf5_read.rs    # Streaming Read+Seek HDF5 v0/v1 & HAL binary array decoder
+│   └── hdf5_write.rs   # Pure-Rust HDF5 v0 writer (multi-level B-trees)
 └── bin/
-    ├── horizon_wga.rs    # Pairwise whole-genome aligner & `--hal-info` CLI
-    ├── horizon_merge.rs  # Multi-species pairwise MAF -> MAF + GFA merger
-    ├── horizon_guide.rs  # Guide-tree / central-hinge multi-species pipeline
-    ├── bench_chr1.rs     # Pairwise chromosome benchmark harness
-    └── eval_pf_pv.rs     # Pairwise MAF recall/precision evaluator
-manuscript/
-├── horizon_paper.md / .pdf          # Main manuscript
-├── horizon_companion.md / .pdf      # Mathematical & data-structure companion
-├── guide_mdl_vs_hoxd70.md / .pdf    # Guide 1: Why ΔL beats HOXD70 in AT/GC extremes
-├── guide_pure_rust_hal.md / .pdf    # Guide 2: Pure-Rust Seek HDF5/HAL reader & writer
-├── guide_horizon_bubbles.md / .pdf  # Guide 3: What is a Horizon Bubble?
-├── guide_making_alignments.md / .pdf # Guide 4: Build genome alignments with Horizon
-├── references.bib                   # BibTeX references
-├── figures/                         # Publication figures (SVG & PNG)
-└── scripts/generate_figures.py      # Reproducible figure generator
+    ├── horizon_wga.rs      # Pairwise WGA, DAG/POA (--graph), and --hal-info CLI
+    ├── horizon_merge.rs    # Multi-species pairwise MAF -> MAF + rGFA merger
+    ├── horizon_guide.rs    # Progressive guide-tree / central-hinge WGA + HAL export
+    ├── horizon_gfa.rs      # Streaming GFA stats & two-pass chromosome extract
+    ├── horizon_lift.rs     # Graph-aware BED/GFF3 coordinate liftover
+    ├── horizon_clean.rs    # BOCPD+MDL GFA junction scorer & bubble cutter
+    ├── horizon_resolve.rs  # Standalone GFA walk e-graph duplication resolver
+    ├── horizon_eval.rs     # Pairwise MAF recall/precision evaluator
+    └── bench_chr1.rs       # Pairwise chromosome benchmark harness
 ```
 
 ## Build & Test
 
-Requires Rust (`edition = "2024"`, tested with `rustc 1.100.0`):
+Requires Rust (`edition = "2024"`):
 
 ```bash
 cargo build --release --bins
@@ -58,76 +68,48 @@ HORIZON_TEST_HAL=/path/to/sars-cov-2.hal \
   cargo test real_hal_decode_from_env -- --ignored --nocapture
 ```
 
-## CLI Usage
-
-### Pairwise Alignment (`horizon_wga`)
+## CLI Quick Reference
 
 ```bash
-target/release/horizon_wga target.fa query.fa 0 \
-  --maf out.maf \
-  --gfa out.gfa \
-  --resolve-dups
+# Pairwise WGA (MAF + GFA + e-graph paralog resolution)
+target/release/horizon_wga target.fa query.fa 0 --maf out.maf --gfa out.gfa --resolve-dups
+
+# Sequence-to-graph DAG/POA alignment
+target/release/horizon_wga --graph target.gfa.gz query.fa --maf out.maf
+
+# Streaming 12 GB+ GFA stats & chromosome extraction
+target/release/horizon_gfa stats hprc-v1.0-mc-grch38.gfa.gz
+target/release/horizon_gfa extract hprc-v1.0-mc-grch38.gfa.gz --chrom GRCh38#0#chr6 --out chr6.gfa
+
+# Graph-aware BED/GFF3 liftover, junction cleaning, and e-graph walk resolution
+target/release/horizon_lift hprc.gfa.gz regions.bed --from GRCh38#0#chr22 --to CHM13#0#chr22 --bridge-bp 10
+target/release/horizon_clean --gfa in.gfa.gz --min-cp-bits 12.0 > clean.gfa
+target/release/horizon_resolve in.gfa.gz --collapse-dups --tag-walks > resolved.gfa
+
+# Multi-species sweep-line MAF/rGFA merge & progressive guide-tree WGA
+target/release/horizon_merge ref_species out.maf out.gfa pair1.maf pair2.maf
+target/release/horizon_guide --progressive --rbest --hal out.hal tree.nwk genomes.tsv
 ```
 
-Common options:
-- `max_contigs`: third positional argument (`0` = all contigs, default `1`).
-- `--top-k K` / `--rbest`: restrict contig-pair alignment to top-K (or reciprocal-best) LCB pairs.
-- `--respect-softmask`: skip lowercase softmasked bases during fallback seeding.
-- `--ry-seeds`: enable un-gated `R/Y` fallback clustering.
-- `--hal-info file.hal`: inspect an HDF5 `.hal` file's superblock and root-group genomes without FASTA inputs.
+## Performance Highlights
 
-### Multi-Species MAF Merging (`horizon_merge`)
-
-```bash
-target/release/horizon_merge <ref_species> <out.maf> <out.gfa> <pair1.maf> [pair2.maf ...]
-```
-
-## Executive Summary: Performance Highlights
-
-* **Multi-species merging (`horizon_merge`):** Fast and exact at 400+ species scale, with best-score interval netting.
-* **Close-to-medium divergence (`horizon_wga`):**
-  * UCSC 470-way primates: 82.2% recall / 88.6% precision (Marmoset).
-  * UCSC cactus447way primates: 92.5% recall / 85.7% precision (Macaque).
-  * UCSC 100-way chrM: 95.3% recall / 100.0% precision (Chimp).
-* **Distant divergence (`horizon_wga` & `horizon_guide`):**
-  * UCSC cactus447way Laurasiatheria: 47.3% recall / 64.2% precision (Horse).
-  * UCSC 100-way chrM: 79.1% recall / 94.2% precision (Mouse).
-
-
+- **Pairwise WGA benchmarks (`scripts/benchmarks/run_all_evals.py`):**
+  - `multiz100way` (`hg38` vs `panTro4` chrM): **94.4%** recall / **97.4%** precision (`0.18s`).
+  - `multiz100way` (`hg38` vs `mm10` chrM): **76.4%** recall / **93.6%** precision (`0.16s`).
+  - `cactus447way` (`hg38` vs `Macaca_mulatta`): **90.8%** recall / **86.9%** precision (`0.39s`).
+  - `multiz470way` (`hg38` vs `HLcalPym1`): **85.7%** recall / **87.7%** precision (`0.41s`).
+  - `cactus447way` (`hg38` vs `Equus_caballus`): **54.0%** recall / **72.4%** precision (`0.24s`).
+- **12 GB HPRC v1.0 Minigraph-Cactus Graph & Whole-Chromosome Scale:**
+  - Full-graph `horizon_gfa stats` (`81.4M` segments, `3.29 Gbp`, `113.0M` links): **99.97 s**, **97.0 MB** peak RSS.
+  - `horizon_lift --bridge-bp 10` (`500` `GRCh38.chr22` 1-kb windows → `CHM13.chr22`): **182.67 s**, **619.7 MB** peak RSS.
+  - `horizon_wga --resolve-dups` (`GRCh38.chr22` vs `CHM13.chr22`): **116.58 s**, **3,336.4 MB** peak RSS (`95.6%` of `CHM13.chr22` q-arm).
+  - `horizon_wga --resolve-dups` (`GRCh38.chr6` `170.8 Mbp` vs `CHM13.chr6` `110.7 Mbp`): **451.35 s** (`7m 31s`, **2.35×** faster than `1,062.45 s` baseline via 16-bit prefix-bucketed `FlatSeedIndex` + Rayon `LASTZ12` transition seeding), **10.27 GB** peak RSS.
 
 ## Documentation
 
-- [Manuscript (Markdown)](manuscript/horizon_paper.md) | [PDF](manuscript/horizon_paper.pdf)
-- [Technical Companion: Data Formats, Derivations & Worked Trace (Markdown)](manuscript/horizon_companion.md) | [PDF](manuscript/horizon_companion.pdf)
-- [Guide 1: Why Bit-Savings (ΔL) Outperforms HOXD70 in Compositionally Extreme Genomes (Markdown)](manuscript/guide_mdl_vs_hoxd70.md) | [PDF](manuscript/guide_mdl_vs_hoxd70.pdf)
-- [Guide 2: Reading and Streaming HAL Alignments in Pure Rust Without libhdf5 (Markdown)](manuscript/guide_pure_rust_hal.md) | [PDF](manuscript/guide_pure_rust_hal.pdf)
-- [Guide 3: What Is a Horizon Bubble? Calibrated Epistemic Abstention (Markdown)](manuscript/guide_horizon_bubbles.md) | [PDF](manuscript/guide_horizon_bubbles.pdf)
-
-## Architecture
-See [ARCHITECTURE.md](ARCHITECTURE.md) for a map of the core abstractions and dependency flow.
-
-
-## Manual
-For a detailed explanation of the algorithmic stages (MDL, BOCPD, multi-shape seeding) and command-line usage, see the [Comprehensive Manual](docs/manual.md).
-
-
-
-## Executive Summary: Performance Highlights
-
-* **Multi-species merging (`horizon_merge`):** Fast and exact at 400+ species scale, with best-score interval netting.
-* **Close-to-medium divergence (`horizon_wga`):**
-  * UCSC 470-way primates: 82.2% recall / 88.6% precision (Marmoset).
-  * UCSC cactus447way primates: 92.5% recall / 85.7% precision (Macaque).
-  * UCSC 100-way chrM: 95.3% recall / 100.0% precision (Chimp).
-* **Distant divergence (`horizon_wga` & `horizon_guide`):**
-  * UCSC cactus447way Laurasiatheria: 47.3% recall / 64.2% precision (Horse).
-  * UCSC 100-way chrM: 79.1% recall / 94.2% precision (Mouse).
-
-
-
-## Documentation
-
-* [Technical Manual](docs/manual.md): Comprehensive documentation covering theory, processing stages, CLI usage, and outputs.
-* [Benchmark Datasets](docs/BENCHMARK_DATASETS.md): A complete listing of the UCSC and Ensembl datasets used to evaluate aligner performance across different evolutionary divergences.
-* [Benchmark Results](docs/BENCHMARK_RESULTS.md): Zero-shot evaluation metrics on deep divergence datasets using the default Information-Theoretic MDL thresholds.
-* [Pangenome Suite Vision](docs/PANGENOME_SUITE.md): The architectural roadmap for expanding `horizon` to natively read GFA graphs and replace current large-scale genomic tooling. of the UCSC and Ensembl datasets used to evaluate aligner performance across different evolutionary divergences.
+- [Technical Manual](docs/manual.md) — Processing stages, MDL/BOCPD theory, and CLI usage for all suite binaries.
+- [Architecture Map](ARCHITECTURE.md) — Tier map, module contracts, and dependency flow.
+- [Pangenome Suite](docs/PANGENOME_SUITE.md) — Status and design of `horizon_gfa`, `horizon_lift`, `horizon_clean`, `horizon_resolve`, and `horizon_wga --graph`.
+- [Benchmark Datasets](docs/BENCHMARK_DATASETS.md) & [Benchmark Results](docs/BENCHMARK_RESULTS.md) — Full UCSC, Ensembl, and HPRC v1.0 evaluation tables.
+- [Manuscript](manuscript/horizon_paper.md) & [Technical Companion](manuscript/horizon_companion.md) — Main paper and mathematical derivations.
+- [Guides](manuscript/guide_making_alignments.md): [MDL vs HOXD70](manuscript/guide_mdl_vs_hoxd70.md) | [Pure-Rust HAL](manuscript/guide_pure_rust_hal.md) | [Horizon Bubbles](manuscript/guide_horizon_bubbles.md)

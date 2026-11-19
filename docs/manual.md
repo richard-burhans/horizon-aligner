@@ -86,6 +86,7 @@ horizon_wga <target.fa> <query.fa> [max_contigs] [OPTIONS]
 * `--maf <path>`: Write the resulting colinear alignment blocks to a MAF v1 file.
 * `--gfa <path>`: Write the resulting alignment graph, including Horizon Bubbles, to a GFA v1.1 file.
 * `--hal-info <path>`: Decode an HDF5-encoded HAL file directly.
+* `--graph <target.gfa[.gz]>`: Align `query.fa` against a GFA pangenome graph using seeded topological DAG/POA MDL dynamic programming (`src/mdl/dag.rs`).
 * `--top-k <K>`: Retain only the highest scoring $K$ alignments per query contig.
 * `--rbest`: Syntactic sugar for `--top-k 1` (Reciprocal Best Hit).
 * `--resolve-dups`: Enable the E-Graph structural paralog resolver.
@@ -107,6 +108,42 @@ Orchestrates a progressive alignment across a guide tree using Nyström low-rank
 
 ```bash
 horizon_guide [--progressive] [--respect-softmask] [--hal] [--rbest | --top-k K | --all-pairs] <out_prefix> <max_contigs> <sp1=fa1> <sp2=fa2>...
+```
+
+### `horizon_gfa`
+Streams plain, BGZF/gzipped (`.gfa.gz`), or `stdin` (`-`) GFA v1.0/v1.1 graphs for `O(1)`-memory structural `stats` or two-pass chromosome subgraph `extract`.
+
+```bash
+horizon_gfa stats <in.gfa[.gz]>
+horizon_gfa extract <in.gfa[.gz]> --chrom <prefix> [--chrom <prefix2>] --out <out.gfa>
+```
+
+### `horizon_lift`
+Lifts BED or GFF3 coordinates between haplotypes in a GFA pangenome graph using two-pass `P`/`W` streaming, `--bridge-bp` micro-bubble coalescing, and UCSC reverse-strand arithmetic.
+
+```bash
+horizon_lift <in.gfa[.gz]> <intervals.bed|gff3> --from <src_prefix> --to <tgt_prefix> [--bridge-bp 10] [--min-frac 0.5] [--unmapped]
+```
+
+### `horizon_clean`
+Scores candidate GFA `L`-line junctions with `bocpd_gc_profile` and MDL two-regime changepoint bit gain (`--min-cp-bits`), severing unsupported (`walk_support == 0`) discordant edges into `HB:i:1` Horizon Bubbles.
+
+```bash
+horizon_clean --gfa <in.gfa[.gz]|-> [--flank 128] [--min-cp-bits 12.0] > clean.gfa
+```
+
+### `horizon_resolve`
+Runs standalone MDL-calibrated e-graph resolution (`MdlCostModel`) over GFA `P`/`W` walks to cancel double inversions and collapse adjacent tandem duplications.
+
+```bash
+horizon_resolve <in.gfa[.gz]|-> [--max-bubble-steps 64] [--collapse-dups] [--tag-walks] > resolved.gfa
+```
+
+### `horizon_eval`
+Evaluates pairwise alignment recall and precision against a reference MAF file.
+
+```bash
+horizon_eval <ref_name> <tgt_name> <ref.fa> <tgt.fa> <truth.maf> [extra_horizon_wga_flags...]
 ```
 
 ---
@@ -173,5 +210,5 @@ S hg38__mm10__blk_0 * LN:i:50 XS:i:100 YS:i:200 ST:Z:-
 ### Coordinate Arithmetic (`coord.rs`)
 Coordinate boundaries can easily drift by off-by-one errors during strand inversion. `horizon-aligner` handles all UCSC-style coordinate translation explicitly inside the `coord::Interval` struct, ensuring that span sizes and endpoints remain invariant when mapped to the complementary sequence.
 
-### HDF5 HAL Parsing (`hal/mod.rs`)
-While MAF and GFA are the primary emission targets, `horizon_wga` natively decodes Hierarchical Alignment (HAL) graphs stored in HDF5 (`v0` or `v1`). The `read_hdf5_superblock` and zlib chunk decoders allow extracting sequence arrays (`DNA_ARRAY`) without loading the entire graph into memory, enabling highly scalable pangenome traversal.
+### HDF5 HAL Parsing & Writing (`hal/`)
+While MAF and GFA are the primary emission targets, `horizon` natively decodes and writes Hierarchical Alignment (HAL) graphs stored in HDF5 (`v0` or `v1` reading in `src/hal/hdf5_read.rs`; `libhdf5`-compatible `v0` writing with multi-level B-trees in `src/hal/hdf5_write.rs`). Streaming `Read + Seek` superblock, object-header, and zlib chunk decoders extract sequence and alignment arrays (`DNA_ARRAY`, `TOP_ARRAY`, `BOTTOM_ARRAY`) without loading the entire archive into memory.
