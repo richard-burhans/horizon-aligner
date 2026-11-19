@@ -29,3 +29,19 @@ Rather than building a monolithic "run-all" executable, the target architecture 
 ### D. Target Graph Tooling Gaps First
 **Risk:** Competing head-on against `lastz` or `minimap2` on routine pairwise alignment offers limited differentiation.
 **Mitigation:** Focus our next implementation and benchmarking milestones on pangenome graph tooling (`horizon_clean` real-data severing, `horizon_resolve` `L`-link rewriting, `horizon_lift` truth baselines, and completed full-chromosome HPRC `GRCh38` vs. `CHM13` evaluation), where MDL abstention and bounded structural resolution address concrete pain points in complex loci.
+
+## 4. Literature Audit & Next Speedups (from 14 Corpus Papers)
+
+Cross-checking `horizon-aligner` against the 14 newly processed papers in the library (`rissanen_1978`, `schwarz_1978`, `grunwald_2007`, `durbin_1998`, `ma_2002`, `morgulis_2006`, `paten_2018`, `sena_2026`, `guarracino_2022`, `heumos_2024`, `lee_2002`, `gao_2021`, `jiang_2008`, `miller_2020`) surfaced concrete fixes and next-tier speedups:
+
+### Applied Immediately
+1. **$O(H \log |\text{active}|)$ LCB Chaining (`src/seeding/mod.rs`):** Replaced the $O(H \cdot |\text{active}|)$ linear scan in `cluster_strand_lcbs` with `BTreeSet` indices on `(lx, id)` (expiration) and `(ly, id)` (local `y`-window lookup), cutting `20 Mbp chr6 q-arm` runtime from `47.51s` to `38.23s` (`seed_end=0.00s`) with bit-for-bit identical outputs.
+2. **Principled `N`-Base Emissions & Tail-Preserving BOCPD (`src/bocpd.rs`):** `joint_pair_bits` now returns `0.0` bits (uninformative `P_joint = P_null`) for ambiguous/`N` bases instead of `-2.0` bits, and `bocpd_gc_profile` folds `max_run` overflow probability into the oldest bin rather than dropping mass.
+3. **Optimal Non-Periodic Weight-11 Seed (`src/seeding/mod.rs`):** Exported `MASK_PH11_18` (`111010010100110111`, Ma et al. 2002) alongside `MASK_PRIMARY_11_15` (which is period-3).
+
+### Next-Tier Speedups & Architectural Refactors
+1. **Adaptive Banded + SIMD DAG DP (`src/mdl/dag.rs`, Gao et al. 2021 `abPOA`):** Replace the 9 dense `f64` matrices (`72 B/cell`, unbanded) with per-node adaptive banding + SIMD `f32`/`i16` DP (10–50× speedup, >10× RAM cut) and replace all-reachable seeding in `align_seq_to_dag_seeded` with DAG anchor chaining.
+2. **ODGI-Style `u32` Interned `PackedGraph` + Jaccard Liftover (`src/gfa/mod.rs`, `horizon_lift.rs`, Guarracino et al. 2022; Heumos et al. 2024):** Intern segment names once into dense `u32` IDs with CSR adjacency and zero-copy GFA streaming (`GfaRecordRef<'_>`), add `k`-step multiset Jaccard tie-breaking in `horizon_lift`, and sort nodes via 1D PG-SGD / path order.
+3. **Linear-Time Snarl / Ultrabubble Decomposition (`horizon_resolve.rs`, Paten et al. 2018; Sena et al. 2026):** Replace 16-step 1D walk windowing with $O(|V| + |E|)$ biedged SPQR-tree / cactus decomposition, normalize `seq` chains to avoid associativity blowup in `saturate_synteny`, and compute per-bubble divergence instead of a global `--divergence` flag.
+4. **SDUST Pre-Masking + PH2 Double-Hit Gating + `FlatSeedIndex` Fallbacks (`src/seeding/mod.rs`, `src/mdl/mod.rs`, Morgulis et al. 2006; Ma et al. 2002):** Precompute one $O(N)$ SDUST triplet mask per contig (catching di/trinucleotide repeats missed by 1-mer `is_low_complexity_window`), require two-hit diagonal gating before HSP extension in fallback seeders, and move `LASTZ12`/`LASTZ11` from `HashMap`s to `FlatSeedIndex`.
+5. **Pure Forward-Backward MEA Decoding (`src/mdl/dp.rs`, Durbin et al. 1998 Ch. 4):** Replace the Viterbi + posterior-filter hybrid in `banded_mdl_gap_with_params` with Maximum Expected Accuracy (MEA) decoding over `exp(fm + bm - z_fwd)`, eliminating the 3 Viterbi `BandGrid`s (~30% DP memory savings) and Viterbi gap-misplacement artifacts.

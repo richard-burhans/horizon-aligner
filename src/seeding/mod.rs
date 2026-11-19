@@ -6,6 +6,8 @@ use std::collections::HashMap;
 
 /// KP-14 spaced seed mask (weight 11, span 15).
 pub const MASK_PRIMARY_11_15: &str = "111011011011011";
+/// Optimal non-periodic weight-11 `PatternHunter` spaced seed (Ma et al., 2002).
+pub const MASK_PH11_18: &str = "111010010100110111";
 /// Secondary `w=10` spaced seed mask for divergent intra-LCB chaining.
 pub const MASK_W10: &str = "11011011011011";
 /// Local `w=9` spaced seed mask for intra-gap anchor seeding.
@@ -175,6 +177,10 @@ pub fn lis_chain(anchors: &[(usize, usize)]) -> Vec<(usize, usize)> {
 }
 
 /// Cluster `(x, y)` hits on one strand into colinear LCB chains.
+///
+/// Uses `BTreeSet` indices on `(lx, id)` for `max_gap` expiration and `(ly, id)`
+/// for $O(\log |\text{active}|)$ local `y`-window range queries instead of
+/// scanning all active chains across the chromosome.
 #[must_use]
 pub fn cluster_strand_lcbs(
     hits: &[(usize, usize)],
@@ -184,6 +190,8 @@ pub fn cluster_strand_lcbs(
     min_span_bp: usize,
     max_mean_step: f64,
 ) -> Vec<Vec<(usize, usize)>> {
+    use std::collections::BTreeSet;
+
     if hits.is_empty() {
         return Vec::new();
     }
@@ -197,23 +205,32 @@ pub fn cluster_strand_lcbs(
         ch.len() >= min_anchors && span_x >= min_span_bp && mean_step <= max_mean_step
     };
 
-    let mut active: Vec<Vec<(usize, usize)>> = Vec::new();
+    let mut chains: Vec<Vec<(usize, usize)>> = Vec::new();
+    let mut tails: Vec<(usize, usize)> = Vec::new();
+    let mut by_x: BTreeSet<(usize, usize)> = BTreeSet::new();
+    let mut by_y: BTreeSet<(usize, usize)> = BTreeSet::new();
     let mut finished: Vec<Vec<(usize, usize)>> = Vec::new();
 
     for &(x, y) in &sorted {
-        let mut best_idx: Option<usize> = None;
-        let mut best_cost = usize::MAX;
-        let mut still_active: Vec<Vec<(usize, usize)>> = Vec::with_capacity(active.len());
-
-        for ch in active {
-            let (lx, ly) = ch[ch.len() - 1];
-            if x.saturating_sub(lx) > max_gap {
-                if keep(&ch) {
-                    finished.push(ch);
-                }
-                continue;
+        let x_floor = x.saturating_sub(max_gap);
+        while let Some(&(lx, id)) = by_x.first() {
+            if lx >= x_floor {
+                break;
             }
-            still_active.push(ch);
+            by_x.remove(&(lx, id));
+            let (_, ly) = tails[id];
+            by_y.remove(&(ly, id));
+            let ch = std::mem::take(&mut chains[id]);
+            if keep(&ch) {
+                finished.push(ch);
+            }
+        }
+
+        let y_floor = y.saturating_sub(max_gap);
+        let mut best_id: Option<usize> = None;
+        let mut best_cost = usize::MAX;
+        for &(_, id) in by_y.range((y_floor, 0)..(y, 0)) {
+            let (lx, ly) = tails[id];
             if x > lx && y > ly {
                 let dx = x - lx;
                 let dy = y - ly;
@@ -222,20 +239,31 @@ pub fn cluster_strand_lcbs(
                     let cost = drift + dx;
                     if cost < best_cost {
                         best_cost = cost;
-                        best_idx = Some(still_active.len() - 1);
+                        best_id = Some(id);
                     }
                 }
             }
         }
-        active = still_active;
-        if let Some(idx) = best_idx {
-            active[idx].push((x, y));
+
+        if let Some(id) = best_id {
+            let (prev_x, prev_y) = tails[id];
+            by_x.remove(&(prev_x, id));
+            by_y.remove(&(prev_y, id));
+            chains[id].push((x, y));
+            tails[id] = (x, y);
+            by_x.insert((x, id));
+            by_y.insert((y, id));
         } else {
-            active.push(vec![(x, y)]);
+            let id = chains.len();
+            chains.push(vec![(x, y)]);
+            tails.push((x, y));
+            by_x.insert((x, id));
+            by_y.insert((y, id));
         }
     }
 
-    for ch in active {
+    for (_, id) in by_x {
+        let ch = std::mem::take(&mut chains[id]);
         if keep(&ch) {
             finished.push(ch);
         }

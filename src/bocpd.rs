@@ -27,7 +27,7 @@ pub(crate) fn base_probs(gc: f64) -> [f64; 4] {
 #[inline]
 pub(crate) fn joint_pair_bits(a: u8, b: u8, pi_x: [f64; 4], pi_y: [f64; 4], identity: f64) -> f64 {
     let (Some(ia), Some(ib)) = (base_to_idx(a), base_to_idx(b)) else {
-        return -2.0;
+        return 0.0;
     };
     let pa = pi_x[ia];
     let pb = pi_y[ib];
@@ -101,6 +101,9 @@ pub fn bocpd_gc_profile(seq: &[u8], hazard: f64, max_run: usize) -> Vec<f64> {
                 next_probs.push(joint * (1.0 - hazard));
                 next_alphas.push(a + if is_gc { 1.0 } else { 0.0 });
                 next_betas.push(bt + if is_gc { 0.0 } else { 1.0 });
+            } else if let Some(last_p) = next_probs.last_mut() {
+                // Fold tail run-length probability into the oldest retained bin instead of dropping mass.
+                *last_p += joint * (1.0 - hazard);
             }
         }
         next_probs[0] = cp_mass;
