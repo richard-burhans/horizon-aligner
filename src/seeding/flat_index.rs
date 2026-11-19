@@ -68,8 +68,12 @@ impl FlatSeedIndex {
             ));
         }
 
-        if let Some(m) = sdust {
-            debug_assert!(m.len() >= seq.len(), "sdust mask shorter than sequence");
+        if let Some(m) = sdust
+            && m.len() < seq.len()
+        {
+            return Err(AlignError::InvalidMask(
+                "sdust mask shorter than sequence".to_owned(),
+            ));
         }
         let rev_offsets: Vec<usize> = offsets.iter().map(|&o| span - 1 - o).collect();
         let mut pairs: Vec<(u64, u32)> = Vec::with_capacity((seq.len() - span + 1).min(1 << 24));

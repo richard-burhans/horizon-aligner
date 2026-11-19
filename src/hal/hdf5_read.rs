@@ -693,16 +693,18 @@ fn walk_chunk_btree_v1_seek<R: std::io::Read + std::io::Seek>(
     )?;
     for i in 0..n_entries {
         let key_off = i * rec_bytes;
-        let Some(sz_bytes) = body.get(key_off..key_off + 4) else {
+        let Some(sz_bytes) = body.get(key_off..key_off + 8) else {
             break;
         };
         let chunk_size = u32::from_le_bytes([sz_bytes[0], sz_bytes[1], sz_bytes[2], sz_bytes[3]]);
+        let filter_mask = u32::from_le_bytes([sz_bytes[4], sz_bytes[5], sz_bytes[6], sz_bytes[7]]);
         let Some(child_addr) = read_u64_le(&body, key_off + key_bytes) else {
             break;
         };
         if node_level == 0 {
             out.push(Hdf5Chunk {
                 size: chunk_size,
+                filter_mask,
                 addr: child_addr,
             });
         } else {
@@ -780,6 +782,9 @@ pub fn read_hdf5_v0_dataset_bytes_seek<R: std::io::Read + std::io::Seek>(
     };
 
     if let Some((addr, size)) = contig {
+        if size == 0 {
+            return Ok(Some(Vec::new()));
+        }
         if u64::try_from(size).unwrap_or(u64::MAX) > MAX_CHUNK_DECOMPRESSED_BYTES {
             return Ok(None);
         }
@@ -800,7 +805,7 @@ pub fn read_hdf5_v0_dataset_bytes_seek<R: std::io::Read + std::io::Seek>(
             return Ok(None);
         }
         let raw_chunk = read_at(r, ch.addr, len)?;
-        if deflated {
+        if deflated && (ch.filter_mask & 1 == 0) {
             use std::io::Read as _;
             let rem = MAX_CHUNK_DECOMPRESSED_BYTES
                 .saturating_sub(u64::try_from(out.len()).unwrap_or(u64::MAX));
@@ -844,7 +849,7 @@ pub fn inspect_hal_genomes(path: &std::path::Path) -> std::io::Result<Option<Hal
 /// Read contiguous dataset bytes from an HDF5 v1 object header (`DataLayout` `0x0008`, class `1`).
 #[must_use]
 pub fn read_hdf5_v0_contiguous_data(bytes: &[u8], obj_addr: usize) -> Option<&[u8]> {
-    let mut result = None;
+    let mut result: Option<&[u8]> = None;
     iter_v1_header_messages(bytes, obj_addr, |mtype, body| {
         if mtype == 0x0008
             && body.len() >= 18
@@ -852,12 +857,18 @@ pub fn read_hdf5_v0_contiguous_data(bytes: &[u8], obj_addr: usize) -> Option<&[u
             && body[1] == 1
             && let Some(addr_u64) = read_u64_le(body, 2)
             && let Some(size_u64) = read_u64_le(body, 10)
-            && let (Ok(data_addr), Ok(data_size)) =
-                (usize::try_from(addr_u64), usize::try_from(size_u64))
-            && let Some(data_end) = data_addr.checked_add(data_size)
+            && let Ok(data_size) = usize::try_from(size_u64)
         {
-            result = bytes.get(data_addr..data_end);
-            return std::ops::ControlFlow::Break(());
+            if data_size == 0 {
+                result = Some(&[]);
+                return std::ops::ControlFlow::Break(());
+            }
+            if let Ok(data_addr) = usize::try_from(addr_u64)
+                && let Some(data_end) = data_addr.checked_add(data_size)
+            {
+                result = bytes.get(data_addr..data_end);
+                return std::ops::ControlFlow::Break(());
+            }
         }
         std::ops::ControlFlow::Continue(())
     })?;
@@ -869,6 +880,8 @@ pub fn read_hdf5_v0_contiguous_data(bytes: &[u8], obj_addr: usize) -> Option<&[u
 pub struct Hdf5Chunk {
     /// Compressed/stored byte length of the chunk in the file.
     pub size: u32,
+    /// HDF5 filter-mask bits (bit 0 = deflate filter skipped for this chunk).
+    pub filter_mask: u32,
     /// File byte offset of the chunk payload.
     pub addr: u64,
 }
@@ -909,19 +922,21 @@ fn walk_chunk_btree_v1(
         else {
             break;
         };
-        let Some(sz_end) = key_off.checked_add(4) else {
+        let Some(sz_end) = key_off.checked_add(8) else {
             break;
         };
         let Some(sz_bytes) = bytes.get(key_off..sz_end) else {
             break;
         };
         let chunk_size = u32::from_le_bytes([sz_bytes[0], sz_bytes[1], sz_bytes[2], sz_bytes[3]]);
+        let filter_mask = u32::from_le_bytes([sz_bytes[4], sz_bytes[5], sz_bytes[6], sz_bytes[7]]);
         let Some(child_addr) = read_u64_le(bytes, key_off + key_bytes) else {
             break;
         };
         if node_level == 0 {
             out.push(Hdf5Chunk {
                 size: chunk_size,
+                filter_mask,
                 addr: child_addr,
             });
         } else if let Ok(sub) = usize::try_from(child_addr) {
@@ -1037,7 +1052,7 @@ pub fn read_hdf5_v0_dataset_bytes(bytes: &[u8], obj_addr: usize) -> Option<Vec<u
         let len = usize::try_from(ch.size).ok()?;
         let end = start.checked_add(len)?;
         let raw_chunk = bytes.get(start..end)?;
-        if deflated {
+        if deflated && (ch.filter_mask & 1 == 0) {
             use std::io::Read as _;
             let rem = MAX_CHUNK_DECOMPRESSED_BYTES
                 .saturating_sub(u64::try_from(out.len()).unwrap_or(u64::MAX));

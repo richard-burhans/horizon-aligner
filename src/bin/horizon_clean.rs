@@ -151,17 +151,25 @@ fn clean_gfa<W: Write>(gfa_path: &str, cfg: &CleanConfig, out: &mut W) -> Result
     stream_gfa(
         gfa_path,
         |s| {
-            let len = if s.sequence == b"*" {
-                0
+            let (len, has_seq) = if s.sequence == b"*" {
+                let ln = s
+                    .tags
+                    .iter()
+                    .find_map(|t| {
+                        t.strip_prefix("LN:i:")
+                            .and_then(|v| v.parse::<usize>().ok())
+                    })
+                    .unwrap_or(0);
+                (ln, false)
             } else {
-                s.sequence.len()
+                (s.sequence.len(), true)
             };
-            let prefix = if len > 0 {
+            let prefix = if has_seq && len > 0 {
                 s.sequence[..len.min(cfg.flank_bp)].to_vec()
             } else {
                 Vec::new()
             };
-            let suffix = if len > 0 {
+            let suffix = if has_seq && len > 0 {
                 s.sequence[len.saturating_sub(cfg.flank_bp)..].to_vec()
             } else {
                 Vec::new()
@@ -346,16 +354,27 @@ fn clean_gfa<W: Write>(gfa_path: &str, cfg: &CleanConfig, out: &mut W) -> Result
                 )?;
             } else {
                 split_walks.set(split_walks.get() + 1);
+                let orig_ovs: Vec<&str> = if p.overlaps == "*" || p.overlaps.is_empty() {
+                    Vec::new()
+                } else {
+                    p.overlaps.split(',').collect()
+                };
+                let mut cur_start = 0usize;
                 for (ci, chunk) in chunks.iter().enumerate() {
                     let segs: Vec<String> = chunk
                         .iter()
                         .map(|(s, fwd)| format!("{s}{}", if *fwd { '+' } else { '-' }))
                         .collect();
                     let ovs = if chunk.len() > 1 {
-                        vec!["0M"; chunk.len() - 1].join(",")
+                        if orig_ovs.len() >= cur_start + chunk.len() - 1 {
+                            orig_ovs[cur_start..cur_start + chunk.len() - 1].join(",")
+                        } else {
+                            vec!["0M"; chunk.len() - 1].join(",")
+                        }
                     } else {
                         "*".to_string()
                     };
+                    cur_start += chunk.len();
                     writeln!(
                         out_cell.borrow_mut(),
                         "P\t{}_part{}\t{}\t{}",

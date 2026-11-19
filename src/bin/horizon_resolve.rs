@@ -216,15 +216,17 @@ fn resolve_window(
         );
     };
 
-    let (dups, invs_after) = count_ops(&expr);
-    let invs_before = steps.iter().filter(|&&(_, f)| !f).count();
-    if invs_before > invs_after {
-        stats.invs_cancelled += invs_before - invs_after;
-    }
+    let (dups, _) = count_ops(&expr);
     stats.dups_detected += dups;
 
     let mut resolved = Vec::with_capacity(steps.len());
     flatten_expr(&expr, false, collapse_dups, &mut resolved);
+
+    let invs_before = steps.iter().filter(|&&(_, f)| !f).count();
+    let invs_after_flat = resolved.iter().filter(|(_, f)| !*f).count();
+    if invs_before > invs_after_flat {
+        stats.invs_cancelled += invs_before - invs_after_flat;
+    }
 
     let changed = resolved.len() != steps.len()
         || resolved
@@ -232,7 +234,7 @@ fn resolve_window(
             .zip(steps.iter())
             .any(|((a, fa), &(b, fb))| a != b || *fa != fb);
 
-    if changed || dups > 0 {
+    if changed {
         stats.windows_simplified += 1;
         if collapse_dups && resolved.len() < steps.len() {
             stats.dups_collapsed += dups;
@@ -297,7 +299,13 @@ fn pass1_index(
         gfa_path,
         |s| {
             let len = if s.sequence == b"*" {
-                0
+                s.tags
+                    .iter()
+                    .find_map(|t| {
+                        t.strip_prefix("LN:i:")
+                            .and_then(|v| v.parse::<usize>().ok())
+                    })
+                    .unwrap_or(0)
             } else {
                 s.sequence.len()
             };
@@ -405,7 +413,12 @@ fn pass2_rewrite<W: Write>(
                     seg_str.push_str(s);
                     seg_str.push(if *fwd { '+' } else { '-' });
                 }
-                let overlaps = if resolved.len() == steps.len() {
+                let same_steps = resolved.len() == steps.len()
+                    && resolved
+                        .iter()
+                        .zip(steps.iter())
+                        .all(|((a, fa), &(b, fb))| a == b && *fa == fb);
+                let overlaps = if same_steps {
                     cols[3].to_string()
                 } else {
                     "*".to_string()
@@ -453,8 +466,13 @@ fn pass2_rewrite<W: Write>(
                         resolved_bp += slen;
                     }
                 }
+                let same_steps = resolved.len() == steps.len()
+                    && resolved
+                        .iter()
+                        .zip(steps.iter())
+                        .all(|((a, fa), &(b, fb))| a == b && *fa == fb);
                 let start_pos: usize = cols[4].parse().unwrap_or(0);
-                let end_str = if resolved.len() != steps.len() && all_known && resolved_bp > 0 {
+                let end_str = if !same_steps && all_known && resolved_bp > 0 {
                     (start_pos + resolved_bp).to_string()
                 } else {
                     cols[5].to_string()
@@ -546,13 +564,14 @@ fn main() -> Result<()> {
             BufWriter::new(File::create(out_p).with_context(|| format!("creating {out_p}"))?);
         pass2_rewrite(effective_gfa, &mut writer, &seg_lens, &anchors, &cli)?
     } else {
-        let mut sink = io::sink();
-        pass2_rewrite(effective_gfa, &mut sink, &seg_lens, &anchors, &cli)?
+        let stdout = io::stdout();
+        let mut writer = BufWriter::new(stdout.lock());
+        pass2_rewrite(effective_gfa, &mut writer, &seg_lens, &anchors, &cli)?
     };
 
     #[allow(clippy::cast_precision_loss)]
     let hwm_mb = read_vm_hwm_kb().map_or(0.0, |kb| kb as f64 / 1024.0);
-    println!(
+    eprintln!(
         "segments={} anchors={} paths={} walks={} windows={} simplified={} dups_detected={} dups_collapsed={} invs_cancelled={} mdl_bits_saved={:.1} elapsed_s={:.3} peak_rss_mb={:.1}",
         seg_lens.len(),
         anchors.len(),

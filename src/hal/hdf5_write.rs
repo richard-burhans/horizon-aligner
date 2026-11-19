@@ -64,7 +64,8 @@ fn encode_hal_top_array(tops: &[HalTopSegment]) -> Vec<u8> {
         let paralogy = t
             .next_paralog
             .map_or(-1i64, |v| i64::try_from(v).unwrap_or(-1));
-        out.extend_from_slice(&0i64.to_le_bytes()); // genome_idx
+        let start = i64::try_from(t.start).unwrap_or(0);
+        out.extend_from_slice(&start.to_le_bytes()); // start coordinate in child genome
         out.extend_from_slice(&(-1i64).to_le_bytes()); // bottom_idx
         out.extend_from_slice(&paralogy.to_le_bytes());
         out.extend_from_slice(&parent.to_le_bytes());

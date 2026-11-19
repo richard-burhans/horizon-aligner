@@ -269,12 +269,24 @@ where
             }
             "W" => {
                 // W sample hap seq_id start end walk
+                let parse_coord =
+                    |tok: Option<&str>, field: &str| -> Result<usize, std::io::Error> {
+                        match tok {
+                            Some("*") | None => Ok(0),
+                            Some(s) => s.parse::<usize>().map_err(|_| {
+                                std::io::Error::new(
+                                    std::io::ErrorKind::InvalidData,
+                                    format!("invalid GFA walk {field} coordinate: `{s}`"),
+                                )
+                            }),
+                        }
+                    };
                 on_walk(GfaWalk {
                     sample: parts.next().unwrap_or("").to_string(),
                     haplotype: parts.next().unwrap_or("").to_string(),
                     seq_id: parts.next().unwrap_or("").to_string(),
-                    start: parts.next().unwrap_or("0").parse().unwrap_or(0),
-                    end: parts.next().unwrap_or("0").parse().unwrap_or(0),
+                    start: parse_coord(parts.next(), "start")?,
+                    end: parse_coord(parts.next(), "end")?,
                     walk: parts.next().unwrap_or("").to_string(),
                 })?;
             }

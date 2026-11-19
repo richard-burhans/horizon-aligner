@@ -115,20 +115,31 @@ struct ExtractSpec {
 type MatchedPath = (usize, String, Vec<(String, bool)>);
 
 #[allow(clippy::too_many_lines)]
+fn matches_sample_prefix(name: &str, prefix: &str) -> bool {
+    name == prefix
+        || name
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with('.') || rest.starts_with('#'))
+}
+
+#[allow(clippy::too_many_lines)]
 fn cmd_extract(gfa_path: &str, specs: &[ExtractSpec], max_bp: Option<usize>) -> Result<()> {
     let t0 = Instant::now();
+    let spooled = horizon_aligner::gfa::SpoolableGfaInput::new(gfa_path)?;
+    let eff_path = spooled.path();
     // Pass 1: find matching paths (P) or walks (W) and collect only the needed segment IDs.
     let mut matched_p: Vec<MatchedPath> = Vec::new();
     let mut matched_w: Vec<MatchedPath> = Vec::new();
 
     stream_gfa(
-        gfa_path,
+        eff_path,
         |_| Ok(()),
         |_| Ok(()),
         |p| {
             if let Some(idx) = specs.iter().position(|spec| {
                 p.name == format!("{}.{}", spec.sample_prefix, spec.seq_id)
-                    || (p.name.starts_with(&spec.sample_prefix) && p.name.ends_with(&spec.seq_id))
+                    || (matches_sample_prefix(&p.name, &spec.sample_prefix)
+                        && p.name.ends_with(&spec.seq_id))
             }) {
                 let steps: Vec<(String, bool)> = parse_path_steps(&p.segment_names)
                     .into_iter()
@@ -140,7 +151,7 @@ fn cmd_extract(gfa_path: &str, specs: &[ExtractSpec], max_bp: Option<usize>) -> 
         },
         |w| {
             if let Some(idx) = specs.iter().position(|spec| {
-                w.sample.starts_with(&spec.sample_prefix) && w.seq_id == spec.seq_id
+                matches_sample_prefix(&w.sample, &spec.sample_prefix) && w.seq_id == spec.seq_id
             }) {
                 let steps: Vec<(String, bool)> = parse_walk_steps(&w.walk)
                     .into_iter()
@@ -169,7 +180,7 @@ fn cmd_extract(gfa_path: &str, specs: &[ExtractSpec], max_bp: Option<usize>) -> 
     // Pass 2: stream S lines and store only the segments referenced by matched paths/walks.
     let mut seg_map: HashMap<String, Vec<u8>> = HashMap::with_capacity(needed_segs.len());
     stream_gfa(
-        gfa_path,
+        eff_path,
         |s| {
             if needed_segs.contains(&s.name) {
                 seg_map.insert(s.name, s.sequence);

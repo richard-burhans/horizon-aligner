@@ -54,6 +54,7 @@ struct LiftedPiece {
     strand: char,
     src_start: usize,
     src_end: usize,
+    mapped_bp: usize,
     duplicated: bool,
 }
 
@@ -310,6 +311,7 @@ fn lift_feature(
             strand: out_strand,
             src_start: ov_s,
             src_end: ov_e,
+            mapped_bp: ov_e - ov_s,
             duplicated,
         };
         last_target = Some((piece.chrom.clone(), piece.start, piece.end, piece.strand));
@@ -327,6 +329,7 @@ fn lift_feature(
             {
                 prev.end = piece.end;
                 prev.src_end = piece.src_end;
+                prev.mapped_bp += piece.mapped_bp;
                 prev.duplicated |= piece.duplicated;
                 continue;
             }
@@ -339,6 +342,7 @@ fn lift_feature(
             {
                 prev.start = piece.start;
                 prev.src_end = piece.src_end;
+                prev.mapped_bp += piece.mapped_bp;
                 prev.duplicated |= piece.duplicated;
                 continue;
             }
@@ -401,21 +405,16 @@ fn run_lift<W1: Write, W2: Write>(
             }
             if matches_sample(&p.name, cfg.to_sample) {
                 let short = strip_sample_prefix(&p.name, cfg.to_sample).to_string();
-                if wanted_chroms.is_empty()
-                    || wanted_chroms.contains(&p.name)
-                    || wanted_chroms.contains(&short)
-                {
-                    let steps = parse_path_steps(&p.segment_names)
-                        .into_iter()
-                        .map(|(s, fwd)| (s.to_string(), fwd))
-                        .collect();
-                    target_paths.borrow_mut().push(PathRecord {
-                        display_chrom: p.name.clone(),
-                        match_keys: vec![p.name, short],
-                        start_offset: 0,
-                        steps,
-                    });
-                }
+                let steps = parse_path_steps(&p.segment_names)
+                    .into_iter()
+                    .map(|(s, fwd)| (s.to_string(), fwd))
+                    .collect();
+                target_paths.borrow_mut().push(PathRecord {
+                    display_chrom: p.name.clone(),
+                    match_keys: vec![p.name, short],
+                    start_offset: 0,
+                    steps,
+                });
             }
             Ok(())
         },
@@ -439,22 +438,21 @@ fn run_lift<W1: Write, W2: Write>(
                 }
             }
             if matches_sample(&w.sample, cfg.to_sample) {
-                let full = format!("{}.{}", w.sample, w.seq_id);
-                if wanted_chroms.is_empty()
-                    || wanted_chroms.contains(&w.seq_id)
-                    || wanted_chroms.contains(&full)
-                {
-                    let steps = parse_walk_steps(&w.walk)
-                        .into_iter()
-                        .map(|(s, fwd)| (s.to_string(), fwd))
-                        .collect();
-                    target_paths.borrow_mut().push(PathRecord {
-                        display_chrom: full.clone(),
-                        match_keys: vec![w.seq_id, full],
-                        start_offset: w.start,
-                        steps,
-                    });
-                }
+                let disp = if w.haplotype == "0" || w.haplotype.is_empty() {
+                    format!("{}.{}", w.sample, w.seq_id)
+                } else {
+                    format!("{}#{}.{}", w.sample, w.haplotype, w.seq_id)
+                };
+                let steps = parse_walk_steps(&w.walk)
+                    .into_iter()
+                    .map(|(s, fwd)| (s.to_string(), fwd))
+                    .collect();
+                target_paths.borrow_mut().push(PathRecord {
+                    display_chrom: disp.clone(),
+                    match_keys: vec![w.seq_id, disp],
+                    start_offset: w.start,
+                    steps,
+                });
             }
             Ok(())
         },
@@ -484,7 +482,13 @@ fn run_lift<W1: Write, W2: Write>(
         |s| {
             if needed_segs.contains(&s.name) {
                 let len = if s.sequence == b"*" {
-                    0
+                    s.tags
+                        .iter()
+                        .find_map(|t| {
+                            t.strip_prefix("LN:i:")
+                                .and_then(|v| v.parse::<usize>().ok())
+                        })
+                        .unwrap_or(0)
                 } else {
                     s.sequence.len()
                 };
@@ -576,7 +580,7 @@ fn run_lift<W1: Write, W2: Write>(
             &target_step_names,
             cfg.bridge_bp,
         );
-        let mapped_bp: usize = pieces.iter().map(|p| p.src_end - p.src_start).sum();
+        let mapped_bp: usize = pieces.iter().map(|p| p.mapped_bp).sum();
         let total_bp = feat.end.saturating_sub(feat.start).max(1);
         #[allow(clippy::cast_precision_loss)]
         let frac = mapped_bp as f64 / total_bp as f64;

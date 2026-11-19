@@ -68,21 +68,38 @@ fn index_aa_spaced_5of6_frames(
     map
 }
 
-/// Find spaced `5-of-6` translated amino-acid (18 bp) hits across all reading frames.
+/// Find spaced `5-of-6` translated amino-acid (18 bp) hits across all 6 reading frames (`+`/`+` and `-`/`-` in forward coordinates).
 pub(crate) fn find_translated_aa5_hits(
     seq_x: &[u8],
     seq_y: &[u8],
     max_occ: usize,
     skip_softmasked: bool,
 ) -> AnchorPairs {
-    let ix = index_aa_spaced_5of6_frames(seq_x, max_occ, skip_softmasked);
-    let iy = index_aa_spaced_5of6_frames(seq_y, max_occ, skip_softmasked);
+    let x_fwd = index_aa_spaced_5of6_frames(seq_x, max_occ, skip_softmasked);
+    let tgt_fwd = index_aa_spaced_5of6_frames(seq_y, max_occ, skip_softmasked);
     let mut hits = Vec::new();
-    for (k, xs) in &ix {
-        if let Some(ys) = iy.get(k) {
+    for (k, xs) in &x_fwd {
+        if let Some(ys) = tgt_fwd.get(k) {
             for &px in xs {
                 for &py in ys {
                     hits.push((px, py));
+                }
+            }
+        }
+    }
+    if seq_x.len() >= 18 && seq_y.len() >= 18 {
+        let rc_x = crate::revcomp(seq_x);
+        let rc_y = crate::revcomp(seq_y);
+        let x_rev = index_aa_spaced_5of6_frames(&rc_x, max_occ, skip_softmasked);
+        let tgt_rev = index_aa_spaced_5of6_frames(&rc_y, max_occ, skip_softmasked);
+        for (k, xs) in &x_rev {
+            if let Some(ys) = tgt_rev.get(k) {
+                for &rx in xs {
+                    let px = seq_x.len() - 18 - rx;
+                    for &ry in ys {
+                        let py = seq_y.len() - 18 - ry;
+                        hits.push((px, py));
+                    }
                 }
             }
         }

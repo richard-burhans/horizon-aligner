@@ -79,16 +79,15 @@ fn main() -> Result<()> {
     let mut kept_gap_cols = 0usize;
     let mut internal_bubbles = 0usize;
 
-    let mut pts = Vec::with_capacity(anchors.len() + 2);
-    pts.push((0usize, 0usize));
+    let mut gap_spans = Vec::with_capacity(anchors.len() + 1);
+    let mut prev_end = (0usize, 0usize);
     for &(x, y) in &anchors {
-        pts.push((x + span, y + span));
+        gap_spans.push((prev_end, (x, y)));
+        prev_end = (x + span, y + span);
     }
-    pts.push((seq_x.len(), seq_y.len()));
+    gap_spans.push((prev_end, (seq_x.len(), seq_y.len())));
 
-    for w in pts.windows(2) {
-        let (x0, y0) = w[0];
-        let (x1, y1) = w[1];
+    for ((x0, y0), (x1, y1)) in gap_spans {
         if x1 <= x0 || y1 <= y0 {
             continue;
         }

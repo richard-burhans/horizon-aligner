@@ -89,7 +89,9 @@ fn align_species_pair(
             let sx = &ref_contigs[xi].1;
             let sy = &qry_contigs[yi].1;
             let maf = format_maf_blocks(nx, sx.len(), ny, sy.len(), sx, sy, &aln);
-            let hblk = if let Some(&(x0, y0)) = aln.aligned_pairs.first()
+            let hblk = if xi == 0
+                && yi == 0
+                && let Some(&(x0, y0)) = aln.aligned_pairs.first()
                 && let Some(&(x1, y1)) = aln.aligned_pairs.last()
                 && x1 > x0
             {
@@ -370,6 +372,9 @@ fn maf_ref_coverage(hinge_contigs: &ContigList, maf_text: &str) -> f64 {
         .map(|(_, s)| vec![false; s.len()])
         .collect();
     for (r0, _) in parse_two_row_maf_blocks(maf_text) {
+        if r0.strand != '+' {
+            continue;
+        }
         if let Some(&ci) = ctg_map.get(r0.src.as_str()) {
             let r0_size = r0.seq.bytes().filter(|&b| b != b'-').count();
             let end = (r0.start + r0_size).min(covered[ci].len());
@@ -452,8 +457,10 @@ fn build_ancestral_consensus_contigs(
             let mut cons = Vec::with_capacity(ref_seq.len());
             for (pos, &rb) in ref_seq.iter().enumerate() {
                 let c = counts[ci][pos];
+                let rb_upper = rb.to_ascii_uppercase();
+                let rb_idx = BASES.iter().position(|&b| b == rb_upper);
                 let mut best_b = rb;
-                let mut best_cnt = 0u32;
+                let mut best_cnt = rb_idx.map_or(0, |ri| c[ri]);
                 for (bi, &cnt) in c.iter().enumerate() {
                     if cnt > best_cnt {
                         best_cnt = cnt;
@@ -496,6 +503,9 @@ fn remap_consensus_maf_to_hinge(
         };
         let r0_size = r0.seq.bytes().filter(|&b| b != b'-').count();
         if r0_size == 0 {
+            continue;
+        }
+        if r0.strand != '+' {
             continue;
         }
         let s0 = r0.start;
@@ -574,11 +584,18 @@ fn main() -> Result<()> {
                 top_k_opt = Some(0);
                 arg_i += 1;
             }
-            "--top-k" if arg_i + 1 < raw_args.len() => {
-                if let Ok(v) = raw_args[arg_i + 1].parse() {
-                    top_k_opt = Some(v);
-                }
+            "--top-k" => {
+                let Some(val) = raw_args.get(arg_i + 1) else {
+                    bail!("--top-k requires an integer argument");
+                };
+                let parsed = val
+                    .parse::<usize>()
+                    .with_context(|| format!("invalid --top-k value `{val}`"))?;
+                top_k_opt = Some(parsed);
                 arg_i += 2;
+            }
+            other if other.starts_with('-') => {
+                bail!("unknown flag `{other}`");
             }
             other => {
                 pos.push(other.to_owned());

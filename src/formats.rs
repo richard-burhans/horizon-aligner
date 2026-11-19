@@ -28,15 +28,17 @@ pub fn format_gfa_blocks(name_x: &str, name_y: &str, aln: &ContigAlignment) -> S
         return out;
     }
 
-    let runs: Vec<(usize, usize, usize, char)> = partition_colinear_blocks(&aln.aligned_pairs)
-        .into_iter()
-        .map(|(blk, is_rev)| {
-            let strand = if is_rev { '-' } else { '+' };
-            (blk[0].0, blk[0].1, blk.len(), strand)
-        })
-        .collect();
+    let runs: Vec<(usize, usize, usize, usize, char)> =
+        partition_colinear_blocks(&aln.aligned_pairs)
+            .into_iter()
+            .map(|(blk, is_rev)| {
+                let strand = if is_rev { '-' } else { '+' };
+                let x_end = blk.last().map_or(blk[0].0, |p| p.0 + 1);
+                (blk[0].0, blk[0].1, blk.len(), x_end, strand)
+            })
+            .collect();
 
-    for (idx, &(bx, by, blen, bst)) in runs.iter().enumerate() {
+    for (idx, &(bx, by, blen, _x_end, bst)) in runs.iter().enumerate() {
         let seg_id = format!("{name_x}__{name_y}__blk_{idx}");
         let _ = writeln!(
             out,
@@ -44,14 +46,15 @@ pub fn format_gfa_blocks(name_x: &str, name_y: &str, aln: &ContigAlignment) -> S
         );
         if idx > 0 {
             let prev_seg = format!("{name_x}__{name_y}__blk_{}", idx - 1);
-            let gap_x = bx.saturating_sub(runs[idx - 1].0 + runs[idx - 1].2);
+            let prev_bst = runs[idx - 1].4;
+            let gap_x = bx.saturating_sub(runs[idx - 1].3);
             if gap_x >= 6 {
                 let bub_id = format!("{name_x}__{name_y}__bub_{idx}");
                 let _ = writeln!(out, "S\t{bub_id}\t*\tLN:i:{gap_x}\tHB:i:1");
-                let _ = writeln!(out, "L\t{prev_seg}\t+\t{bub_id}\t+\t0M");
-                let _ = writeln!(out, "L\t{bub_id}\t+\t{seg_id}\t+\t0M");
+                let _ = writeln!(out, "L\t{prev_seg}\t{prev_bst}\t{bub_id}\t+\t0M");
+                let _ = writeln!(out, "L\t{bub_id}\t+\t{seg_id}\t{bst}\t0M");
             } else {
-                let _ = writeln!(out, "L\t{prev_seg}\t+\t{seg_id}\t+\t0M");
+                let _ = writeln!(out, "L\t{prev_seg}\t{prev_bst}\t{seg_id}\t{bst}\t0M");
             }
         }
     }
@@ -287,7 +290,12 @@ pub fn parse_two_row_maf_blocks(maf_text: &str) -> Vec<(MafRow, MafRow)> {
     let mut rows: Vec<MafRow> = Vec::new();
     for line in maf_text.lines() {
         let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with("a ") || trimmed == "a" {
+        if trimmed.is_empty()
+            || trimmed == "a"
+            || trimmed
+                .strip_prefix('a')
+                .is_some_and(|r| r.starts_with(char::is_whitespace))
+        {
             if rows.len() >= 2 {
                 let r1 = rows.remove(0);
                 let r2 = rows.remove(0);
@@ -296,7 +304,10 @@ pub fn parse_two_row_maf_blocks(maf_text: &str) -> Vec<(MafRow, MafRow)> {
             rows.clear();
             continue;
         }
-        if let Some(rest) = trimmed.strip_prefix("s ") {
+        if let Some(rest) = trimmed
+            .strip_prefix('s')
+            .filter(|r| r.starts_with(char::is_whitespace))
+        {
             let mut parts = rest.split_whitespace();
             if let (
                 Some(src),

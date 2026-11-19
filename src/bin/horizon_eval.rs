@@ -45,23 +45,24 @@ fn parse_maf_pairs_by_contig(path: &Path, cx: &str, cy: &str) -> Result<MafPairM
     let mut out: MafPairMap = HashMap::new();
     let mut cur: Vec<Vec<String>> = Vec::new();
     let flush = |cur: &mut Vec<Vec<String>>, out: &mut MafPairMap| -> Result<()> {
-        if cur.len() == 2
-            && cur[0].len() >= 7
-            && cur[1].len() >= 7
-            && matches_species(&cur[0][1], cx)
-            && matches_species(&cur[1][1], cy)
-        {
-            let ref_id = cur[0][1].clone();
-            let tgt_id = cur[1][1].clone();
-            let sx: usize = cur[0][2].parse()?;
-            let stx = &cur[0][4];
-            let src_lx: usize = cur[0][5].parse()?;
-            let ax = cur[0][6].as_bytes();
+        let rx_row = cur
+            .iter()
+            .find(|r| r.len() >= 7 && matches_species(&r[1], cx));
+        let ry_row = cur
+            .iter()
+            .find(|r| r.len() >= 7 && matches_species(&r[1], cy));
+        if let (Some(rx), Some(ry)) = (rx_row, ry_row) {
+            let ref_id = rx[1].clone();
+            let tgt_id = ry[1].clone();
+            let sx: usize = rx[2].parse()?;
+            let stx = &rx[4];
+            let src_lx: usize = rx[5].parse()?;
+            let ax = rx[6].as_bytes();
 
-            let sy: usize = cur[1][2].parse()?;
-            let sty = &cur[1][4];
-            let src_ly: usize = cur[1][5].parse()?;
-            let ay = cur[1][6].as_bytes();
+            let sy: usize = ry[2].parse()?;
+            let sty = &ry[4];
+            let src_ly: usize = ry[5].parse()?;
+            let ay = ry[6].as_bytes();
 
             let pair_set = out.entry((ref_id, tgt_id)).or_default();
             let (mut ix, mut iy) = (0usize, 0usize);

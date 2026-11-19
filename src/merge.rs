@@ -177,9 +177,16 @@ fn parse_pairwise_maf_blocks(
             flush(&mut cur_rows, by_contig, &mut tokens);
             continue;
         }
-        if line == "a" || line.starts_with("a ") {
+        if line == "a"
+            || line
+                .strip_prefix('a')
+                .is_some_and(|r| r.starts_with(char::is_whitespace))
+        {
             flush(&mut cur_rows, by_contig, &mut tokens);
-        } else if let Some(rest) = line.strip_prefix("s ") {
+        } else if let Some(rest) = line
+            .strip_prefix('s')
+            .filter(|r| r.starts_with(char::is_whitespace))
+        {
             let parts: Vec<&str> = rest.split_whitespace().collect();
             if parts.len() >= 6
                 && let (Ok(start), Ok(size), Ok(src_size)) = (
@@ -279,9 +286,9 @@ pub fn merge_pairwise_mafs(
     let mut gfa_out = String::from("H\tVN:Z:1.1\n");
     let mut total_blocks = 0usize;
     let mut multi_species_blocks = 0usize;
-    let mut prev_seg: Option<String> = None;
 
     for (ref_contig, mut blocks) in by_contig {
+        let mut prev_seg: Option<String> = None;
         blocks.sort_unstable_by_key(|b| (b.ref_start, b.ref_end));
         let mut bounds: Vec<usize> = blocks
             .iter()

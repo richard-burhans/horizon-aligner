@@ -128,9 +128,15 @@ pub fn align_seq_to_dag_mdl(
     let mut succs: Vec<Vec<usize>> = vec![Vec::new(); num_nodes];
     for (u, node) in nodes.iter().enumerate() {
         for &p in &node.preds {
-            if p < u {
-                succs[p].push(u);
+            if p >= u {
+                return GraphAlignment {
+                    path_nodes: Vec::new(),
+                    kept_pairs: Vec::new(),
+                    bubbles: usize::from(m >= 6),
+                    score_bits: 0.0,
+                };
             }
+            succs[p].push(u);
         }
     }
 
@@ -617,26 +623,29 @@ pub fn align_seq_to_dag_seeded(
         }
     }
 
-    let mut active: Vec<bool> = vec![false; nodes.len()];
+    let mut anc: Vec<bool> = vec![false; nodes.len()];
+    let mut desc: Vec<bool> = vec![false; nodes.len()];
     for &s in &seed_hits {
-        active[s] = true;
+        anc[s] = true;
+        desc[s] = true;
     }
     for u in (0..nodes.len()).rev() {
-        if active[u] {
+        if anc[u] {
             for &p in &nodes[u].preds {
                 if p < u {
-                    active[p] = true;
+                    anc[p] = true;
                 }
             }
         }
     }
     for u in 0..nodes.len() {
-        if active[u] {
+        if desc[u] {
             for &s in &succs[u] {
-                active[s] = true;
+                desc[s] = true;
             }
         }
     }
+    let active: Vec<bool> = (0..nodes.len()).map(|u| anc[u] || desc[u]).collect();
 
     let mut old_to_new: HashMap<usize, usize> = HashMap::new();
     let mut new_to_old: Vec<usize> = Vec::new();

@@ -15,6 +15,7 @@ use crate::seeding::{
     merge_colinear_lcbs, prepare_contig_index,
 };
 use rayon::prelude::*;
+use std::collections::HashMap;
 
 mod dag;
 mod dp;
@@ -209,6 +210,16 @@ pub fn align_contig_pair_with_config(
     // (skip when w=12 already covers >= min_fallback_cov of the reference contig).
     let mut combined_fwd = raw_fwd.clone();
     let mut combined_rc = raw_rc.clone();
+    let mut spans_fwd: HashMap<(usize, usize), usize> = HashMap::new();
+    let mut spans_rc: HashMap<(usize, usize), usize> = HashMap::new();
+    let record_spans =
+        |map: &mut HashMap<(usize, usize), usize>, lcbs: &[Vec<(usize, usize)>], s: usize| {
+            for lcb in lcbs {
+                for &pt in lcb {
+                    map.entry(pt).or_insert(s);
+                }
+            }
+        };
     let y10_idx_opt = if primary_cov < min_fallback_cov {
         let x10_idx = FlatSeedIndex::build_with_sdust(
             seq_x,
@@ -229,6 +240,7 @@ pub fn align_contig_pair_with_config(
         let (mut hits10_fwd, mut hits10_rc) = x10_idx.intersect(&y10_idx);
         filter_uncovered(&mut hits10_fwd);
         filter_uncovered(&mut hits10_rc);
+        let prev_fwd = combined_fwd.len();
         append_nonoverlapping_lcbs(
             &mut combined_fwd,
             &raw_fwd,
@@ -236,6 +248,8 @@ pub fn align_contig_pair_with_config(
             cfg.fallback_min_anchors,
             cfg.fallback_min_span,
         );
+        record_spans(&mut spans_fwd, &combined_fwd[prev_fwd..], MASK_W10.len());
+        let prev_rc = combined_rc.len();
         append_nonoverlapping_lcbs(
             &mut combined_rc,
             &raw_rc,
@@ -243,6 +257,7 @@ pub fn align_contig_pair_with_config(
             cfg.fallback_min_anchors,
             cfg.fallback_min_span,
         );
+        record_spans(&mut spans_rc, &combined_rc[prev_rc..], MASK_W10.len());
         Some(y10_idx)
     } else {
         None
@@ -268,6 +283,7 @@ pub fn align_contig_pair_with_config(
         );
         filter_uncovered(&mut hits_lz_fwd);
         filter_uncovered(&mut hits_lz_rc);
+        let prev_fwd = combined_fwd.len();
         append_hsp_gated_lastz12_lcbs(
             &mut combined_fwd,
             seq_x,
@@ -275,6 +291,12 @@ pub fn align_contig_pair_with_config(
             &hits_lz_fwd,
             base_hsp_thresh + hsp_bonus,
         );
+        record_spans(
+            &mut spans_fwd,
+            &combined_fwd[prev_fwd..],
+            MASK_LASTZ12.len(),
+        );
+        let prev_rc = combined_rc.len();
         append_hsp_gated_lastz12_lcbs(
             &mut combined_rc,
             seq_x,
@@ -282,6 +304,7 @@ pub fn align_contig_pair_with_config(
             &hits_lz_rc,
             base_hsp_thresh + hsp_bonus,
         );
+        record_spans(&mut spans_rc, &combined_rc[prev_rc..], MASK_LASTZ12.len());
         Some(idx)
     } else {
         None
@@ -303,6 +326,7 @@ pub fn align_contig_pair_with_config(
             );
             filter_uncovered(&mut double_trans_fwd);
             filter_uncovered(&mut double_trans_rc);
+            let prev_fwd = combined_fwd.len();
             append_hsp_gated_lastz12_lcbs(
                 &mut combined_fwd,
                 seq_x,
@@ -310,6 +334,12 @@ pub fn align_contig_pair_with_config(
                 &double_trans_fwd,
                 base_hsp_thresh + 30 + hsp_bonus,
             );
+            record_spans(
+                &mut spans_fwd,
+                &combined_fwd[prev_fwd..],
+                MASK_LASTZ12.len(),
+            );
+            let prev_rc = combined_rc.len();
             append_hsp_gated_lastz12_lcbs(
                 &mut combined_rc,
                 seq_x,
@@ -317,6 +347,7 @@ pub fn align_contig_pair_with_config(
                 &double_trans_rc,
                 base_hsp_thresh + 30 + hsp_bonus,
             );
+            record_spans(&mut spans_rc, &combined_rc[prev_rc..], MASK_LASTZ12.len());
         }
 
         let y_lz11 = FlatSeedIndex::build_with_sdust(
@@ -370,8 +401,16 @@ pub fn align_contig_pair_with_config(
         let (mut ph_fwd, mut ph_rc) = x_ph.intersect(&y_ph);
         filter_uncovered(&mut ph_fwd);
         filter_uncovered(&mut ph_rc);
+        let prev_fwd = combined_fwd.len();
         append_two_hit_diagonal_lcbs(&mut combined_fwd, &ph_fwd, 64, 4);
+        record_spans(
+            &mut spans_fwd,
+            &combined_fwd[prev_fwd..],
+            MASK_PH11_18.len(),
+        );
+        let prev_rc = combined_rc.len();
         append_two_hit_diagonal_lcbs(&mut combined_rc, &ph_rc, 64, 4);
+        record_spans(&mut spans_rc, &combined_rc[prev_rc..], MASK_PH11_18.len());
 
         // Apply R/Y (1-bit) and w=10 1-transition only while random-collision density
         // stays tractable (< 10^9 search space cells).
@@ -416,8 +455,12 @@ pub fn align_contig_pair_with_config(
 
             // HSP-gated w=10 (10-of-14) 1-transition seeding.
             if let Some(ref y10_idx) = y10_idx_opt {
-                let (mut hits_w10_fwd, mut hits_w10_rc) =
-                    find_w10_1transition_hits_flat(seq_x, y10_idx, cfg.skip_softmasked);
+                let (mut hits_w10_fwd, mut hits_w10_rc) = find_w10_1transition_hits_flat(
+                    seq_x,
+                    Some(&idx_x.sdust),
+                    y10_idx,
+                    cfg.skip_softmasked,
+                );
                 filter_uncovered(&mut hits_w10_fwd);
                 filter_uncovered(&mut hits_w10_rc);
                 append_hsp_gated_lastz12_lcbs(
@@ -442,6 +485,7 @@ pub fn align_contig_pair_with_config(
         let mut aa_rc = find_translated_aa5_hits(seq_x, seq_y_rc, 4, cfg.skip_softmasked);
         filter_uncovered(&mut aa_fwd);
         filter_uncovered(&mut aa_rc);
+        let prev_fwd = combined_fwd.len();
         append_hsp_gated_aa_lcbs(
             &mut combined_fwd,
             seq_x,
@@ -449,6 +493,8 @@ pub fn align_contig_pair_with_config(
             &aa_fwd,
             (base_hsp_thresh / 2) + aa_bonus,
         );
+        record_spans(&mut spans_fwd, &combined_fwd[prev_fwd..], 18);
+        let prev_rc = combined_rc.len();
         append_hsp_gated_aa_lcbs(
             &mut combined_rc,
             seq_x,
@@ -456,6 +502,7 @@ pub fn align_contig_pair_with_config(
             &aa_rc,
             (base_hsp_thresh / 2) + aa_bonus,
         );
+        record_spans(&mut spans_rc, &combined_rc[prev_rc..], 18);
     }
 
     // Transition-tolerant R/Y (1-bit purine/pyrimidine) fallback for divergent homologs.
@@ -481,6 +528,7 @@ pub fn align_contig_pair_with_config(
             )?;
             x_ry.intersect(&y_ry)
         };
+        let prev_fwd = combined_fwd.len();
         append_nonoverlapping_lcbs(
             &mut combined_fwd,
             &[],
@@ -488,6 +536,8 @@ pub fn align_contig_pair_with_config(
             cfg.fallback_min_anchors,
             cfg.fallback_min_span,
         );
+        record_spans(&mut spans_fwd, &combined_fwd[prev_fwd..], MASK_RY20.len());
+        let prev_rc = combined_rc.len();
         append_nonoverlapping_lcbs(
             &mut combined_rc,
             &[],
@@ -495,6 +545,7 @@ pub fn align_contig_pair_with_config(
             cfg.fallback_min_anchors,
             cfg.fallback_min_span,
         );
+        record_spans(&mut spans_rc, &combined_rc[prev_rc..], MASK_RY20.len());
     }
 
     let lcbs_fwd = merge_colinear_lcbs(&combined_fwd, max_local_rescue_bp);
@@ -506,10 +557,11 @@ pub fn align_contig_pair_with_config(
     let mut xdrop_jobs: Vec<(bool, usize, usize, usize, usize, bool)> = Vec::new();
     let mut macro_bubbles = 0usize;
 
-    for (is_rc, lcb_list, y_work) in [
-        (false, &lcbs_fwd, seq_y.as_slice()),
-        (true, &lcbs_rc, seq_y_rc.as_slice()),
+    for (is_rc, lcb_list, y_work, anchor_spans) in [
+        (false, &lcbs_fwd, seq_y.as_slice(), &spans_fwd),
+        (true, &lcbs_rc, seq_y_rc.as_slice(), &spans_rc),
     ] {
+        let span_for = |pt: (usize, usize)| anchor_spans.get(&pt).copied().unwrap_or(span);
         // Inter-LCB sparse-region rescue using w=10 spaced seeds (with 2-hit w=9 fallback).
         let mut rescued_inter = Vec::new();
         if lcb_list.is_empty() && seq_x.len() <= 2500 && y_work.len() <= 2500 {
@@ -603,7 +655,8 @@ pub fn align_contig_pair_with_config(
                 let mut mismatches = 0usize;
                 let mut last_end_x = 0usize;
                 for &(ax, ay) in lcb {
-                    for off in 0..span {
+                    let a_span = span_for((ax, ay));
+                    for off in 0..a_span {
                         let px = ax + off;
                         let py = ay + off;
                         if px < last_end_x || px >= seq_x.len() || py >= pv_len {
@@ -615,7 +668,7 @@ pub fn align_contig_pair_with_config(
                             mismatches += 1;
                         }
                     }
-                    last_end_x = (ax + span).max(last_end_x);
+                    last_end_x = (ax + a_span).max(last_end_x);
                 }
                 #[allow(clippy::cast_precision_loss)]
                 let net_bits = 1.6 * (matches as f64) - 2.4 * (mismatches as f64);
@@ -626,8 +679,9 @@ pub fn align_contig_pair_with_config(
             let mut all_anchors = Vec::with_capacity(lcb.len() * 2);
             all_anchors.push(lcb[0]);
             for w in lcb.windows(2) {
-                let x0 = w[0].0 + span;
-                let y0 = w[0].1 + span;
+                let s0 = span_for(w[0]);
+                let x0 = w[0].0 + s0;
+                let y0 = w[0].1 + s0;
                 let x1 = w[1].0;
                 let y1 = w[1].1;
                 if x1 > x0 && y1 > y0 {
@@ -653,7 +707,8 @@ pub fn align_contig_pair_with_config(
             }
 
             for &(ax, ay) in &all_anchors {
-                for off in 0..span {
+                let a_span = span_for((ax, ay));
+                for off in 0..a_span {
                     if ax + off >= seq_x.len() || ay + off >= pv_len {
                         break;
                     }
@@ -680,8 +735,10 @@ pub fn align_contig_pair_with_config(
                     true,
                 ));
             }
-            let ex0 = all_anchors[all_anchors.len() - 1].0 + span;
-            let ey0 = all_anchors[all_anchors.len() - 1].1 + span;
+            let last_a = all_anchors[all_anchors.len() - 1];
+            let last_span = span_for(last_a);
+            let ex0 = last_a.0 + last_span;
+            let ey0 = last_a.1 + last_span;
             if seq_x.len().saturating_sub(ex0) >= 12 && pv_len.saturating_sub(ey0) >= 12 {
                 xdrop_jobs.push((
                     is_rc,
@@ -694,8 +751,9 @@ pub fn align_contig_pair_with_config(
             }
 
             for w in all_anchors.windows(2) {
-                let x0 = w[0].0 + span;
-                let y0 = w[0].1 + span;
+                let s0 = span_for(w[0]);
+                let x0 = w[0].0 + s0;
+                let y0 = w[0].1 + s0;
                 let x1 = w[1].0;
                 let y1 = w[1].1;
                 if x1 <= x0 || y1 <= y0 {

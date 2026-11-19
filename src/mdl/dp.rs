@@ -46,15 +46,20 @@ struct BandGrid {
 }
 
 impl BandGrid {
-    fn new(n: usize, m: usize, band_w: usize, init: f64) -> Self {
-        let stride = 2 * band_w + 1;
-        Self {
+    fn try_new(n: usize, m: usize, band_w: usize, init: f64) -> Option<Self> {
+        let bw = band_w.min(n.max(m));
+        let stride = bw.checked_mul(2)?.checked_add(1)?;
+        let total = n.checked_add(1)?.checked_mul(stride)?;
+        let mut data = Vec::new();
+        data.try_reserve_exact(total).ok()?;
+        data.resize(total, init);
+        Some(Self {
             n,
             m,
-            band_w,
+            band_w: bw,
             stride,
-            data: vec![init; (n + 1) * stride],
-        }
+            data,
+        })
     }
 
     #[inline]
@@ -155,10 +160,18 @@ pub fn banded_mdl_gap_with_min_post(
     let mm_ln = mm_bits * ln2;
     let im_ln = im_bits * ln2;
 
-    let mut fm = BandGrid::new(n, m, band_w, NEG_INF);
-    let mut fix = BandGrid::new(n, m, band_w, NEG_INF);
-    let mut fiy = BandGrid::new(n, m, band_w, NEG_INF);
-    let mut sub_grid = BandGrid::new(n, m, band_w, 0.0);
+    let (Some(mut fm), Some(mut fix), Some(mut fiy), Some(mut sub_grid)) = (
+        BandGrid::try_new(n, m, band_w, NEG_INF),
+        BandGrid::try_new(n, m, band_w, NEG_INF),
+        BandGrid::try_new(n, m, band_w, NEG_INF),
+        BandGrid::try_new(n, m, band_w, 0.0),
+    ) else {
+        return GapResult {
+            kept_pairs: Vec::new(),
+            bubbles: usize::from(n.max(m) >= 6),
+            score_bits: 0.0,
+        };
+    };
 
     fm.set(0, 0, 0.0);
 
@@ -215,9 +228,17 @@ pub fn banded_mdl_gap_with_min_post(
         };
     }
 
-    let mut bm = BandGrid::new(n, m, band_w, NEG_INF);
-    let mut bix = BandGrid::new(n, m, band_w, NEG_INF);
-    let mut biy = BandGrid::new(n, m, band_w, NEG_INF);
+    let (Some(mut bm), Some(mut bix), Some(mut biy)) = (
+        BandGrid::try_new(n, m, band_w, NEG_INF),
+        BandGrid::try_new(n, m, band_w, NEG_INF),
+        BandGrid::try_new(n, m, band_w, NEG_INF),
+    ) else {
+        return GapResult {
+            kept_pairs: Vec::new(),
+            bubbles: usize::from(n.max(m) >= 6),
+            score_bits: 0.0,
+        };
+    };
     bm.set(n, m, 0.0);
     bix.set(n, m, 0.0);
     biy.set(n, m, 0.0);
@@ -465,9 +486,23 @@ pub fn mdl_xdrop_extend_with_params(
 
     let x_drop_bits = 15.0;
     let min_peak_bits = 10.0;
-    let stride = 2 * band_w + 1;
-    let mut dp = vec![NEG_INF; (n + 1) * stride];
-    let mut bt = vec![0_u8; (n + 1) * stride]; // 1=diag, 2=up, 3=left
+    let band_w = band_w.min(n.max(m));
+    let Some(stride) = band_w.checked_mul(2).and_then(|s| s.checked_add(1)) else {
+        return Vec::new();
+    };
+    let Some(total) = n.checked_add(1).and_then(|r| r.checked_mul(stride)) else {
+        return Vec::new();
+    };
+    let mut dp = Vec::new();
+    if dp.try_reserve_exact(total).is_err() {
+        return Vec::new();
+    }
+    dp.resize(total, NEG_INF);
+    let mut bt = Vec::new();
+    if bt.try_reserve_exact(total).is_err() {
+        return Vec::new();
+    }
+    bt.resize(total, 0_u8); // 1=diag, 2=up, 3=left
 
     let slot = |i: usize, j: usize| -> Option<usize> {
         #[allow(clippy::cast_possible_wrap)]
@@ -591,6 +626,9 @@ pub fn mdl_xdrop_extend_with_params(
             3 => cj -= 1,
             _ => break,
         }
+    }
+    if !reverse {
+        pairs.reverse();
     }
     pairs
 }

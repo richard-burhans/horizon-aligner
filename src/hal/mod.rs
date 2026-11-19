@@ -269,35 +269,43 @@ impl HalAlignment {
                 let Some(child) = self.genomes.get(child_idx) else {
                     continue;
                 };
-                let Some(tseg) = child.top_segments.get(t_idx) else {
-                    continue;
-                };
-                let c_end = tseg.start.saturating_add(tseg.length).min(child.dna.len());
-                if c_end <= tseg.start {
-                    continue;
+                let mut cur_t = Some(t_idx);
+                let mut steps = 0usize;
+                while let Some(idx) = cur_t {
+                    if steps >= child.top_segments.len() {
+                        break;
+                    }
+                    steps += 1;
+                    let Some(tseg) = child.top_segments.get(idx) else {
+                        break;
+                    };
+                    let c_end = tseg.start.saturating_add(tseg.length).min(child.dna.len());
+                    if c_end > tseg.start {
+                        let slice = &child.dna[tseg.start..c_end];
+                        let q_seq = if rev {
+                            String::from_utf8_lossy(&crate::revcomp(slice)).into_owned()
+                        } else {
+                            String::from_utf8_lossy(slice).into_owned()
+                        };
+                        let strand = if rev { '-' } else { '+' };
+                        let q_start = if rev {
+                            child.dna.len().saturating_sub(c_end)
+                        } else {
+                            tseg.start
+                        };
+                        let _ = writeln!(
+                            out,
+                            "s {} {} {} {} {} {}",
+                            child.name,
+                            q_start,
+                            c_end - tseg.start,
+                            strand,
+                            child.dna.len(),
+                            q_seq
+                        );
+                    }
+                    cur_t = tseg.next_paralog;
                 }
-                let slice = &child.dna[tseg.start..c_end];
-                let q_seq = if rev {
-                    String::from_utf8_lossy(&crate::revcomp(slice)).into_owned()
-                } else {
-                    String::from_utf8_lossy(slice).into_owned()
-                };
-                let strand = if rev { '-' } else { '+' };
-                let q_start = if rev {
-                    child.dna.len().saturating_sub(c_end)
-                } else {
-                    tseg.start
-                };
-                let _ = writeln!(
-                    out,
-                    "s {} {} {} {} {} {}",
-                    child.name,
-                    q_start,
-                    c_end - tseg.start,
-                    strand,
-                    child.dna.len(),
-                    q_seq
-                );
             }
             out.push('\n');
         }

@@ -826,6 +826,7 @@ pub(crate) fn find_lastz11_1transition_hits_flat(
 
 pub(crate) fn find_w10_1transition_hits_flat(
     seq_x: &[u8],
+    sdust_x: Option<&[bool]>,
     iy: &FlatSeedIndex,
     skip_softmasked: bool,
 ) -> (AnchorPairs, AnchorPairs) {
@@ -833,7 +834,7 @@ pub(crate) fn find_w10_1transition_hits_flat(
     const REV_OFFSETS: [usize; 10] = [13, 12, 10, 9, 7, 6, 4, 3, 1, 0];
     find_spaced_transition_hits_flat(
         seq_x,
-        None,
+        sdust_x,
         &OFFSETS,
         &REV_OFFSETS,
         14,

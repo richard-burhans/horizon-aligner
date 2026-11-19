@@ -433,19 +433,19 @@ pub fn extract_min_mdl_cost(
 /// Collect all block labels wrapped in `Expr::Dup(...)`.
 #[must_use]
 pub fn collect_dups(expr: &Expr) -> Vec<String> {
+    fn collect_leaves(e: &Expr, out: &mut Vec<String>) {
+        match e {
+            Expr::Block(lbl) => out.push(lbl.clone()),
+            Expr::Seq(a, b) => {
+                collect_leaves(a, out);
+                collect_leaves(b, out);
+            }
+            Expr::Inv(a) | Expr::Dup(a) => collect_leaves(a, out),
+        }
+    }
     fn walk(e: &Expr, out: &mut Vec<String>) {
         match e {
-            Expr::Dup(inner) => match inner.as_ref() {
-                Expr::Block(lbl) => out.push(lbl.clone()),
-                Expr::Inv(b) => {
-                    if let Expr::Block(lbl) = b.as_ref() {
-                        out.push(lbl.clone());
-                    } else {
-                        walk(b, out);
-                    }
-                }
-                _ => walk(inner, out),
-            },
+            Expr::Dup(inner) => collect_leaves(inner, out),
             Expr::Seq(a, b) => {
                 walk(a, out);
                 walk(b, out);
@@ -464,12 +464,15 @@ mod tests {
     use super::*;
 
     fn has_dup_of(expr: &Expr, label: &str) -> bool {
-        match expr {
-            Expr::Dup(inner) => match inner.as_ref() {
+        fn has_leaf(e: &Expr, label: &str) -> bool {
+            match e {
                 Expr::Block(lbl) => lbl == label,
-                Expr::Inv(b) => matches!(b.as_ref(), Expr::Block(lbl) if lbl == label),
-                _ => has_dup_of(inner, label),
-            },
+                Expr::Seq(a, b) => has_leaf(a, label) || has_leaf(b, label),
+                Expr::Inv(a) | Expr::Dup(a) => has_leaf(a, label),
+            }
+        }
+        match expr {
+            Expr::Dup(inner) => has_leaf(inner, label),
             Expr::Seq(a, b) => has_dup_of(a, label) || has_dup_of(b, label),
             Expr::Inv(a) => has_dup_of(a, label),
             Expr::Block(_) => false,
