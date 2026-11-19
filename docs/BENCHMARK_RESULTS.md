@@ -2,11 +2,11 @@
 
 This document tracks the precision, recall, runtime, and memory usage of `horizon-aligner` across deep-divergence WGA datasets and the 12 GB HPRC pangenome graph.
 
-All results were generated out-of-the-box using the divergence-adaptive Pair-HMM (`HmmParams`: `identity_prior`, `gap_open_bits`, and `gap_extend_bits` estimated from LCB anchors with Beta prior shrinkage in `src/mdl/mod.rs`), BOCPD compositional profiles (`src/bocpd.rs`), and normalized Pair-HMM transitions (`src/mdl/dp.rs`, `src/mdl/dag.rs`). Note that `KARLIN_MDL_COEFF = 0.55` remains a fixed constant, and MAF-extracted FASTAs sample homologous blocks.
+Pairwise WGA results use the divergence-adaptive Pair-HMM (`HmmParams`: `identity_prior`, `gap_open_bits`, and `gap_extend_bits` estimated from LCB anchors with Beta prior shrinkage in `src/mdl/mod.rs`), BOCPD compositional profiles (`src/bocpd.rs`), and normalized Pair-HMM transitions (`src/mdl/dp.rs`, `src/mdl/dag.rs`). Note that `mdl_xdrop_extend` (`src/mdl/dp.rs`) still uses static defaults (`IDENTITY_PRIOR`, `GAP_OPEN_BITS`, `GAP_EXTEND_BITS`), `horizon_wga --graph` passes `&HmmParams::default()`, `KARLIN_MDL_COEFF = 0.55` remains a fixed constant, and MAF-extracted FASTAs sample homologous blocks. Earlier WGA rows (`multiz100way`, `cactus447way`, `multiz470way`, `cactus241way chr22_random`, `GRCh38.chr22 vs CHM13.chr22`) were recorded prior to `0e70693`/`b18f25b` and have not yet been re-run on `b18f25b` (`cactus241way chr22 1MB` was re-run on `b18f25b` and shifted from `64.3%` to `63.6%` recall).
 
 ## Executive Summary: Performance Highlights
 
-* **Multi-species merging (`horizon_merge`):** Fast and exact at 400+ species scale, with best-score interval netting.
+* **Multi-species merging (`horizon_merge`):** Implemented in `src/bin/horizon_merge.rs` (best-score interval netting; no multi-species benchmark row or binary unit tests yet).
 * **Close-to-medium divergence (`horizon_wga`):**
   * UCSC 470-way primates: **89.6%** recall / **88.0%** precision (Marmoset).
   * UCSC cactus447way primates: **92.6%** recall / **85.4%** precision (Macaque).
@@ -18,12 +18,12 @@ All results were generated out-of-the-box using the divergence-adaptive Pair-HMM
 * **12 GB HPRC v1.0 Minigraph-Cactus Graph (`horizon_gfa`, `horizon_lift`, `horizon_clean`, `horizon_resolve`, `horizon_wga`):**
   * Full-graph streaming (`horizon_gfa stats`): **88.84s**, **97.1 MB** peak RSS across `81,415,956` segments (`3.29 Gbp`), `112,955,105` links, `2,580` paths, and `24,456` walks.
   * Two-pass chromosome extraction (`horizon_gfa extract` for `GRCh38.chr22` 50.8 Mbp + `CHM13.chr22` 35.6 Mbp): **166.73s**, **456.1 MB** peak RSS (`921,252` cached segments).
-  * Two-pass graph liftover (`horizon_lift --bridge-bp 10` on 500 `GRCh38.chr22` 1-kb windows -> `CHM13.chr22`): **256.60s**, **619.2 MB** peak RSS (`469` exact, `1` partial, `19` split, `11` unmapped).
-  * Pairwise alignment (`horizon_wga --rbest --resolve-dups` on `GRCh38.chr22` vs `CHM13.chr22`): **154.92s**, **24,365,611** aligned pairs (`68.5%` of `CHM13.chr22` q-arm), `60` fwd / `4` rev LCBs, `9,690` Horizon Bubbles.
-  * Real HPRC `chr22` Pericentromere 5 Mbp (`GRCh38.chr22:15.5M-20.5M` vs `CHM13.chr22:15.73M-20.73M`): **23.45s**, **3,084.5 MB** peak RSS, **5,894,191** aligned pairs, `246` fwd / `184` rev LCBs, `17,789` Horizon Bubbles (`horizon_clean`: `6,030` links kept, **0.01s**, **7.8 MB** RSS).
-  * Real HPRC `chr6` Pericentromere 5 Mbp (`GRCh38.chr6:61.0M-66.0M` vs `CHM13.chr6:61.4M-66.4M`): **17.60s**, **3,084.5 MB** peak RSS, **4,785,880** aligned pairs, `264` fwd / `326` rev LCBs, `24,916` Horizon Bubbles (`horizon_clean`: `2,776` links kept, **0.01s**, **5.0 MB** RSS).
+  * Two-pass graph liftover (`horizon_lift --bridge-bp 10` on 500 `+`-strand `GRCh38.chr22:16.0M-49.9M` 1-kb windows -> `CHM13.chr22`, excluding `0-16.0M` p-arm/centromere): **256.60s**, **619.2 MB** peak RSS (`469` exact including `<=10 bp` bridged gaps, `1` partial, `19` split, `11` unmapped; no external coordinate truth oracle).
+  * Pairwise alignment (`horizon_wga --resolve-dups` on `GRCh38.chr22` vs `CHM13.chr22`, pre-`0e70693`): **154.92s**, **24,365,611** many-to-many `(x, y)` aligned pairs (non-deduplicated ratio `68.5%` vs `35.6 Mbp` `CHM13.chr22` q-arm), `60` fwd / `4` rev LCBs, `9,690` Horizon Bubbles.
+  * Real HPRC `chr22` Pericentromere 5 Mbp (`GRCh38.chr22:15.5M-20.5M` vs `CHM13.chr22:15.73M-20.73M`): **23.45s**, **3,084.5 MB** peak RSS, **5,894,191** many-to-many `(x, y)` aligned pairs, `246` fwd / `184` rev LCBs, `17,789` Horizon Bubbles (`horizon_clean` on `*`-sequence `sup>0` pairwise GFA: `6,030` links kept, `0` severed, **0.01s**, **7.8 MB** RSS).
+  * Real HPRC `chr6` Pericentromere 5 Mbp (`GRCh38.chr6:61.0M-66.0M` vs `CHM13.chr6:61.4M-66.4M`): **17.60s**, **3,084.5 MB** peak RSS, **4,785,880** many-to-many `(x, y)` aligned pairs, `264` fwd / `326` rev LCBs, `24,916` Horizon Bubbles (`horizon_clean` on `*`-sequence `sup>0` pairwise GFA: `2,776` links kept, `0` severed, **0.01s**, **5.0 MB** RSS).
   * MHC / HLA 5 Mbp locus (`GRCh38.chr6:28.5M-33.5M` vs synthetic C4 tandem-dup haplotype): **25.08s**, **3,345.9 MB** peak RSS, **6,679,345** aligned pairs, `543` fwd / `355` rev LCBs, `24,827` Horizon Bubbles, `# EG:Z:` MDL e-graph paralog resolution.
-  * `chr6` q-arm 20 Mbp (`GRCh38.chr6:65M-85M` vs `CHM13.chr6:61.4M-81.4M`): **81.33s**, **5,863.3 MB** peak RSS, **15,021,911** aligned pairs (`75.1%`), `36` fwd / `41` rev LCBs, `21,475` Horizon Bubbles. (After replacing `HashSet<(usize, usize)>` with sorted/deduplicated `Vec<(usize, usize)>`, full 170.8 Mbp `GRCh38.chr6` vs 110.7 Mbp `CHM13.chr6` still reached **26.5 GB** RSS and `47:33` CPU before cancellation on the 30 GiB host due to `ContigIndex`'s per-position `HashMap<u64, Vec<usize>>` seed maps, ~0.29 GB/Mbp.)
+  * `chr6` q-arm 20 Mbp (`GRCh38.chr6:65M-85M` vs `CHM13.chr6:61.4M-81.4M`): **81.33s**, **5,863.3 MB** peak RSS (`0.293 GB/Mbp`), **15,021,911** many-to-many `(x, y)` aligned pairs (`75.1%` non-deduplicated ratio), `36` fwd / `41` rev LCBs, `21,475` Horizon Bubbles. (After replacing `HashSet<(usize, usize)>` with sorted/deduplicated `Vec<(usize, usize)>`, full `GRCh38.chr6` `170.8 Mbp` vs `CHM13.chr6` `110.7 Mbp` reached **26.5 GB** mid-run RSS — `0.094 GB/Mbp` combined, `0.155 GB/Mbp` ref-only — at `47:33` CPU before cancellation on the 30 GiB host due to `ContigIndex` `HashMap<u64, Vec<usize>>` seed maps.)
 
 ---
 
@@ -60,6 +60,6 @@ These sets were completely locked away during algorithm development to prevent o
 | Chr6 Pericentromere 5 Mbp | `horizon_wga --resolve-dups` | `GRCh38.chr6:61.0M-66.0M` vs `CHM13.chr6:61.4M-66.4M` | `4,785,880` pairs (`24,916` bubbles) | **3,084.5 MB** | 17.60s |
 | MHC/HLA 5 Mbp Paralog Test | `horizon_wga --resolve-dups` | `GRCh38.chr6:28.5M-33.5M` vs synthetic C4 dup | `6,679,345` pairs (`24,827` bubbles) | **3,345.9 MB** | 25.08s |
 | Chr6 q-arm 20 Mbp Alignment | `horizon_wga --resolve-dups` | `GRCh38.chr6:65M-85M` vs `CHM13.chr6:61.4M-81.4M` | `15,021,911` pairs (`21,475` bubbles) | **5,863.3 MB** | 81.33s |
-| GFA Junction Cleaner | `horizon_clean` | `/tmp/chr22_peri_5m.gfa` (`6,030` links) / `/tmp/chr6_peri_5m.gfa` (`2,776` links) | `6,030` / `2,776` kept, `0` severed | **7.8 MB** / **5.0 MB** | 0.01s |
-| GFA E-Graph Resolver | `horizon_resolve --collapse-dups` | 200 segs, 20 walks x 225 steps (`4,500` steps) | `280` windows, `840` dups collapsed, `308,760.9` bits saved | **24.0 MB** | 4.48s |
-| Seeded DAG/POA Alignment | `horizon_wga --graph` | 4-node diamond GFA + 96-bp query | `>n0>n2>n3`, `96/96` bp (`124.4` bits) | - | 0.0031s |
+| GFA Junction Cleaner | `horizon_clean` | `*`-seq pairwise `chr22`/`chr6` peri GFAs (`6,030` / `2,776` `sup>0` links) | `6,030` / `2,776` kept, `0` severed (no-op) | **7.8 MB** / **5.0 MB** | 0.01s |
+| Synthetic E-Graph Resolver | `horizon_resolve --collapse-dups` | Synthetic `200`-seg `ACGT` repeat, `20` identical walks (`--divergence 0.02`) | `280` windows, `840` dups collapsed, `308,760.9` analytical `2*len` bits | **24.0 MB** | 4.48s |
+| Seeded DAG/POA Alignment | `horizon_wga --graph` | 4-node diamond GFA (`<=8` node bypass) + 96-bp query | `>n0>n2>n3`, `96/96` bp (`124.4` bits) | - | 0.0031s |

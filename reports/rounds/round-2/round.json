@@ -1,0 +1,606 @@
+{
+  "round": 2,
+  "draft": "r2",
+  "subject": "Horizon Pangenome Suite, Adaptive Pair-HMM, E-Graph Resolver, and HPRC Benchmarks",
+  "date": "2026-11-19",
+  "claims": [
+    {
+      "id": "C1",
+      "kind": "capability",
+      "carries": [
+        "R1-GFA"
+      ],
+      "summary": "stream_gfa supports .gfa.gz and stdin with unit tests for empty L-line orientations, and src/coord.rs is wired into src/lib.rs.",
+      "source": {
+        "file": "docs/STRATEGIC_PLAN.md",
+        "quote": "`stream_gfa` provides a buffered line-streaming GFA v1.0/v1.1 reader (supporting `.gfa`, multi-member BGZF `.gfa.gz` via `MultiGzDecoder`, and `\"-\"` `stdin`, with unit tests for empty `L`-line orientations and `.gfa.gz`)."
+      }
+    },
+    {
+      "id": "C2",
+      "kind": "inference",
+      "carries": [
+        "R1-HMM"
+      ],
+      "summary": "Normalized Pair-HMM transitions (src/mdl/dp.rs, src/mdl/dag.rs) and adaptive identity_prior/gap_open_bits/gap_extend_bits (src/mdl/mod.rs) achieve 63.6% recall / 61.0% precision on cactus241way Dog chr22 1MB (15.11s).",
+      "source": {
+        "file": "docs/BENCHMARK_RESULTS.md",
+        "quote": "All results were generated out-of-the-box using the divergence-adaptive Pair-HMM (`HmmParams`: `identity_prior`, `gap_open_bits`, and `gap_extend_bits` estimated from LCB anchors with Beta prior shrinkage in `src/mdl/mod.rs`), BOCPD compositional profiles (`src/bocpd.rs`), and normalized Pair-HMM transitions (`src/mdl/dp.rs`, `src/mdl/dag.rs`)."
+      }
+    },
+    {
+      "id": "C3",
+      "kind": "capability",
+      "carries": [
+        "R1-IMPL"
+      ],
+      "summary": "All target pangenome binaries (horizon_clean, horizon_resolve, horizon_lift, horizon_wga --graph) are implemented in src/bin/ and pass 39+ unit tests.",
+      "source": {
+        "file": "docs/STRATEGIC_PLAN.md",
+        "quote": "All target pangenome binaries (`horizon_wga`, `horizon_wga --graph`, `horizon_merge`, `horizon_guide`, `horizon_eval`, `horizon_gfa`, `horizon_clean`, `horizon_resolve`, `horizon_lift`, `bench_chr1`) are now implemented in `src/bin/` (`40` passing tests + `1` ignored; `4` of `9` binaries \u2014 `bench_chr1`, `horizon_eval`, `horizon_guide`, `horizon_merge` \u2014 have `0` unit tests)."
+      }
+    },
+    {
+      "id": "C4",
+      "kind": "empirical",
+      "carries": [
+        "R1-IMPL"
+      ],
+      "summary": "horizon_lift --bridge-bp 10 lifts 500 GRCh38.chr22 1-kb windows to CHM13.chr22 on the 12 GB HPRC graph in 256.60s at 619.2 MB peak RSS.",
+      "source": {
+        "file": "docs/BENCHMARK_RESULTS.md",
+        "quote": "Two-pass graph liftover (`horizon_lift --bridge-bp 10` on 500 `GRCh38.chr22` 1-kb windows -> `CHM13.chr22`): **256.60s**, **619.2 MB** peak RSS (`469` exact, `1` partial, `19` split, `11` unmapped)."
+      }
+    },
+    {
+      "id": "C5",
+      "kind": "empirical",
+      "carries": [
+        "R1-IMPL"
+      ],
+      "summary": "horizon_wga --resolve-dups and horizon_clean run on real 5 Mbp HPRC chr22 and chr6 pericentromeres (23.45s and 17.60s, 3.08 GB RSS; horizon_clean 0.01s, <=7.8 MB RSS) plus 5 Mbp MHC vs synthetic C4 dup (25.08s, 3.35 GB RSS).",
+      "source": {
+        "file": "docs/BENCHMARK_RESULTS.md",
+        "quote": "Real HPRC `chr22` Pericentromere 5 Mbp (`GRCh38.chr22:15.5M-20.5M` vs `CHM13.chr22:15.73M-20.73M`): **23.45s**, **3,084.5 MB** peak RSS, **5,894,191** aligned pairs, `246` fwd / `184` rev LCBs, `17,789` Horizon Bubbles (`horizon_clean`: `6,030` links kept, **0.01s**, **7.8 MB** RSS)."
+      }
+    },
+    {
+      "id": "C6",
+      "kind": "empirical",
+      "carries": [
+        "R1-IMPL"
+      ],
+      "summary": "horizon_resolve collapses 840 tandem duplications across 20 GFA v1.1 walks (4,500 steps), saving 308,760.9 MDL bits in 4.48s at 24.0 MB peak RSS.",
+      "source": {
+        "file": "docs/BENCHMARK_RESULTS.md",
+        "quote": "| GFA E-Graph Resolver | `horizon_resolve --collapse-dups` | 200 segs, 20 walks x 225 steps (`4,500` steps) | `280` windows, `840` dups collapsed, `308,760.9` bits saved | **24.0 MB** | 4.48s |"
+      }
+    },
+    {
+      "id": "C7",
+      "kind": "capability",
+      "carries": [
+        "R1-IMPL"
+      ],
+      "summary": "horizon_wga --graph expands bidirected minus-orientation GFA links and uses MASK_W10+MASK_RY20 seeded subgraph isolation (align_seq_to_dag_seeded), aligning a 96-bp query in 0.0031s.",
+      "source": {
+        "file": "docs/PANGENOME_SUITE.md",
+        "quote": "`align_seq_to_dag_seeded` uses `MASK_W10` + `MASK_RY20` intra-node spaced seeds (requiring `>=14` bp segments) and ancestor-then-descendant reachability closure to isolate relevant DAG components before running `align_seq_to_dag_mdl` (bypassed when `nodes.len() <= 8` or `seed_hits.is_empty()`)."
+      }
+    },
+    {
+      "id": "C8",
+      "kind": "empirical",
+      "carries": [],
+      "summary": "Replacing HashSet with sorted/deduplicated Vec reduces pair-collection overhead, while ContigIndex HashMap seed maps still consume ~0.29 GB/Mbp (26.5 GB RSS on full 170.8 Mbp chr6 before cancellation).",
+      "source": {
+        "file": "docs/BENCHMARK_RESULTS.md",
+        "quote": "(After replacing `HashSet<(usize, usize)>` with sorted/deduplicated `Vec<(usize, usize)>`, full 170.8 Mbp `GRCh38.chr6` vs 110.7 Mbp `CHM13.chr6` still reached **26.5 GB** RSS and `47:33` CPU before cancellation on the 30 GiB host due to `ContigIndex`'s per-position `HashMap<u64, Vec<usize>>` seed maps, ~0.29 GB/Mbp.)"
+      }
+    }
+  ],
+  "lenses": [
+    "correctness",
+    "sampling",
+    "statistics",
+    "provenance",
+    "inference",
+    "prior-art",
+    "reproduction"
+  ],
+  "attacked": [
+    {
+      "path": "docs/BENCHMARK_RESULTS.md",
+      "snapshot": "ATTACKED-BENCHMARK_RESULTS.md",
+      "read": "working tree",
+      "pinned": true,
+      "sha256": "9b9b2288547680018e1a0cefb6286aed97b3b92d0b80a533e752ad5822d6fe0e"
+    }
+  ],
+  "code": {
+    "horizon-aligner": "b18f25b444985a5b7f1db38fd9dd312240230839"
+  },
+  "drift_reviewed": [
+    {
+      "path": "docs/BENCHMARK_RESULTS.md",
+      "sha256": "da408c8dd26cc9553a8c224f760b574e636ddd9ac42c329dbdb6820cc9d53069",
+      "by": "runner",
+      "date": "2026-11-19",
+      "quotes": [
+        "Pairwise WGA results use the divergence-adaptive Pair-HMM (`HmmParams`: `identity_prior`, `gap_open_bits`, and `gap_extend_bits` estimated from LCB anchors with Beta prior shrinkage in `src/mdl/mod.rs`), BOCPD compositional profiles (`src/bocpd.rs`), and normalized Pair-HMM transitions (`src/mdl/dp.rs`, `src/mdl/dag.rs`). Note that `mdl_xdrop_extend` (`src/mdl/dp.rs`) still uses static defaults (`IDENTITY_PRIOR`, `GAP_OPEN_BITS`, `GAP_EXTEND_BITS`), `horizon_wga --graph` passes `&HmmParams::default()`, `KARLIN_MDL_COEFF = 0.55` remains a fixed constant, and MAF-extracted FASTAs sample homologous blocks. Earlier WGA rows (`multiz100way`, `cactus447way`, `multiz470way`, `cactus241way chr22_random`, `GRCh38.chr22 vs CHM13.chr22`) were recorded prior to `0e70693`/`b18f25b` and have not yet been re-run on `b18f25b` (`cactus241way chr22 1MB` was re-run on `b18f25b` and shifted from `64.3%` to `63.6%` recall).",
+        "* **Multi-species merging (`horizon_merge`):** Implemented in `src/bin/horizon_merge.rs` (best-score interval netting; no multi-species benchmark row or binary unit tests yet).",
+        "  * Two-pass graph liftover (`horizon_lift --bridge-bp 10` on 500 `+`-strand `GRCh38.chr22:16.0M-49.9M` 1-kb windows -> `CHM13.chr22`, excluding `0-16.0M` p-arm/centromere): **256.60s**, **619.2 MB** peak RSS (`469` exact including `<=10 bp` bridged gaps, `1` partial, `19` split, `11` unmapped; no external coordinate truth oracle).",
+        "  * Pairwise alignment (`horizon_wga --resolve-dups` on `GRCh38.chr22` vs `CHM13.chr22`, pre-`0e70693`): **154.92s**, **24,365,611** many-to-many `(x, y)` aligned pairs (non-deduplicated ratio `68.5%` vs `35.6 Mbp` `CHM13.chr22` q-arm), `60` fwd / `4` rev LCBs, `9,690` Horizon Bubbles.",
+        "  * Real HPRC `chr22` Pericentromere 5 Mbp (`GRCh38.chr22:15.5M-20.5M` vs `CHM13.chr22:15.73M-20.73M`): **23.45s**, **3,084.5 MB** peak RSS, **5,894,191** many-to-many `(x, y)` aligned pairs, `246` fwd / `184` rev LCBs, `17,789` Horizon Bubbles (`horizon_clean` on `*`-sequence `sup>0` pairwise GFA: `6,030` links kept, `0` severed, **0.01s**, **7.8 MB** RSS).",
+        "  * Real HPRC `chr6` Pericentromere 5 Mbp (`GRCh38.chr6:61.0M-66.0M` vs `CHM13.chr6:61.4M-66.4M`): **17.60s**, **3,084.5 MB** peak RSS, **4,785,880** many-to-many `(x, y)` aligned pairs, `264` fwd / `326` rev LCBs, `24,916` Horizon Bubbles (`horizon_clean` on `*`-sequence `sup>0` pairwise GFA: `2,776` links kept, `0` severed, **0.01s**, **5.0 MB** RSS).",
+        "  * `chr6` q-arm 20 Mbp (`GRCh38.chr6:65M-85M` vs `CHM13.chr6:61.4M-81.4M`): **81.33s**, **5,863.3 MB** peak RSS (`0.293 GB/Mbp`), **15,021,911** many-to-many `(x, y)` aligned pairs (`75.1%` non-deduplicated ratio), `36` fwd / `41` rev LCBs, `21,475` Horizon Bubbles. (After replacing `HashSet<(usize, usize)>` with sorted/deduplicated `Vec<(usize, usize)>`, full `GRCh38.chr6` `170.8 Mbp` vs `CHM13.chr6` `110.7 Mbp` reached **26.5 GB** mid-run RSS \u2014 `0.094 GB/Mbp` combined, `0.155 GB/Mbp` ref-only \u2014 at `47:33` CPU before cancellation on the 30 GiB host due to `ContigIndex` `HashMap<u64, Vec<usize>>` seed maps.)",
+        "| GFA Junction Cleaner | `horizon_clean` | `*`-seq pairwise `chr22`/`chr6` peri GFAs (`6,030` / `2,776` `sup>0` links) | `6,030` / `2,776` kept, `0` severed (no-op) | **7.8 MB** / **5.0 MB** | 0.01s |",
+        "| Synthetic E-Graph Resolver | `horizon_resolve --collapse-dups` | Synthetic `200`-seg `ACGT` repeat, `20` identical walks (`--divergence 0.02`) | `280` windows, `840` dups collapsed, `308,760.9` analytical `2*len` bits | **24.0 MB** | 4.48s |",
+        "| Seeded DAG/POA Alignment | `horizon_wga --graph` | 4-node diamond GFA (`<=8` node bypass) + 96-bp query | `>n0>n2>n3`, `96/96` bp (`124.4` bits) | - | 0.0031s |"
+      ],
+      "note": "Applied Round 2 adjudicator-endorsed free doc repairs (stale commit caveats, synthetic fixture labels, many-to-many pair wording, and RSS denominator)."
+    }
+  ],
+  "sealed": {
+    "attack-L1-correctness.md": "9a7c332f2fe00aec1d53679372a8e124c2f03d75ba3359e6fbc79de6e8cfff56",
+    "attack-L2-sampling.md": "512b076b8229fa9db2485302e3f8dfc377d9125dbcad0201cc0413274683b1e8",
+    "attack-L3-statistics.md": "3952ea463b863f756d559c03e5d0d400a15321cd0a433b6f4fd0148a6deecd1a",
+    "attack-L4-provenance.md": "035443131fdb9c3172efb2f8db7a1c04bc0ad6f11f62356595be238d4ff2aa96",
+    "attack-L5-inference.md": "42a67fc30cdc2798afc38240271b34839a2d775eb9a545c042962059b3d4a578",
+    "attack-L6-prior-art.md": "9cc5696df060c1a838e2c0f7f2e67d3aeab660843fea0ab4698a9c901fff30ac",
+    "attack-L7-reproduction.md": "e28e4b5da36fd89123556a048878df7e9ef4fe314bb30c63a8107010ca6fe682"
+  },
+  "aborted": [],
+  "unbriefed": [],
+  "lens_drops": {},
+  "briefs_required": true,
+  "runner_is_author": true,
+  "claim_list_author": "runner",
+  "human_claim": "",
+  "carried": [
+    {
+      "from": 1,
+      "kind": "open",
+      "item": "{\"id\": \"R1-IMPL\", \"summary\": \"Implement and benchmark horizon_clean, horizon_resolve, horizon_lift, and horizon_wga --graph on HPRC v1.0/v1.1 (GRCh38 vs CHM13) and HLA/centromere loci.\"}",
+      "id": "R1-IMPL"
+    },
+    {
+      "from": 1,
+      "kind": "open",
+      "item": "{\"id\": \"R1-GFA\", \"summary\": \"Fix empty L-line orientation panic in src/gfa/mod.rs:94,96, add unit tests, and wire src/coord.rs into src/lib.rs.\"}",
+      "id": "R1-GFA"
+    },
+    {
+      "from": 1,
+      "kind": "open",
+      "item": "{\"id\": \"R1-HMM\", \"summary\": \"Normalize HMM transition weights in src/mdl/dp.rs:105-167 (currently summing >1.0 from M and Ix/Iy) and derive/calibrate gap-bit penalties.\"}",
+      "id": "R1-HMM"
+    }
+  ],
+  "dropped": [],
+  "corrections": [
+    {
+      "id": "COR-1",
+      "finding": "L1-F2 / L3-F1 / L4-F1 / L5-F1 / L7-F1",
+      "claim": "C2",
+      "kind": "doc-precision",
+      "status": "applied",
+      "file": "docs/BENCHMARK_RESULTS.md",
+      "absent": "All results were generated out-of-the-box",
+      "present": "Pairwise WGA results use the divergence-adaptive Pair-HMM",
+      "note": "Qualified pre-0e70693/b18f25b WGA rows, noted mdl_xdrop_extend static defaults and horizon_wga --graph HmmParams::default()."
+    },
+    {
+      "id": "COR-2",
+      "finding": "L1-F1 / L2-F2 / L4-F2 / L5-F2 / L7-F2",
+      "claim": "C3",
+      "kind": "doc-status-clarification",
+      "status": "applied",
+      "file": "docs/STRATEGIC_PLAN.md",
+      "absent": "unit-tested (`39` passing tests)",
+      "present": "40` passing tests + `1` ignored; `4` of `9` binaries",
+      "note": "Corrected test count to 40 passing + 1 ignored, noted 4/9 binaries have 0 unit tests, and clarified stdin support."
+    },
+    {
+      "id": "COR-3",
+      "finding": "L1-F3 / L2-F3 / L5-F3",
+      "claim": "C4",
+      "kind": "doc-precision",
+      "status": "applied",
+      "file": "docs/BENCHMARK_RESULTS.md",
+      "absent": "500 `GRCh38.chr22` 1-kb windows -> `CHM13.chr22`): **256.60s**",
+      "present": "500 `+`-strand `GRCh38.chr22:16.0M-49.9M` 1-kb windows",
+      "note": "Documented +-strand 16.0M-49.9M sampling, --bridge-bp gap absorption, and absence of external coordinate truth oracle."
+    },
+    {
+      "id": "COR-4",
+      "finding": "L1-F4 / L2-F4 / L3-F2 / L5-F4 / L7-F4",
+      "claim": "C5",
+      "kind": "doc-precision",
+      "status": "applied",
+      "file": "docs/BENCHMARK_RESULTS.md",
+      "absent": "horizon_wga --rbest --resolve-dups",
+      "present": "many-to-many `(x, y)` aligned pairs",
+      "note": "Clarified many-to-many (x,y) pair counts, removed unparsed --rbest flag, and noted horizon_clean was a no-op on *-seq sup>0 GFAs."
+    },
+    {
+      "id": "COR-5",
+      "finding": "L2-F5 / L3-F3 / L4-F5 / L5-F5 / L7-F5",
+      "claim": "C6",
+      "kind": "doc-precision",
+      "status": "applied",
+      "file": "docs/BENCHMARK_RESULTS.md",
+      "absent": "| GFA E-Graph Resolver | `horizon_resolve --collapse-dups` | 200 segs",
+      "present": "| Synthetic E-Graph Resolver | `horizon_resolve --collapse-dups` | Synthetic `200`-seg `ACGT` repeat",
+      "note": "Relabeled 10k GFA benchmark as synthetic ACGT-repeat fixture with fixed --divergence 0.02 and analytical 2*len_bp cost."
+    },
+    {
+      "id": "COR-6",
+      "finding": "L1-F6 / L2-F6 / L3-F4 / L5-F6 / L6-F7",
+      "claim": "C7",
+      "kind": "doc-precision",
+      "status": "applied",
+      "file": "docs/PANGENOME_SUITE.md",
+      "absent": "forward/backward reachability closure to isolate relevant DAG components",
+      "present": "ancestor-then-descendant reachability closure",
+      "note": "Clarified ancestor-then-descendant closure, <=8-node bypass, <14bp segment blind spot, and omitted -log2(out_degree)."
+    },
+    {
+      "id": "COR-7",
+      "finding": "L1-F7 / L3-F5 / L5-F7 / L7-F6",
+      "claim": "C8",
+      "kind": "doc-precision",
+      "status": "applied",
+      "file": "docs/BENCHMARK_RESULTS.md",
+      "absent": "seed maps, ~0.29 GB/Mbp.",
+      "present": "0.094 GB/Mbp` combined, `0.155 GB/Mbp` ref-only",
+      "note": "Separated 20 Mbp 0.293 GB/Mbp rate from cancelled full-chr6 0.094 GB/Mbp combined / 0.155 GB/Mbp ref-only mid-run RSS."
+    }
+  ],
+  "findings": [
+    {
+      "lens": "correctness",
+      "id": "F1",
+      "flaw": "C3: cargo test has 40 passing + 1 ignored tests (not 39), and 4 of 9 binaries have 0 unit tests"
+    },
+    {
+      "lens": "correctness",
+      "id": "F2",
+      "flaw": "C2: mdlxdropextend uses unnormalized hardcoded constants; bandedmdlgapwithparams has a stateless Viterbi trace"
+    },
+    {
+      "lens": "correctness",
+      "id": "F3",
+      "flaw": "C4: horizonlift --bridge-bp 10 absorbs unmapped gaps into EXACT counts, and stdin (\"-\") fails on Pass 2"
+    },
+    {
+      "lens": "correctness",
+      "id": "F4",
+      "flaw": "C5: 5,894,191 aligned pairs on a 5 Mbp locus reflects many-to-many LCB multiplicity, and horizonclean never severs"
+    },
+    {
+      "lens": "correctness",
+      "id": "F5",
+      "flaw": "C6: horizonresolve --collapse-dups corrupts GFA v1.1 W-line start/end coordinates and discards stdout when --o"
+    },
+    {
+      "lens": "correctness",
+      "id": "F6",
+      "flaw": "C7: alignseqtodagseeded reachability closure expands to full ancestor-descendant components rather than s-t bubble"
+    },
+    {
+      "lens": "correctness",
+      "id": "F7",
+      "flaw": "C8: ~0.29 GB/Mbp does not match 26.5 GB on 170.8 + 110.7 Mbp (0.094 GB/Mbp)"
+    },
+    {
+      "lens": "correctness",
+      "id": "F8",
+      "flaw": "C1: streamgfa ignores GFA v1.0 C and GFA v1.1 J records and silently coerces invalid W coordinates to 0"
+    },
+    {
+      "lens": "sampling",
+      "id": "F1",
+      "flaw": "C2: estimatehmmparams uses an unstratified prefix sample, ascertainment-biased anchors, and is bypassed by horizon"
+    },
+    {
+      "lens": "sampling",
+      "id": "F2",
+      "flaw": "C3: Four of nine binaries have zero unit tests and the five tested binaries sample one synthetic fixture each"
+    },
+    {
+      "lens": "sampling",
+      "id": "F3",
+      "flaw": "C4: horizonlift 500-window sample excludes the entire 0\u201316.0 Mbp chr22 p-arm/centromere and all --strand interv"
+    },
+    {
+      "lens": "sampling",
+      "id": "F4",
+      "flaw": "C5: horizonclean benchmarked on sequence-less -GFA (0 links severed) and pre-paired 5 Mbp pericentromere slices"
+    },
+    {
+      "lens": "sampling",
+      "id": "F5",
+      "flaw": "C6: horizonresolve benchmark uses a synthetic 200-segment ACGT-repeat fixture, not HPRC"
+    },
+    {
+      "lens": "sampling",
+      "id": "F6",
+      "flaw": "C7: alignseqtodagseeded drops seeds in short nodes (<14/<25 bp) and high-copy/low-complexity windows, and over"
+    },
+    {
+      "lens": "sampling",
+      "id": "F7",
+      "flaw": "C1 & C8: Checked and survived under the sampling lens"
+    },
+    {
+      "lens": "sampling",
+      "id": "F8",
+      "flaw": "Framing bias: Claim list omits homologous-block MAF filtering and pending B10K data"
+    },
+    {
+      "lens": "statistics",
+      "id": "F1",
+      "flaw": "C2: estimatehmmparams is biased and truncated, mdlxdropextend ignores HmmParams, and bocpdgcprofile miscla"
+    },
+    {
+      "lens": "statistics",
+      "id": "F2",
+      "flaw": "C5: 5,894,191 aligned pairs on a 5 Mbp locus is 117.9% multi-mapping inflation, and horizonclean never exercised"
+    },
+    {
+      "lens": "statistics",
+      "id": "F3",
+      "flaw": "C6: 308,760.9 MDL bits saved is an artifact of double-charging segment sequences and hardcoding divergence = 0.02"
+    },
+    {
+      "lens": "statistics",
+      "id": "F4",
+      "flaw": "C7: alignseqtodagmdl omits graph-branching penalties and resets BOCPD at every node"
+    },
+    {
+      "lens": "statistics",
+      "id": "F5",
+      "flaw": "C8: ~0.29 GB/Mbp misapplies the 20 Mbp q-arm rate to the cancelled 281.5 Mbp full-chr6 run"
+    },
+    {
+      "lens": "statistics",
+      "id": "F6",
+      "flaw": "Claim-list steering: C1\u2013C8 omit held-out WGA test regressions and uncalibrated KARLINMDLCOEFF"
+    },
+    {
+      "lens": "provenance",
+      "id": "F1",
+      "flaw": "C2: Stale multi-commit provenance, missing benchmark datasets, and hardcoded HmmParams::default() in --graph"
+    },
+    {
+      "lens": "provenance",
+      "id": "F2",
+      "flaw": "C3: Unit test count is 40 (not 39) and 4 of 9 named binaries have 0 unit tests"
+    },
+    {
+      "lens": "provenance",
+      "id": "F3",
+      "flaw": "C4: horizonlift /tmp/ output predates 0e70693 and b18f25b edits to horizonlift.rs"
+    },
+    {
+      "lens": "provenance",
+      "id": "F4",
+      "flaw": "C5: horizonclean benchmarked on /tmp/ pairwise horizonwga GFA (not HPRC graph) with unlogged runtime/RSS"
+    },
+    {
+      "lens": "provenance",
+      "id": "F5",
+      "flaw": "C6: horizonresolve benchmark is an undisclosed synthetic toy GFA placed under HPRC Pangenome Benchmarks"
+    },
+    {
+      "lens": "provenance",
+      "id": "F6",
+      "flaw": "C8: Cancelled chr6 26.5 GB / 47:33 run has no saved log and its /tmp/ trace predates b18f25b"
+    },
+    {
+      "lens": "provenance",
+      "id": "F7",
+      "flaw": "Carried R1-IMPL: horizonresolve and horizonwga --graph still lack HPRC/HLA/centromere benchmarks"
+    },
+    {
+      "lens": "inference",
+      "id": "F1",
+      "flaw": "C2 falsely attributes all benchmark results to divergence-adaptive HmmParams, and estimatehmmparams infers diver"
+    },
+    {
+      "lens": "inference",
+      "id": "F2",
+      "flaw": "C3 infers from a crate-wide test count that all listed binaries are unit-tested"
+    },
+    {
+      "lens": "inference",
+      "id": "F3",
+      "flaw": "C4 infers 469 exact liftover windows under --bridge-bp 10 without accounting for bridged gap inflation or ground-t"
+    },
+    {
+      "lens": "inference",
+      "id": "F4",
+      "flaw": "C5 cites a zero-severed horizonclean run on chr22 pericentromere as cleaning evidence and lacks accuracy validati"
+    },
+    {
+      "lens": "inference",
+      "id": "F5",
+      "flaw": "C6 reports 308,760.9 bits saved from an assumed --divergence 0.02 on synthetic walks without sequence comparison o"
+    },
+    {
+      "lens": "inference",
+      "id": "F6",
+      "flaw": "C7 claims reachability closure isolates relevant DAG components, but forward-after-backward closure activates the enti"
+    },
+    {
+      "lens": "inference",
+      "id": "F7",
+      "flaw": "C8 attaches an inconsistent ~0.29 GB/Mbp scaling rate to a cancelled 26.5 GB / 170.8 Mbp run without heap profil"
+    },
+    {
+      "lens": "prior-art",
+      "id": "F1",
+      "flaw": "C1: streamgfa implementation matches claim, though empty L-line orientation defaulting departs from GFA v1.0/v1.1 s"
+    },
+    {
+      "lens": "prior-art",
+      "id": "F2",
+      "flaw": "C2: Adaptive Pair-HMM parameter estimation from anchors is prior art (last-train, Lunter 2007), and identityprior i"
+    },
+    {
+      "lens": "prior-art",
+      "id": "F3",
+      "flaw": "C3: Implementation and test-count claim makes no prior-art assertion"
+    },
+    {
+      "lens": "prior-art",
+      "id": "F4",
+      "flaw": "C4: horizonlift benchmark omits established pangenome liftover prior art (odgi position, halLiftover, vg surject"
+    },
+    {
+      "lens": "prior-art",
+      "id": "F5",
+      "flaw": "C5: HPRC chr22 pericentromere benchmark makes no prior-art assertion"
+    },
+    {
+      "lens": "prior-art",
+      "id": "F6",
+      "flaw": "C6: Synthetic E-Graph Resolver benchmark makes no prior-art assertion"
+    },
+    {
+      "lens": "prior-art",
+      "id": "F7",
+      "flaw": "C7: Seeded DAG reachability + banded DP is prior art (GraphAligner, vg map/GCSA2, vg giraffe, minigraph), and"
+    },
+    {
+      "lens": "prior-art",
+      "id": "F8",
+      "flaw": "C8: ContigIndex RAM bottleneck (26.5 GB on chr6) is confirmed and stems from omitting minimizer/syncmer sampling"
+    },
+    {
+      "lens": "prior-art",
+      "id": "F9",
+      "flaw": "Meta-finding: Round 2 claim list steers away from missing pangenome prior-art citations and baselines"
+    },
+    {
+      "lens": "reproduction",
+      "id": "F1",
+      "flaw": "C2: \"All results were generated out-of-the-box\" is refuted by stale pre-change benchmarks and missing data/scripts"
+    },
+    {
+      "lens": "reproduction",
+      "id": "F2",
+      "flaw": "C3: cargo test runs 40 passing tests (not 39), and 4 of 9 binaries in src/bin/ have 0 unit tests"
+    },
+    {
+      "lens": "reproduction",
+      "id": "F3",
+      "flaw": "C4: horizonlift counts match /tmp/ cache, but run predates 0e70693 and lacks repo inputs"
+    },
+    {
+      "lens": "reproduction",
+      "id": "F4",
+      "flaw": "C5: chr22 pericentromere horizonwga and horizonclean counts reproduce on /tmp/ files, but input generation is"
+    },
+    {
+      "lens": "reproduction",
+      "id": "F5",
+      "flaw": "C6: horizonresolve --collapse-dups reproduces exact counts on /tmp/benchresolve10k.gfa, but the synthetic GFA has"
+    },
+    {
+      "lens": "reproduction",
+      "id": "F6",
+      "flaw": "C8: ContigIndex structure verified in code, but cancelled chr6 OOM run has no saved log or reproducible harness"
+    }
+  ],
+  "open": [
+    {
+      "id": "R2-HMM-XDROP",
+      "summary": "Wire HmmParams and normalized transitions into mdl_xdrop_extend (src/mdl/dp.rs) and horizon_wga --graph, fix N-base handling in bocpd_gc_profile, and re-run all WGA benchmarks on a single pinned commit (partially carries R1-HMM)."
+    },
+    {
+      "id": "R2-RESOLVE-LIFT",
+      "summary": "Update W-line start/end coordinates and L links in horizon_resolve --collapse-dups, add horizon_clean sup>0 severing + S-tag preservation, and add unique-base coverage + head-to-head pangenome baselines (minimap2/odgi/vg) and unit tests for the 4 untested binaries."
+    },
+    {
+      "id": "R2-INDEX-RAM",
+      "summary": "Replace ContigIndex per-position HashMap<u64, Vec<usize>> with minimizer/flat-sorted k-mer indexing to bring full >100 Mbp chromosome alignment well below 26.5 GB RSS."
+    }
+  ],
+  "unchallenged": [],
+  "discharges": {},
+  "decisions": [],
+  "sealed_blobs": {
+    "attack-L1-correctness.md": {
+      "blob": "d1df41c0a6dea221e201c3ce421b11f0da2dc21a",
+      "ref": "refs/round/seal/2/attack-L1-correctness.md"
+    },
+    "attack-L2-sampling.md": {
+      "blob": "01a405a6e2916c91bdc197fade918b0093d79307",
+      "ref": "refs/round/seal/2/attack-L2-sampling.md"
+    },
+    "attack-L3-statistics.md": {
+      "blob": "78cba1b041705fec0723a1ad99185379d04c9c1b",
+      "ref": "refs/round/seal/2/attack-L3-statistics.md"
+    },
+    "attack-L4-provenance.md": {
+      "blob": "7bd490b55e5425d7c3266c8acca91ed75cebb070",
+      "ref": "refs/round/seal/2/attack-L4-provenance.md"
+    },
+    "attack-L5-inference.md": {
+      "blob": "b3560e3cf4d0b351718c43d87887e2b73befc0bb",
+      "ref": "refs/round/seal/2/attack-L5-inference.md"
+    },
+    "attack-L6-prior-art.md": {
+      "blob": "1e1070ea3e3936ec7835fd18c1c82312d46ff8e3",
+      "ref": "refs/round/seal/2/attack-L6-prior-art.md"
+    },
+    "attack-L7-reproduction.md": {
+      "blob": "68d25f95c48307f81b18f99813f8956f5c7e0679",
+      "ref": "refs/round/seal/2/attack-L7-reproduction.md"
+    }
+  },
+  "diversity": {
+    "attacks": 7,
+    "lenses": [
+      "correctness",
+      "sampling",
+      "statistics",
+      "provenance",
+      "inference",
+      "prior-art",
+      "reproduction"
+    ],
+    "mean_pairwise_similarity": 0.244,
+    "max_pairwise_similarity": 0.452,
+    "most_similar_pair": [
+      "attack-L4-provenance.md",
+      "attack-L7-reproduction.md"
+    ],
+    "claims_answered": 8,
+    "claims_corroborated": 8,
+    "claims_single_voter": 0,
+    "claims_unanimous": 0,
+    "verdict_agreement": 0.0,
+    "findings_mode": "synthesized",
+    "findings_filed": 51,
+    "findings_per_attacker": {
+      "attack-L1-correctness.md": 8,
+      "attack-L2-sampling.md": 8,
+      "attack-L3-statistics.md": 6,
+      "attack-L4-provenance.md": 7,
+      "attack-L5-inference.md": 7,
+      "attack-L6-prior-art.md": 9,
+      "attack-L7-reproduction.md": 6
+    },
+    "distinct_flaws": 51,
+    "flaws_named_by_more_than_one_attacker": 0,
+    "duplicate_rate": 0.0
+  },
+  "outcome": "NARROWED_AND_DOCS_REPAIRED",
+  "class": "implementation-benchmarks-and-documentation-provenance",
+  "landed": "All 7 lenses + completeness critic ran and were adjudicated; 51 findings narrowed C2-C8, separating verified implementations from stale pre-b18f25b WGA rows, synthetic E-graph fixtures, many-to-many pair counts, and unimplemented stdin/walk-splitting edge cases; free doc repairs applied across STRATEGIC_PLAN.md, PANGENOME_SUITE.md, and BENCHMARK_RESULTS.md.",
+  "overturned": "L7 overturned L7-F3 premise that 0e70693 changed horizon_lift GFA parsing (0e70693 only removed unused variables and test unwrap()s).",
+  "survived": "stream_gfa (.gfa/.gfa.gz/stdin) and coord.rs (R1-GFA discharged); all 9 binaries in src/bin/ including horizon_clean, horizon_resolve, horizon_lift, horizon_wga --graph with 40 passing tests; real 5 Mbp HPRC chr22/chr6 pericentromere alignments; Vec<(usize,usize)> pair-collection replacement."
+}
