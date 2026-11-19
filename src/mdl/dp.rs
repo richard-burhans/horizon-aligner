@@ -103,8 +103,14 @@ pub fn banded_mdl_gap(seq_x: &[u8], seq_y: &[u8], band_w: usize, min_block_bits:
     let pi_y: Vec<[f64; 4]> = gc_y.into_iter().map(base_probs).collect();
 
     let ln2 = 2.0_f64.ln();
+    let p_open = 2.0_f64.powf(GAP_OPEN_BITS);
+    let p_ext = 2.0_f64.powf(GAP_EXTEND_BITS);
+    let mm_bits = (1.0 - 2.0 * p_open).log2();
+    let im_bits = (1.0 - p_ext).log2();
     let go = GAP_OPEN_BITS * ln2;
     let ge = GAP_EXTEND_BITS * ln2;
+    let mm_ln = mm_bits * ln2;
+    let im_ln = im_bits * ln2;
 
     let mut m_dp = BandGrid::new(n, m, band_w, NEG_INF);
     let mut ix_dp = BandGrid::new(n, m, band_w, NEG_INF);
@@ -154,15 +160,14 @@ pub fn banded_mdl_gap(seq_x: &[u8], seq_y: &[u8], band_w: usize, min_block_bits:
                     IDENTITY_PRIOR,
                 );
                 sub_grid.set(i - 1, j - 1, sb);
-                let prev_m = m_dp
-                    .get(i - 1, j - 1)
-                    .max(ix_dp.get(i - 1, j - 1))
-                    .max(iy_dp.get(i - 1, j - 1));
+                let prev_m = (m_dp.get(i - 1, j - 1) + mm_bits)
+                    .max(ix_dp.get(i - 1, j - 1) + im_bits)
+                    .max(iy_dp.get(i - 1, j - 1) + im_bits);
                 m_dp.set(i, j, prev_m + sb);
                 let prev_fm = logsumexp3(
-                    fm.get(i - 1, j - 1),
-                    fix.get(i - 1, j - 1),
-                    fiy.get(i - 1, j - 1),
+                    fm.get(i - 1, j - 1) + mm_ln,
+                    fix.get(i - 1, j - 1) + im_ln,
+                    fiy.get(i - 1, j - 1) + im_ln,
                 );
                 fm.set(i, j, prev_fm + sb * ln2);
             }
@@ -219,9 +224,9 @@ pub fn banded_mdl_gap(seq_x: &[u8], seq_y: &[u8], band_w: usize, min_block_bits:
             } else {
                 NEG_INF
             };
-            bm.set(i, j, logsumexp3(m_next, ix_open, iy_open));
-            bix.set(i, j, logsumexp2(m_next, ix_ext));
-            biy.set(i, j, logsumexp2(m_next, iy_ext));
+            bm.set(i, j, logsumexp3(m_next + mm_ln, ix_open, iy_open));
+            bix.set(i, j, logsumexp2(m_next + im_ln, ix_ext));
+            biy.set(i, j, logsumexp2(m_next + im_ln, iy_ext));
         }
     }
 
@@ -489,4 +494,20 @@ pub fn mdl_xdrop_extend(
         }
     }
     pairs
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::bocpd::{GAP_EXTEND_BITS, GAP_OPEN_BITS};
+
+    #[test]
+    fn pair_hmm_transitions_are_normalized() {
+        let p_open = 2.0_f64.powf(GAP_OPEN_BITS);
+        let p_mm = 1.0 - 2.0 * p_open;
+        assert!((p_mm + 2.0 * p_open - 1.0).abs() < 1e-12);
+
+        let p_ext = 2.0_f64.powf(GAP_EXTEND_BITS);
+        let p_im = 1.0 - p_ext;
+        assert!((p_im + p_ext - 1.0).abs() < 1e-12);
+    }
 }

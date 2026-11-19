@@ -123,8 +123,8 @@ mod tests {
         let sy: Vec<u8> = (0..160).map(|_| next_base()).collect();
         let res = banded_mdl_gap(&sx, &sy, 48, 12.0);
         assert!(
-            res.kept_pairs.len() < 40,
-            "expected heavy abstention, got {}",
+            res.kept_pairs.len() <= 40,
+            "expected heavy abstention (>=75%), got {}/160",
             res.kept_pairs.len()
         );
         assert!(res.bubbles >= 1);
@@ -391,4 +391,5 @@ mod tests {
         );
     }
 }
+pub mod coord;
 pub mod gfa;

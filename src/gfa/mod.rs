@@ -1,23 +1,23 @@
-//! Zero-copy, streaming parser for Graphical Fragment Assembly (GFA v1.0 and v1.1).
-//! 
-//! This module replaces external dependencies like `vg` and `odgi` by providing a native,
-//! memory-efficient streaming reader capable of parsing massive (>10GB) pangenome graphs.
+//! Buffered line-streaming parser for Graphical Fragment Assembly (GFA v1.0 and v1.1).
+//!
+//! Provides a streaming reader capable of parsing multi-gigabyte (e.g. 12 GB HPRC)
+//! pangenome graphs record-by-record without loading the full graph topology into RAM.
 
-use anyhow::{Result, Context};
-use std::io::{BufRead, BufReader, Read};
+use anyhow::Result;
+use flate2::read::MultiGzDecoder;
 use std::fs::File;
+use std::io::{self, BufRead, BufReader};
 use std::path::Path;
-use flate2::read::GzDecoder;
 
 /// Represents a GFA Segment (S line)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GfaSegment {
     pub name: String,
     pub sequence: Vec<u8>,
 }
 
 /// Represents a GFA Link (L line)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GfaLink {
     pub from: String,
     pub from_orient: u8, // '+' or '-'
@@ -27,7 +27,7 @@ pub struct GfaLink {
 }
 
 /// Represents a GFA v1.0 Path (P line)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GfaPath {
     pub name: String,
     pub segment_names: String, // Comma separated, e.g. "14+,15-"
@@ -35,7 +35,7 @@ pub struct GfaPath {
 }
 
 /// Represents a GFA v1.1 Walk (W line), used by Minigraph-Cactus
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GfaWalk {
     pub sample: String,
     pub haplotype: String,
@@ -45,14 +45,13 @@ pub struct GfaWalk {
     pub walk: String, // e.g. ">1>2<3>4"
 }
 
-/// Stream a GFA (gzipped or plaintext) and invoke callbacks for each line type.
-/// This allows processing multi-gigabyte graphs without exhausting RAM.
+/// Stream a GFA from a file path (`.gfa` or `.gfa.gz`) or `"-"` for `stdin`.
 pub fn stream_gfa<P, FS, FL, FP, FW>(
     path: P,
-    mut on_segment: FS,
-    mut on_link: FL,
-    mut on_path: FP,
-    mut on_walk: FW,
+    on_segment: FS,
+    on_link: FL,
+    on_path: FP,
+    on_walk: FW,
 ) -> Result<()>
 where
     P: AsRef<Path>,
@@ -61,25 +60,48 @@ where
     FP: FnMut(GfaPath) -> Result<()>,
     FW: FnMut(GfaWalk) -> Result<()>,
 {
-    let file = File::open(path.as_ref())?;
-    
-    // Auto-detect gzip by extension
-    let is_gz = path.as_ref().extension().map_or(false, |ext| ext == "gz");
-    
-    let mut reader: Box<dyn BufRead> = if is_gz {
-        Box::new(BufReader::new(GzDecoder::new(file)))
-    } else {
-        Box::new(BufReader::new(file))
-    };
+    let path_ref = path.as_ref();
+    if path_ref == Path::new("-") {
+        let stdin = io::stdin();
+        let reader = BufReader::new(stdin.lock());
+        return stream_gfa_reader(reader, on_segment, on_link, on_path, on_walk);
+    }
 
+    let file = File::open(path_ref)?;
+    let is_gz = path_ref.extension().is_some_and(|ext| ext == "gz");
+    if is_gz {
+        let reader = BufReader::new(MultiGzDecoder::new(file));
+        stream_gfa_reader(reader, on_segment, on_link, on_path, on_walk)
+    } else {
+        let reader = BufReader::new(file);
+        stream_gfa_reader(reader, on_segment, on_link, on_path, on_walk)
+    }
+}
+
+/// Stream GFA records from any buffered reader.
+pub fn stream_gfa_reader<R, FS, FL, FP, FW>(
+    mut reader: R,
+    mut on_segment: FS,
+    mut on_link: FL,
+    mut on_path: FP,
+    mut on_walk: FW,
+) -> Result<()>
+where
+    R: BufRead,
+    FS: FnMut(GfaSegment) -> Result<()>,
+    FL: FnMut(GfaLink) -> Result<()>,
+    FP: FnMut(GfaPath) -> Result<()>,
+    FW: FnMut(GfaWalk) -> Result<()>,
+{
     let mut line = String::new();
     while reader.read_line(&mut line)? > 0 {
-        if line.is_empty() || line.starts_with('#') || line.starts_with('H') {
+        let trimmed = line.trim_end_matches(&['\r', '\n'][..]);
+        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with('H') {
             line.clear();
             continue;
         }
 
-        let mut parts = line.trim_end().split('\t');
+        let mut parts = trimmed.split('\t');
         let record_type = parts.next().unwrap_or("");
 
         match record_type {
@@ -89,12 +111,23 @@ where
                 on_segment(GfaSegment { name, sequence })?;
             }
             "L" => {
+                let from = parts.next().unwrap_or("").to_string();
+                let from_orient = parts
+                    .next()
+                    .and_then(|s| s.as_bytes().first().copied())
+                    .unwrap_or(b'+');
+                let to = parts.next().unwrap_or("").to_string();
+                let to_orient = parts
+                    .next()
+                    .and_then(|s| s.as_bytes().first().copied())
+                    .unwrap_or(b'+');
+                let overlap = parts.next().unwrap_or("").to_string();
                 on_link(GfaLink {
-                    from: parts.next().unwrap_or("").to_string(),
-                    from_orient: parts.next().unwrap_or("+").as_bytes()[0],
-                    to: parts.next().unwrap_or("").to_string(),
-                    to_orient: parts.next().unwrap_or("+").as_bytes()[0],
-                    overlap: parts.next().unwrap_or("").to_string(),
+                    from,
+                    from_orient,
+                    to,
+                    to_orient,
+                    overlap,
                 })?;
             }
             "P" => {
@@ -121,4 +154,114 @@ where
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flate2::write::GzEncoder;
+    use flate2::Compression;
+    use std::io::{Cursor, Write};
+
+    #[test]
+    fn streams_all_record_types_and_handles_empty_link_orients() {
+        let gfa = "\
+H\tVN:Z:1.1
+# comment line
+S\t1\tACGT
+S\t2\tTTAA
+L\t1\t+\t2\t-\t0M
+L\t1\t\t2\t\t0M
+P\tp1\t1+,2-\t0M
+W\tGRCh38\t0\tchr22\t0\t8\t>1<2
+";
+        let mut segs = Vec::new();
+        let mut links = Vec::new();
+        let mut paths = Vec::new();
+        let mut walks = Vec::new();
+
+        stream_gfa_reader(
+            Cursor::new(gfa.as_bytes()),
+            |s| {
+                segs.push(s);
+                Ok(())
+            },
+            |l| {
+                links.push(l);
+                Ok(())
+            },
+            |p| {
+                paths.push(p);
+                Ok(())
+            },
+            |w| {
+                walks.push(w);
+                Ok(())
+            },
+        )
+        .expect("stream_gfa_reader should succeed");
+
+        assert_eq!(segs.len(), 2);
+        assert_eq!(segs[0].name, "1");
+        assert_eq!(segs[0].sequence, b"ACGT");
+
+        assert_eq!(links.len(), 2);
+        assert_eq!(links[0].from_orient, b'+');
+        assert_eq!(links[0].to_orient, b'-');
+        // Empty orientation fields must not panic and safely default to '+'
+        assert_eq!(links[1].from_orient, b'+');
+        assert_eq!(links[1].to_orient, b'+');
+
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].name, "p1");
+        assert_eq!(paths[0].segment_names, "1+,2-");
+
+        assert_eq!(walks.len(), 1);
+        assert_eq!(walks[0].sample, "GRCh38");
+        assert_eq!(walks[0].seq_id, "chr22");
+        assert_eq!(walks[0].end, 8);
+        assert_eq!(walks[0].walk, ">1<2");
+    }
+
+    #[test]
+    fn streams_gzipped_gfa_file() {
+        let dir = std::env::temp_dir();
+        let gz_path = dir.join("horizon_test_stream.gfa.gz");
+        {
+            // Write two concatenated gzip members (simulating BGZF / multi-member gzip)
+            let mut f = File::create(&gz_path).unwrap();
+            {
+                let mut enc1 = GzEncoder::new(&mut f, Compression::fast());
+                enc1.write_all(b"H\tVN:Z:1.0\nS\tn1\tGATTACA\n").unwrap();
+                enc1.finish().unwrap();
+            }
+            {
+                let mut enc2 = GzEncoder::new(&mut f, Compression::fast());
+                enc2.write_all(b"W\tCHM13\t0\tchr22\t0\t7\t>n1\n").unwrap();
+                enc2.finish().unwrap();
+            }
+        }
+
+        let mut seg_count = 0usize;
+        let mut walk_count = 0usize;
+        stream_gfa(
+            &gz_path,
+            |s| {
+                assert_eq!(s.sequence, b"GATTACA");
+                seg_count += 1;
+                Ok(())
+            },
+            |_| Ok(()),
+            |_| Ok(()),
+            |w| {
+                assert_eq!(w.sample, "CHM13");
+                walk_count += 1;
+                Ok(())
+            },
+        )
+        .unwrap();
+        let _ = std::fs::remove_file(&gz_path);
+        assert_eq!(seg_count, 1);
+        assert_eq!(walk_count, 1);
+    }
 }

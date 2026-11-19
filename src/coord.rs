@@ -36,3 +36,19 @@ impl Interval {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Interval;
+
+    #[test]
+    fn forward_and_reverse_ucsc_coords() {
+        let fwd = Interval::new(10, 35, '+', 100);
+        assert_eq!(fwd.span(), 25);
+        assert_eq!(fwd.ucsc_start(), 10);
+
+        let rev = Interval::new(10, 35, '-', 100);
+        assert_eq!(rev.span(), 25);
+        assert_eq!(rev.ucsc_start(), 65);
+    }
+}
