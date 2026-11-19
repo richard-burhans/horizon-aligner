@@ -5,9 +5,74 @@
 
 use anyhow::Result;
 use flate2::read::MultiGzDecoder;
-use std::fs::File;
-use std::io::{self, BufRead, BufReader};
-use std::path::Path;
+use std::fs::{File, OpenOptions};
+use std::io::{self, BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static STDIN_SPOOL_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// RAII handle for a GFA input path that may be `"-"` (`stdin`).
+///
+/// When `path == "-"`, `stdin` is spooled once into an exclusively created temporary file
+/// that is automatically deleted on drop, allowing multi-pass GFA tools to re-read `stdin`
+/// safely without leaking temp files on early error returns.
+pub struct SpoolableGfaInput {
+    path: String,
+    temp_file: Option<PathBuf>,
+}
+
+impl SpoolableGfaInput {
+    /// Open or spool a GFA path. If `path == "-"`, copies `stdin` into a unique temp file.
+    ///
+    /// # Errors
+    /// Returns an error if creating the temp file or reading `stdin` fails.
+    pub fn new(path: &str) -> Result<Self> {
+        if path != "-" {
+            return Ok(Self {
+                path: path.to_string(),
+                temp_file: None,
+            });
+        }
+        let pid = std::process::id();
+        let temp_dir = std::env::temp_dir();
+        let (tmp_path, mut file) = loop {
+            let seq = STDIN_SPOOL_SEQ.fetch_add(1, Ordering::Relaxed);
+            let candidate = temp_dir.join(format!("horizon_stdin_{pid}_{seq}.gfa"));
+            match OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&candidate)
+            {
+                Ok(f) => break (candidate, f),
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(e) => return Err(e.into()),
+            }
+        };
+        let stdin = io::stdin();
+        let mut locked = stdin.lock();
+        io::copy(&mut locked, &mut file)?;
+        file.flush()?;
+        Ok(Self {
+            path: tmp_path.to_string_lossy().into_owned(),
+            temp_file: Some(tmp_path),
+        })
+    }
+
+    /// Path to pass to single- or multi-pass GFA readers.
+    #[must_use]
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+}
+
+impl Drop for SpoolableGfaInput {
+    fn drop(&mut self) {
+        if let Some(ref tmp) = self.temp_file {
+            let _ = std::fs::remove_file(tmp);
+        }
+    }
+}
 
 /// Represents a GFA Segment (S line)
 #[derive(Debug, Clone, PartialEq, Eq)]

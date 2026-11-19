@@ -221,10 +221,12 @@ pub fn align_seq_to_dag_mdl(
             }
         }
 
-        for j in (j0_lo.max(1))..=j0_hi {
-            let cur = fiy[u].get(0, j);
-            let from_left = logsumexp2(fm[u].get(0, j - 1) + go, fiy[u].get(0, j - 1) + ge);
-            fiy[u].set(0, j, logsumexp2(cur, from_left));
+        if nodes[u].preds.is_empty() {
+            for j in (j0_lo.max(1))..=j0_hi {
+                let cur = fiy[u].get(0, j);
+                let from_left = logsumexp2(fm[u].get(0, j - 1) + go, fiy[u].get(0, j - 1) + ge);
+                fiy[u].set(0, j, logsumexp2(cur, from_left));
+            }
         }
 
         for i in 1..=nu {
@@ -340,12 +342,13 @@ pub fn align_seq_to_dag_mdl(
                 } else {
                     NEG_INF
                 };
-                let iy_open = if j < m {
+                let allow_iy = i > 0 || nodes[u].preds.is_empty();
+                let iy_open = if allow_iy && j < m {
                     biy[u].get(i, j + 1) + go
                 } else {
                     NEG_INF
                 };
-                let iy_ext = if j < m {
+                let iy_ext = if allow_iy && j < m {
                     biy[u].get(i, j + 1) + ge
                 } else {
                     NEG_INF
@@ -432,6 +435,15 @@ pub fn align_seq_to_dag_mdl(
                 best_end_node = u;
             }
         }
+    }
+
+    if best_mea <= NEG_INF * 0.5 {
+        return GraphAlignment {
+            path_nodes: Vec::new(),
+            kept_pairs: Vec::new(),
+            bubbles: 1,
+            score_bits,
+        };
     }
 
     let mut raw_cols: Vec<DagCol> = Vec::new();
@@ -731,5 +743,27 @@ mod tests {
         let aln = align_seq_to_dag_seeded(&nodes, query, &HmmParams::default(), 10.0);
         assert_eq!(aln.path_nodes, vec![6, 8, 9]);
         assert_eq!(aln.kept_pairs.len(), query.len());
+    }
+
+    #[test]
+    fn dag_handles_query_insertion_spanning_node_boundary() {
+        let nodes = vec![
+            GraphNode {
+                name: "n0".into(),
+                seq: b"ACTGACTGACTGACTGACTGACTGACTGACTG".to_vec(),
+                preds: vec![],
+            },
+            GraphNode {
+                name: "n1".into(),
+                seq: b"GATTACAGATTACAGATTACAGATTACAGATT".to_vec(),
+                preds: vec![0],
+            },
+        ];
+        let query = b"ACTGACTGACTGACTGACTGACTGACTGACTGCCCCCC\
+                      GATTACAGATTACAGATTACAGATTACAGATT";
+        let aln = align_seq_to_dag_seeded(&nodes, query, &HmmParams::default(), 10.0);
+        assert_eq!(aln.path_nodes, vec![0, 1]);
+        assert!(aln.kept_pairs.iter().any(|&(n, _, _)| n == 0));
+        assert!(aln.kept_pairs.iter().any(|&(n, _, _)| n == 1));
     }
 }

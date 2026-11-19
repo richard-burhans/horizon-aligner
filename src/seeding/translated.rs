@@ -24,7 +24,7 @@ const fn aa_pair_score(ax: u8, ay: u8) -> i32 {
     if gx < 9 && gx == gy { 6 } else { -6 }
 }
 
-fn index_aa_spaced_4of6_frames(
+fn index_aa_spaced_5of6_frames(
     seq: &[u8],
     max_occ: usize,
     skip_softmasked: bool,
@@ -68,15 +68,15 @@ fn index_aa_spaced_4of6_frames(
     map
 }
 
-/// Find spaced `4-of-6` translated amino-acid (18 bp) hits across all reading frames.
+/// Find spaced `5-of-6` translated amino-acid (18 bp) hits across all reading frames.
 pub(crate) fn find_translated_aa5_hits(
     seq_x: &[u8],
     seq_y: &[u8],
     max_occ: usize,
     skip_softmasked: bool,
 ) -> AnchorPairs {
-    let ix = index_aa_spaced_4of6_frames(seq_x, max_occ, skip_softmasked);
-    let iy = index_aa_spaced_4of6_frames(seq_y, max_occ, skip_softmasked);
+    let ix = index_aa_spaced_5of6_frames(seq_x, max_occ, skip_softmasked);
+    let iy = index_aa_spaced_5of6_frames(seq_y, max_occ, skip_softmasked);
     let mut hits = Vec::new();
     for (k, xs) in &ix {
         if let Some(ys) = iy.get(k) {
@@ -90,7 +90,7 @@ pub(crate) fn find_translated_aa5_hits(
     hits
 }
 
-/// Extend an ungapped codon-level amino-acid HSP from a 5-codon (`15 bp`) seed.
+/// Extend an ungapped codon-level amino-acid HSP from a 5-of-6 spaced (`18 bp`) seed.
 fn extend_aa_ungapped_hsp(
     seq_x: &[u8],
     seq_y: &[u8],
@@ -99,11 +99,12 @@ fn extend_aa_ungapped_hsp(
     min_score: i32,
 ) -> Option<(usize, usize, usize, usize, i32)> {
     const AA_XDROP: i32 = 30;
-    if px + 15 > seq_x.len() || py + 15 > seq_y.len() {
+    const AA_OFFSETS: [usize; 5] = [0, 1, 2, 4, 5];
+    if px + 18 > seq_x.len() || py + 18 > seq_y.len() {
         return None;
     }
     let mut core = 0i32;
-    for c in 0..5 {
+    for &c in &AA_OFFSETS {
         let ax = codon_to_aa(
             seq_x[px + c * 3],
             seq_x[px + c * 3 + 1],
@@ -114,6 +115,13 @@ fn extend_aa_ungapped_hsp(
             seq_y[py + c * 3 + 1],
             seq_y[py + c * 3 + 2],
         )?;
+        core += aa_pair_score(ax, ay);
+    }
+    // Include the wildcard codon 3 if both codons are valid (non-stop); otherwise skip it cleanly.
+    if let (Some(ax), Some(ay)) = (
+        codon_to_aa(seq_x[px + 9], seq_x[px + 10], seq_x[px + 11]),
+        codon_to_aa(seq_y[py + 9], seq_y[py + 10], seq_y[py + 11]),
+    ) {
         core += aa_pair_score(ax, ay);
     }
 
@@ -142,9 +150,9 @@ fn extend_aa_ungapped_hsp(
 
     cur = 0;
     let mut best_right = 0i32;
-    let (mut rx, mut ry) = (px + 15, py + 15);
-    ix = px + 15;
-    iy = py + 15;
+    let (mut rx, mut ry) = (px + 18, py + 18);
+    ix = px + 18;
+    iy = py + 18;
     while ix + 3 <= seq_x.len() && iy + 3 <= seq_y.len() {
         let (Some(ax), Some(ay)) = (
             codon_to_aa(seq_x[ix], seq_x[ix + 1], seq_x[ix + 2]),
@@ -183,7 +191,7 @@ pub(crate) fn append_hsp_gated_aa_lcbs(
         {
             gated.push((px, py));
             if sc >= min_aa_score + 30 && rx >= lx + 24 && ry >= ly + 24 {
-                strong.push(vec![(lx, ly), (rx - 15, ry - 15)]);
+                strong.push(vec![(lx, ly), (rx - 18, ry - 18)]);
             }
         }
     }
@@ -304,8 +312,8 @@ pub(crate) fn append_hsp_gated_lastz12_lcbs(
         if let Some((lx, ly, rx, ry, sc)) = extend_ungapped_hsp(seq_x, seq_y, px, py, min_hsp_score)
         {
             filtered_hits.push((px, py));
-            if sc >= min_hsp_score + strong_margin && rx >= lx + 18 && ry >= ly + 18 {
-                strong_hsps.push(vec![(lx, ly), (rx - 12, ry - 12)]);
+            if sc >= min_hsp_score + strong_margin && rx >= lx + 19 && ry >= ly + 19 {
+                strong_hsps.push(vec![(lx, ly), (rx - 19, ry - 19)]);
             }
         }
     }
@@ -344,5 +352,21 @@ pub(crate) fn append_nonoverlapping_lcbs(
         if intervals.insert_if_disjoint(sx, ex) {
             target.push(lcb);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::append_hsp_gated_aa_lcbs;
+    use crate::seeding::LcbList;
+
+    #[test]
+    fn aa_5of6_tolerates_stop_codon_at_wildcard_codon3() {
+        let x = b"ATGGCTAGCGATCGATCGATGGCTAGCGATCGATCGATGGCTAGCGATCGATCGATGGCTAGCGATCGATCGATGGCTAGCGATCGATCG".to_vec();
+        let mut y = x.clone();
+        y[9..12].copy_from_slice(b"TAA");
+        let mut lcbs: LcbList = Vec::new();
+        append_hsp_gated_aa_lcbs(&mut lcbs, &x, &y, &[(0, 0)], 30);
+        assert_ne!(lcbs.len(), 0);
     }
 }

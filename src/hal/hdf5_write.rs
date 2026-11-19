@@ -171,6 +171,80 @@ impl Hdf5V0Builder {
         self.write_v1_obj_header(&[(0x0001, &ds), (0x0003, &dt), (0x0008, &dl)])
     }
 
+    fn write_group_btree(&mut self, snods: Vec<(u64, u64, u64)>) -> u64 {
+        // Group Internal Node K = 16 => max 32 child entries per TREE node.
+        const MAX_TREE_CHILDREN: usize = 32;
+        if snods.is_empty() {
+            self.align8();
+            let empty_addr = self.buf.len() as u64;
+            self.buf.extend_from_slice(b"TREE");
+            self.buf.push(0);
+            self.buf.push(0);
+            self.buf.extend_from_slice(&0u16.to_le_bytes());
+            self.buf.extend_from_slice(&u64::MAX.to_le_bytes());
+            self.buf.extend_from_slice(&u64::MAX.to_le_bytes());
+            self.buf.extend_from_slice(&0u64.to_le_bytes());
+            for _ in 0..MAX_TREE_CHILDREN {
+                self.buf.extend_from_slice(&0u64.to_le_bytes());
+                self.buf.extend_from_slice(&0u64.to_le_bytes());
+            }
+            return empty_addr;
+        }
+
+        let mut level_nodes: Vec<(u64, u64, u64)> = snods;
+        let mut level: u8 = 0;
+
+        loop {
+            let num_chunks = level_nodes.len().div_ceil(MAX_TREE_CHILDREN);
+            let mut next_level: Vec<(u64, u64, u64)> = Vec::with_capacity(num_chunks);
+            for (chunk_idx, chunk) in level_nodes.chunks(MAX_TREE_CHILDREN).enumerate() {
+                self.align8();
+                let node_addr = self.buf.len() as u64;
+                self.buf.extend_from_slice(b"TREE");
+                self.buf.push(0); // type 0 (group)
+                self.buf.push(level);
+                self.buf.extend_from_slice(
+                    &u16::try_from(chunk.len()).unwrap_or(u16::MAX).to_le_bytes(),
+                );
+                self.buf.extend_from_slice(&u64::MAX.to_le_bytes());
+                self.buf.extend_from_slice(&u64::MAX.to_le_bytes());
+                for (i, &(first_off, child_addr, _)) in chunk.iter().enumerate() {
+                    let key = if chunk_idx == 0 && i == 0 {
+                        0u64
+                    } else {
+                        first_off
+                    };
+                    self.buf.extend_from_slice(&key.to_le_bytes());
+                    self.buf.extend_from_slice(&child_addr.to_le_bytes());
+                }
+                let first_key = chunk.first().map_or(0, |&(first_off, _, _)| first_off);
+                let end_key = chunk.last().map_or(0, |&(_, _, last_off)| last_off);
+                self.buf.extend_from_slice(&end_key.to_le_bytes());
+                for _ in chunk.len()..MAX_TREE_CHILDREN {
+                    self.buf.extend_from_slice(&0u64.to_le_bytes());
+                    self.buf.extend_from_slice(&0u64.to_le_bytes());
+                }
+                next_level.push((first_key, node_addr, end_key));
+            }
+            for idx in 0..next_level.len() {
+                let addr = usize::try_from(next_level[idx].1).unwrap_or(0);
+                if idx > 0 {
+                    let left = next_level[idx - 1].1;
+                    self.buf[addr + 8..addr + 16].copy_from_slice(&left.to_le_bytes());
+                }
+                if idx + 1 < next_level.len() {
+                    let right = next_level[idx + 1].1;
+                    self.buf[addr + 16..addr + 24].copy_from_slice(&right.to_le_bytes());
+                }
+            }
+            if next_level.len() == 1 {
+                return next_level[0].1;
+            }
+            level_nodes = next_level;
+            level = level.saturating_add(1);
+        }
+    }
+
     fn write_group(&mut self, entries: &[(&str, u64)]) -> (u64, u64, u64) {
         // Group Leaf Node K = 4 => max 8 entries per SNOD
         const MAX_SNOD: usize = 8;
@@ -230,27 +304,7 @@ impl Hdf5V0Builder {
             snods.push((first_off, snod_addr, last_off));
         }
 
-        self.align8();
-        let btree_addr = self.buf.len() as u64;
-        self.buf.extend_from_slice(b"TREE");
-        self.buf.push(0); // type 0 (group)
-        self.buf.push(0); // level 0 (leaf)
-        self.buf
-            .extend_from_slice(&u16::try_from(snods.len()).unwrap_or(u16::MAX).to_le_bytes());
-        self.buf.extend_from_slice(&u64::MAX.to_le_bytes()); // left sibling
-        self.buf.extend_from_slice(&u64::MAX.to_le_bytes()); // right sibling
-        for (i, &(first_off, snod_addr, _)) in snods.iter().enumerate() {
-            let key = if i == 0 { 0u64 } else { first_off };
-            self.buf.extend_from_slice(&key.to_le_bytes());
-            self.buf.extend_from_slice(&snod_addr.to_le_bytes());
-        }
-        let end_key = snods.last().map_or(0, |&(_, _, last_off)| last_off);
-        self.buf.extend_from_slice(&end_key.to_le_bytes());
-        // Pad B-tree node to 2 * group_internal_k (32) child slots.
-        for _ in snods.len()..32 {
-            self.buf.extend_from_slice(&0u64.to_le_bytes());
-            self.buf.extend_from_slice(&0u64.to_le_bytes());
-        }
+        let btree_addr = self.write_group_btree(snods);
 
         let mut symtab = [0u8; 16];
         symtab[0..8].copy_from_slice(&btree_addr.to_le_bytes());

@@ -337,7 +337,7 @@ fn emit_rescued_runs(
             let d_min = run.iter().map(|p| p.1).min().unwrap_or(0);
             let d_max = run.iter().map(|p| p.1).max().unwrap_or(0);
             let d_start = if dst_rel_rev {
-                d_src_size - 1 - d_max
+                d_src_size.saturating_sub(1 + d_max)
             } else {
                 d_min
             };

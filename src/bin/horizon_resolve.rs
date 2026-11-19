@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use horizon_aligner::egraph::{
     EGraph, Expr, MdlCostModel, build_seq_expr, extract_min_mdl_cost, saturate_synteny,
 };
-use horizon_aligner::gfa::{parse_path_steps, parse_walk_steps, stream_gfa};
+use horizon_aligner::gfa::{SpoolableGfaInput, parse_path_steps, parse_walk_steps, stream_gfa};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::env;
@@ -100,7 +100,7 @@ fn parse_args() -> Result<CliArgs> {
                     .parse()
                     .context("invalid --divergence")?;
             }
-            other if !other.starts_with('-') && gfa_in.is_none() => {
+            other if (!other.starts_with('-') || other == "-") && gfa_in.is_none() => {
                 gfa_in = Some(other.to_string());
             }
             other => bail!("unknown argument: {other}"),
@@ -537,15 +537,17 @@ fn pass2_rewrite<W: Write>(
 fn main() -> Result<()> {
     let cli = parse_args()?;
     let t0 = Instant::now();
-    let (seg_lens, anchors) = pass1_index(&cli.gfa_in, cli.min_anchor_bp)?;
+    let spooled = SpoolableGfaInput::new(&cli.gfa_in)?;
+    let effective_gfa = spooled.path();
+    let (seg_lens, anchors) = pass1_index(effective_gfa, cli.min_anchor_bp)?;
 
     let stats = if let Some(ref out_p) = cli.out_path {
         let mut writer =
             BufWriter::new(File::create(out_p).with_context(|| format!("creating {out_p}"))?);
-        pass2_rewrite(&cli.gfa_in, &mut writer, &seg_lens, &anchors, &cli)?
+        pass2_rewrite(effective_gfa, &mut writer, &seg_lens, &anchors, &cli)?
     } else {
         let mut sink = io::sink();
-        pass2_rewrite(&cli.gfa_in, &mut sink, &seg_lens, &anchors, &cli)?
+        pass2_rewrite(effective_gfa, &mut sink, &seg_lens, &anchors, &cli)?
     };
 
     #[allow(clippy::cast_precision_loss)]

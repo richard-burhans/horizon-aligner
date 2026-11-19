@@ -2,7 +2,9 @@
 
 use anyhow::{Context, Result, bail};
 use horizon_aligner::bocpd::bocpd_gc_profile;
-use horizon_aligner::gfa::{GfaLink, parse_path_steps, parse_walk_steps, stream_gfa};
+use horizon_aligner::gfa::{
+    GfaLink, SpoolableGfaInput, parse_path_steps, parse_walk_steps, stream_gfa,
+};
 use horizon_aligner::seeding::revcomp;
 use std::collections::{HashMap, HashSet};
 use std::env;
@@ -474,37 +476,21 @@ fn main() -> Result<()> {
         prune_unsupported,
     };
 
-    let mut spooled_stdin: Option<std::path::PathBuf> = None;
-    let effective_gfa = if gfa == "-" {
-        let tmp =
-            std::env::temp_dir().join(format!("horizon_clean_stdin_{}.gfa", std::process::id()));
-        let mut f = File::create(&tmp)
-            .with_context(|| format!("creating stdin spool {}", tmp.display()))?;
-        let stdin = io::stdin();
-        let mut locked = stdin.lock();
-        io::copy(&mut locked, &mut f)?;
-        f.flush()?;
-        spooled_stdin = Some(tmp.clone());
-        tmp.to_string_lossy().to_string()
-    } else {
-        gfa
-    };
+    let spooled = SpoolableGfaInput::new(&gfa)?;
+    let effective_gfa = spooled.path();
 
     let stats = if let Some(ref op) = out_path {
         let mut w = BufWriter::new(File::create(op)?);
-        let s = clean_gfa(&effective_gfa, &cfg, &mut w)?;
+        let s = clean_gfa(effective_gfa, &cfg, &mut w)?;
         w.flush()?;
         s
     } else {
         let stdout = io::stdout();
         let mut w = BufWriter::new(stdout.lock());
-        let s = clean_gfa(&effective_gfa, &cfg, &mut w)?;
+        let s = clean_gfa(effective_gfa, &cfg, &mut w)?;
         w.flush()?;
         s
     };
-    if let Some(tmp) = spooled_stdin {
-        let _ = std::fs::remove_file(tmp);
-    }
 
     #[allow(clippy::cast_precision_loss)]
     let hwm_mb = read_vm_hwm_kb().map_or(0.0, |kb| kb as f64 / 1024.0);

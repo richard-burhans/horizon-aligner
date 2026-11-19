@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result, bail};
 use horizon_aligner::coord::Interval;
-use horizon_aligner::gfa::{parse_path_steps, parse_walk_steps, stream_gfa};
+use horizon_aligner::gfa::{SpoolableGfaInput, parse_path_steps, parse_walk_steps, stream_gfa};
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs::File;
@@ -695,9 +695,10 @@ fn main() -> Result<()> {
     };
 
     let t0 = Instant::now();
+    let spooled = SpoolableGfaInput::new(&gfa)?;
     let features = parse_features(Path::new(&inp), is_gff)?;
     let cfg = LiftConfig {
-        gfa_path: &gfa,
+        gfa_path: spooled.path(),
         from_sample: &from,
         to_sample: &to,
         features: &features,

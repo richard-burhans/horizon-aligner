@@ -495,7 +495,7 @@ impl FlatSeedIndex {
 
         for i in 0..=(seq.len() - span) {
             if let Some(m) = sdust
-                && (m[i] || m[i + span - 1])
+                && (m[i] || m[i + span / 2] || m[i + span - 1])
             {
                 continue;
             }
@@ -896,7 +896,7 @@ pub(crate) fn find_spaced_transition_hits_flat(
     let mut keys = Vec::with_capacity(w * w / 2 + w + 1);
     for i in 0..=(seq_x.len() - span) {
         if let Some(m) = sdust_x
-            && (m[i] || m[i + span - 1])
+            && (m[i] || m[i + span / 2] || m[i + span - 1])
         {
             continue;
         }

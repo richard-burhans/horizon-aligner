@@ -677,4 +677,21 @@ mod tests {
             vec![(0, 12, -1, vec![(0, false)])]
         );
     }
+
+    #[test]
+    fn hal_hdf5_write_group_exceeding_256_entries_roundtrips() {
+        let ref_dna = b"ACGTACGT";
+        let queries: Vec<(String, Vec<u8>)> = (0..300)
+            .map(|i| (format!("q_{i:04}"), ref_dna.to_vec()))
+            .collect();
+        let hal = HalAlignment::from_star_blocks("ref0", ref_dna, &queries, &[]);
+        let bytes = hal.to_hdf5_bytes();
+        let sb = read_hdf5_superblock(&bytes).expect("superblock");
+        let root_addr = usize::try_from(sb.root_group_addr.expect("root addr")).expect("usize");
+        let entries = read_hdf5_v0_group_entries(&bytes, root_addr).expect("root entries");
+        assert_eq!(entries.len(), 301);
+        assert!(entries.iter().any(|e| e.name == "ref0"));
+        assert!(entries.iter().any(|e| e.name == "q_0000"));
+        assert!(entries.iter().any(|e| e.name == "q_0299"));
+    }
 }

@@ -100,17 +100,31 @@ pub fn banded_mdl_gap(seq_x: &[u8], seq_y: &[u8], band_w: usize, min_block_bits:
 
 /// Run banded forward-backward MDL + BOCPD alignment on one gap with explicit [`HmmParams`].
 #[must_use]
-#[allow(
-    clippy::too_many_lines,
-    clippy::similar_names,
-    clippy::many_single_char_names
-)]
 pub fn banded_mdl_gap_with_params(
     seq_x: &[u8],
     seq_y: &[u8],
     band_w: usize,
     min_block_bits: f64,
     params: &HmmParams,
+) -> GapResult {
+    banded_mdl_gap_with_min_post(seq_x, seq_y, band_w, min_block_bits, params, MIN_POST_PROB)
+}
+
+/// Run banded forward-backward MDL + BOCPD alignment on one gap with explicit [`HmmParams`]
+/// and posterior match probability threshold `min_post_prob`.
+#[must_use]
+#[allow(
+    clippy::too_many_lines,
+    clippy::similar_names,
+    clippy::many_single_char_names
+)]
+pub fn banded_mdl_gap_with_min_post(
+    seq_x: &[u8],
+    seq_y: &[u8],
+    band_w: usize,
+    min_block_bits: f64,
+    params: &HmmParams,
+    min_post_prob: f64,
 ) -> GapResult {
     let n = seq_x.len();
     let m = seq_y.len();
@@ -198,6 +212,8 @@ pub fn banded_mdl_gap_with_params(
     }
 
     let z_fwd = logsumexp3(fm.get(n, m), fix.get(n, m), fiy.get(n, m));
+    drop(fix);
+    drop(fiy);
     let score_bits = z_fwd / ln2;
     if z_fwd <= NEG_INF * 0.5 {
         return GapResult {
@@ -319,16 +335,16 @@ pub fn banded_mdl_gap_with_params(
     let mut idx = 0;
     while idx < k {
         let (cx, cy, _, pp) = raw_cols[idx];
-        if cx.is_some() && cy.is_some() && pp >= MIN_POST_PROB {
+        if cx.is_some() && cy.is_some() && pp >= min_post_prob {
             let start = idx;
             let mut block_bits = 0.0;
             while idx < k
                 && ((raw_cols[idx].0.is_some()
                     && raw_cols[idx].1.is_some()
-                    && raw_cols[idx].3 >= MIN_POST_PROB)
+                    && raw_cols[idx].3 >= min_post_prob)
                     || (idx + 1 < k
                         && raw_cols[idx].2 > -2.5
-                        && raw_cols[idx + 1].3 >= MIN_POST_PROB))
+                        && raw_cols[idx + 1].3 >= min_post_prob))
             {
                 block_bits += raw_cols[idx].2;
                 idx += 1;
@@ -600,5 +616,16 @@ mod tests {
         let p_ext = 2.0_f64.powf(GAP_EXTEND_BITS);
         let leave_indel = 1.0 - p_ext;
         assert!((leave_indel + p_ext - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn min_post_prob_filters_uncertain_pairs() {
+        let x = b"ACGTACGTACGTACGTACGTACGTACGTACGT";
+        let y = b"ACGTACGTAAAACCCCGGGGTTTTACGTACGT";
+        let params = super::HmmParams::default();
+        let all = super::banded_mdl_gap_with_min_post(x, y, 8, 5.0, &params, 0.0);
+        let strict = super::banded_mdl_gap_with_min_post(x, y, 8, 5.0, &params, 0.9999);
+        assert_ne!(all.kept_pairs.len(), 0);
+        assert!(strict.kept_pairs.len() < all.kept_pairs.len());
     }
 }

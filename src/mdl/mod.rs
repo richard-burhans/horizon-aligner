@@ -368,6 +368,7 @@ pub fn align_contig_pair_with_config(
 
         // Apply R/Y (1-bit) and w=10 1-transition only while random-collision density
         // stays tractable (< 10^9 search space cells).
+        let mut cached_ry: Option<(FlatSeedIndex, FlatSeedIndex)> = None;
         if (seq_x.len() as u128) * (seq_y.len() as u128) < 1_000_000_000 {
             // HSP-gated 1-bit purine/pyrimidine (R/Y) seeding for multi-transition divergent homologs.
             let x_ry = FlatSeedIndex::build_with_sdust(
@@ -387,6 +388,9 @@ pub fn align_contig_pair_with_config(
                 Some(&idx_y.sdust),
             )?;
             let (mut hits_ry_fwd, mut hits_ry_rc) = x_ry.intersect(&y_ry);
+            if cfg.use_ry_seeds {
+                cached_ry = Some((x_ry, y_ry));
+            }
             filter_uncovered(&mut hits_ry_fwd);
             filter_uncovered(&mut hits_ry_rc);
             append_hsp_gated_lastz12_lcbs(
@@ -444,10 +448,49 @@ pub fn align_contig_pair_with_config(
             &aa_rc,
             (base_hsp_thresh / 2) + aa_bonus,
         );
-    }
 
-    // Transition-tolerant R/Y (1-bit purine/pyrimidine) fallback for divergent homologs.
-    if cfg.use_ry_seeds {
+        // Transition-tolerant R/Y (1-bit purine/pyrimidine) fallback for divergent homologs.
+        if cfg.use_ry_seeds {
+            let (x_ry, y_ry) = match cached_ry {
+                Some(pair) => pair,
+                None => (
+                    FlatSeedIndex::build_with_sdust(
+                        seq_x,
+                        MASK_RY20,
+                        2,
+                        cfg.skip_softmasked,
+                        true,
+                        Some(&idx_x.sdust),
+                    )?,
+                    FlatSeedIndex::build_with_sdust(
+                        seq_y,
+                        MASK_RY20,
+                        2,
+                        cfg.skip_softmasked,
+                        true,
+                        Some(&idx_y.sdust),
+                    )?,
+                ),
+            };
+            let (hits_ry_fwd, hits_ry_rc) = x_ry.intersect(&y_ry);
+            let prev_fwd = combined_fwd.clone();
+            let prev_rc = combined_rc.clone();
+            append_nonoverlapping_lcbs(
+                &mut combined_fwd,
+                &prev_fwd,
+                &hits_ry_fwd,
+                cfg.fallback_min_anchors,
+                cfg.fallback_min_span,
+            );
+            append_nonoverlapping_lcbs(
+                &mut combined_rc,
+                &prev_rc,
+                &hits_ry_rc,
+                cfg.fallback_min_anchors,
+                cfg.fallback_min_span,
+            );
+        }
+    } else if cfg.use_ry_seeds {
         let x_ry = FlatSeedIndex::build_with_sdust(
             seq_x,
             MASK_RY20,
@@ -643,6 +686,9 @@ pub fn align_contig_pair_with_config(
                     if ax + off >= seq_x.len() || ay + off >= pv_len {
                         break;
                     }
+                    if !seq_x[ax + off].eq_ignore_ascii_case(&y_work[ay + off]) {
+                        continue;
+                    }
                     let py = if is_rc {
                         pv_len - 1 - (ay + off)
                     } else {
@@ -706,12 +752,13 @@ pub fn align_contig_pair_with_config(
         .par_iter()
         .map(|&(is_rc, x0, x1, y0, y1)| {
             let y_work = if is_rc { seq_y_rc } else { seq_y };
-            let res = banded_mdl_gap_with_params(
+            let res = banded_mdl_gap_with_min_post(
                 &seq_x[x0..x1],
                 &y_work[y0..y1],
                 cfg.band_w,
                 effective_min_bits,
                 &hmm_params,
+                cfg.min_post_prob,
             );
             (is_rc, x0, y0, res)
         })
