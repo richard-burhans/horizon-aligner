@@ -1,0 +1,10 @@
+[consumer]
+name = "horizon-aligner"
+
+[paths]
+rounds = "reports/rounds"
+log = "reports/adversarial_log.md"
+workspace = "."
+
+[round]
+lens_floor = 4

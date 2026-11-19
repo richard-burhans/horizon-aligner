@@ -1,0 +1,7 @@
+[
+  {"id": "C1", "summary": "We are replacing arbitrary affine gap penalties and scoring matrices with Information-Theoretic bit-savings (MDL)."},
+  {"id": "C2", "summary": "vg and odgi crash on 12GB pangenomes due to RAM exhaustion. Our custom zero-copy GFA streaming parser (src/gfa/mod.rs) solves the I/O bottleneck entirely."},
+  {"id": "C3", "summary": "Cactus introduced the .hal format, which required heavy C-dependencies (libhdf5), fractured the ecosystem, and made downstream parsing difficult in other languages."},
+  {"id": "C4", "summary": "We will never invent a proprietary binary format. Our tools will communicate purely by streaming standard GFA (v1.0/v1.1) and standard MAF/VCF over stdin/stdout."},
+  {"id": "C5", "summary": "E-graphs suffer from combinatorial explosion. Loading an entire chromosome into an e-graph to run saturation rules will never finish computing."}
+]
