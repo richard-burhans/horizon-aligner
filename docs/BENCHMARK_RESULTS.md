@@ -55,7 +55,7 @@ These sets were completely locked away during algorithm development to prevent o
 | Two-Pass Path/Walk Extract | `horizon_gfa extract` | `GRCh38.chr22` (`50.8 Mbp`) + `CHM13.chr22` (`35.6 Mbp`) | `921,252` cached segs | **456.1 MB** | 166.73s |
 | Two-Pass Path/Walk Extract | `horizon_gfa extract` | `GRCh38.chr6` (`170.8 Mbp`) + `CHM13.chr6` (`110.7 Mbp`) | `3,057,602` cached segs | **1,255.1 MB** | 244.93s |
 | Two-Pass Graph Liftover | `horizon_lift --bridge-bp 10` | 500 `GRCh38.chr22` 1-kb windows -> `CHM13.chr22` | `469` exact, `1` partial, `19` split, `11` unmapped | **619.2 MB** | 256.60s |
-| Chr22 Haplotype Alignment | `horizon_wga --rbest --resolve-dups` | `GRCh38.chr22` vs `CHM13.chr22:15729460-51324926` | `24,365,611` pairs (`9,690` bubbles) | - | 154.92s |
+| Chr22 Haplotype Alignment | `horizon_wga --resolve-dups` | `GRCh38.chr22` vs `CHM13.chr22:15729460-51324926` (pre-`0e70693`) | `24,365,611` pairs (`9,690` bubbles) | - | 154.92s |
 | Chr22 Pericentromere 5 Mbp | `horizon_wga --resolve-dups` | `GRCh38.chr22:15.5M-20.5M` vs `CHM13.chr22:15.73M-20.73M` | `5,894,191` pairs (`17,789` bubbles) | **3,084.5 MB** | 23.45s |
 | Chr6 Pericentromere 5 Mbp | `horizon_wga --resolve-dups` | `GRCh38.chr6:61.0M-66.0M` vs `CHM13.chr6:61.4M-66.4M` | `4,785,880` pairs (`24,916` bubbles) | **3,084.5 MB** | 17.60s |
 | MHC/HLA 5 Mbp Paralog Test | `horizon_wga --resolve-dups` | `GRCh38.chr6:28.5M-33.5M` vs synthetic C4 dup | `6,679,345` pairs (`24,827` bubbles) | **3,345.9 MB** | 25.08s |

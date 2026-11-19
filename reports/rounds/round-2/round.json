@@ -123,7 +123,7 @@
   "drift_reviewed": [
     {
       "path": "docs/BENCHMARK_RESULTS.md",
-      "sha256": "da408c8dd26cc9553a8c224f760b574e636ddd9ac42c329dbdb6820cc9d53069",
+      "sha256": "fa534b8d262575822cb4a0f6a2899c1c912eebdd2eecf8e26055ba02b26e35a2",
       "by": "runner",
       "date": "2026-11-19",
       "quotes": [
@@ -136,7 +136,8 @@
         "  * `chr6` q-arm 20 Mbp (`GRCh38.chr6:65M-85M` vs `CHM13.chr6:61.4M-81.4M`): **81.33s**, **5,863.3 MB** peak RSS (`0.293 GB/Mbp`), **15,021,911** many-to-many `(x, y)` aligned pairs (`75.1%` non-deduplicated ratio), `36` fwd / `41` rev LCBs, `21,475` Horizon Bubbles. (After replacing `HashSet<(usize, usize)>` with sorted/deduplicated `Vec<(usize, usize)>`, full `GRCh38.chr6` `170.8 Mbp` vs `CHM13.chr6` `110.7 Mbp` reached **26.5 GB** mid-run RSS \u2014 `0.094 GB/Mbp` combined, `0.155 GB/Mbp` ref-only \u2014 at `47:33` CPU before cancellation on the 30 GiB host due to `ContigIndex` `HashMap<u64, Vec<usize>>` seed maps.)",
         "| GFA Junction Cleaner | `horizon_clean` | `*`-seq pairwise `chr22`/`chr6` peri GFAs (`6,030` / `2,776` `sup>0` links) | `6,030` / `2,776` kept, `0` severed (no-op) | **7.8 MB** / **5.0 MB** | 0.01s |",
         "| Synthetic E-Graph Resolver | `horizon_resolve --collapse-dups` | Synthetic `200`-seg `ACGT` repeat, `20` identical walks (`--divergence 0.02`) | `280` windows, `840` dups collapsed, `308,760.9` analytical `2*len` bits | **24.0 MB** | 4.48s |",
-        "| Seeded DAG/POA Alignment | `horizon_wga --graph` | 4-node diamond GFA (`<=8` node bypass) + 96-bp query | `>n0>n2>n3`, `96/96` bp (`124.4` bits) | - | 0.0031s |"
+        "| Seeded DAG/POA Alignment | `horizon_wga --graph` | 4-node diamond GFA (`<=8` node bypass) + 96-bp query | `>n0>n2>n3`, `96/96` bp (`124.4` bits) | - | 0.0031s |",
+        "| Chr22 Haplotype Alignment | `horizon_wga --resolve-dups` | `GRCh38.chr22` vs `CHM13.chr22:15729460-51324926` (pre-`0e70693`) | `24,365,611` pairs (`9,690` bubbles) | - | 154.92s |"
       ],
       "note": "Applied Round 2 adjudicator-endorsed free doc repairs (stale commit caveats, synthetic fixture labels, many-to-many pair wording, and RSS denominator)."
     }
@@ -156,7 +157,7 @@
   "briefs_required": true,
   "runner_is_author": true,
   "claim_list_author": "runner",
-  "human_claim": "",
+  "human_claim": "User-directed Round 2 verification of Round 1 open items (R1-IMPL, R1-GFA, R1-HMM) across horizon_clean, horizon_resolve, horizon_lift, horizon_wga --graph, adaptive HmmParams, and HPRC pericentromere benchmarks.",
   "carried": [
     {
       "from": 1,
