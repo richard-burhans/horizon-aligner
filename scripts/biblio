@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Run a tool from the literature library this repo consumes, from any working directory.
+#
+# This repo does NOT depend on the library: it is public and the library is not. It consumes the
+# library as committed FILES only — `refs/catalog_index.json`, pinned by `refs/LIBRARY_VERSION` and
+# SCOPED to the shelves this project cites. This forwarder only matters to someone who also has a
+# library checkout; everyone else can ignore it.
+#
+#     scripts/biblio export catalog-index \
+#         --shelves methods-alignment,methods-tooling,stats-ml,eng-testing --out refs/catalog_index.json
+#
+# Point it at a checkout with $LIBRARY_ROOT, or clone the library beside this repo as ../library.
+set -euo pipefail
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LIB="${LIBRARY_ROOT:-$REPO/../library}"
+if [ ! -x "$LIB/bin/biblio" ]; then
+    echo "no library toolkit at ${LIB}/bin/biblio" >&2
+    echo "Point at a library checkout with \$LIBRARY_ROOT, or clone it beside this repo as ../library." >&2
+    exit 2
+fi
+exec "$LIB/bin/biblio" "$@"

@@ -5,6 +5,7 @@ name = "horizon-aligner"
 rounds = "reports/rounds"
 log = "reports/adversarial_log.md"
 workspace = "."
+rubric = "docs/round_rubric.md"
 
 [round]
 lens_floor = 4
