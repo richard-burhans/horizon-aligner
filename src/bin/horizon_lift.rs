@@ -357,6 +357,7 @@ struct LiftConfig<'a> {
     gfa_path: &'a str,
     from_sample: &'a str,
     to_sample: &'a str,
+    to_chroms: &'a HashSet<String>,
     features: &'a [InputFeature],
     min_frac: f64,
     bridge_bp: usize,
@@ -405,16 +406,21 @@ fn run_lift<W1: Write, W2: Write>(
             }
             if matches_sample(&p.name, cfg.to_sample) {
                 let short = strip_sample_prefix(&p.name, cfg.to_sample).to_string();
-                let steps = parse_path_steps(&p.segment_names)
-                    .into_iter()
-                    .map(|(s, fwd)| (s.to_string(), fwd))
-                    .collect();
-                target_paths.borrow_mut().push(PathRecord {
-                    display_chrom: p.name.clone(),
-                    match_keys: vec![p.name, short],
-                    start_offset: 0,
-                    steps,
-                });
+                if cfg.to_chroms.is_empty()
+                    || cfg.to_chroms.contains(&p.name)
+                    || cfg.to_chroms.contains(&short)
+                {
+                    let steps = parse_path_steps(&p.segment_names)
+                        .into_iter()
+                        .map(|(s, fwd)| (s.to_string(), fwd))
+                        .collect();
+                    target_paths.borrow_mut().push(PathRecord {
+                        display_chrom: p.name.clone(),
+                        match_keys: vec![p.name, short],
+                        start_offset: 0,
+                        steps,
+                    });
+                }
             }
             Ok(())
         },
@@ -443,16 +449,21 @@ fn run_lift<W1: Write, W2: Write>(
                 } else {
                     format!("{}#{}.{}", w.sample, w.haplotype, w.seq_id)
                 };
-                let steps = parse_walk_steps(&w.walk)
-                    .into_iter()
-                    .map(|(s, fwd)| (s.to_string(), fwd))
-                    .collect();
-                target_paths.borrow_mut().push(PathRecord {
-                    display_chrom: disp.clone(),
-                    match_keys: vec![w.seq_id, disp],
-                    start_offset: w.start,
-                    steps,
-                });
+                if cfg.to_chroms.is_empty()
+                    || cfg.to_chroms.contains(&w.seq_id)
+                    || cfg.to_chroms.contains(&disp)
+                {
+                    let steps = parse_walk_steps(&w.walk)
+                        .into_iter()
+                        .map(|(s, fwd)| (s.to_string(), fwd))
+                        .collect();
+                    target_paths.borrow_mut().push(PathRecord {
+                        display_chrom: disp.clone(),
+                        match_keys: vec![w.seq_id, disp],
+                        start_offset: w.start,
+                        steps,
+                    });
+                }
             }
             Ok(())
         },
@@ -650,6 +661,7 @@ fn main() -> Result<()> {
     let mut unmapped_path: Option<String> = None;
     let mut min_frac = 0.0_f64;
     let mut bridge_bp = 0usize;
+    let mut to_chroms: HashSet<String> = HashSet::new();
 
     let mut i = 0;
     while i < args.len() {
@@ -664,6 +676,13 @@ fn main() -> Result<()> {
             }
             "--to" => {
                 to_sample = Some(args.get(i + 1).context("missing value for --to")?.clone());
+                i += 2;
+            }
+            "--to-chrom" => {
+                let raw = args.get(i + 1).context("missing value for --to-chrom")?;
+                for c in raw.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                    to_chroms.insert(c.to_string());
+                }
                 i += 2;
             }
             "--bed" => {
@@ -723,6 +742,7 @@ fn main() -> Result<()> {
         gfa_path: spooled.path(),
         from_sample: &from,
         to_sample: &to,
+        to_chroms: &to_chroms,
         features: &features,
         min_frac,
         bridge_bp,
@@ -830,6 +850,7 @@ W\tCHM13\t0\tchr22\t100\t130\t>s1<s2>s4
             gfa_path: gfa_path.to_str().expect("valid utf8 temp path"),
             from_sample: "GRCh38",
             to_sample: "CHM13",
+            to_chroms: &HashSet::new(),
             features: &features,
             min_frac: 0.0,
             bridge_bp: 0,
@@ -891,6 +912,7 @@ W\tCHM13\t0\tchr1\t0\t80\t>d1>dup>d2>d1>s1>s2>dup>s4>s5
             gfa_path: gfa_path.to_str().expect("valid utf8 temp path"),
             from_sample: "GRCh38",
             to_sample: "CHM13",
+            to_chroms: &HashSet::new(),
             features: &features,
             min_frac: 0.0,
             bridge_bp: 0,
@@ -933,6 +955,7 @@ W\tCHM13\t0\tchr1\t0\t20\t>s1>s2
             gfa_path: gfa_path.to_str().expect("valid utf8 temp path"),
             from_sample: "GRCh38",
             to_sample: "CHM13",
+            to_chroms: &HashSet::new(),
             features: &features,
             min_frac: 0.0,
             bridge_bp: 0,

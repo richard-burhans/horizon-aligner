@@ -648,33 +648,76 @@ pub fn align_contig_pair_with_config(
         }
 
         for lcb in lcb_list.iter().chain(&rescued_inter) {
-            // General MDL gate: any LCB must earn at least `effective_min_bits` from its
-            // anchor base matches minus mismatch penalty (with no size-specific magic branch).
-            if lcb.len() < 8 {
-                let mut matches = 0usize;
-                let mut mismatches = 0usize;
-                let mut last_end_x = 0usize;
-                for &(ax, ay) in lcb {
-                    let a_span = span_for((ax, ay));
-                    for off in 0..a_span {
-                        let px = ax + off;
-                        let py = ay + off;
-                        if px < last_end_x || px >= seq_x.len() || py >= pv_len {
-                            continue;
-                        }
-                        if seq_x[px].eq_ignore_ascii_case(&y_work[py]) {
-                            matches += 1;
-                        } else {
-                            mismatches += 1;
-                        }
+            // General composition-aware MDL gate: evaluate BOCPD joint-pair bit savings
+            // minus gap-open penalties across all non-overlapping anchor columns in the LCB.
+            let mut gc_cnt_x = 0usize;
+            let mut gc_cnt_y = 0usize;
+            let mut tot_bases = 0usize;
+            let mut last_end_x = 0usize;
+            for &(ax, ay) in lcb {
+                let a_span = span_for((ax, ay));
+                for off in 0..a_span {
+                    let px = ax + off;
+                    let py = ay + off;
+                    if px < last_end_x || px >= seq_x.len() || py >= pv_len {
+                        continue;
                     }
-                    last_end_x = (ax + a_span).max(last_end_x);
+                    tot_bases += 1;
+                    if matches!(seq_x[px], b'G' | b'C' | b'g' | b'c') {
+                        gc_cnt_x += 1;
+                    }
+                    if matches!(y_work[py], b'G' | b'C' | b'g' | b'c') {
+                        gc_cnt_y += 1;
+                    }
                 }
-                #[allow(clippy::cast_precision_loss)]
-                let net_bits = 1.6 * (matches as f64) - 2.4 * (mismatches as f64);
-                if net_bits < effective_min_bits {
-                    continue;
+                last_end_x = (ax + a_span).max(last_end_x);
+            }
+            #[allow(clippy::cast_precision_loss)]
+            let x_gc = if tot_bases > 0 {
+                (gc_cnt_x as f64 / tot_bases as f64).clamp(0.05, 0.95)
+            } else {
+                0.5
+            };
+            #[allow(clippy::cast_precision_loss)]
+            let y_gc = if tot_bases > 0 {
+                (gc_cnt_y as f64 / tot_bases as f64).clamp(0.05, 0.95)
+            } else {
+                0.5
+            };
+            let pi_x = crate::bocpd::base_probs(x_gc);
+            let pi_y = crate::bocpd::base_probs(y_gc);
+            let mut net_bits = 0.0_f64;
+            let mut n_gaps = 0usize;
+            let mut prev_end_x = 0usize;
+            let mut prev_end_y = 0usize;
+            last_end_x = 0;
+            for &(ax, ay) in lcb {
+                let a_span = span_for((ax, ay));
+                if last_end_x > 0 && (ax > prev_end_x || ay > prev_end_y) {
+                    n_gaps += 1;
                 }
+                for off in 0..a_span {
+                    let px = ax + off;
+                    let py = ay + off;
+                    if px < last_end_x || px >= seq_x.len() || py >= pv_len {
+                        continue;
+                    }
+                    net_bits += crate::bocpd::joint_pair_bits(
+                        seq_x[px],
+                        y_work[py],
+                        pi_x,
+                        pi_y,
+                        crate::bocpd::IDENTITY_PRIOR,
+                    );
+                }
+                last_end_x = (ax + a_span).max(last_end_x);
+                prev_end_x = ax + a_span;
+                prev_end_y = ay + a_span;
+            }
+            #[allow(clippy::cast_precision_loss)]
+            let gap_penalty = (n_gaps as f64) * crate::bocpd::GAP_OPEN_BITS.abs();
+            if net_bits - gap_penalty < effective_min_bits {
+                continue;
             }
             let mut all_anchors = Vec::with_capacity(lcb.len() * 2);
             all_anchors.push(lcb[0]);
