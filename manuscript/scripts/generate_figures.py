@@ -32,13 +32,24 @@ plt.rcParams.update({
     "axes.spines.top": False,
     "axes.spines.right": False,
     "axes.linewidth": 0.9,
+    "pdf.fonttype": 42,
+    "ps.fonttype": 42,
     "svg.fonttype": "none",
+    "xtick.direction": "out",
+    "ytick.direction": "out",
 })
+
+
+def despine(ax: plt.Axes) -> None:
+    """Remove top and right spines for clean BioVis L-frame axes."""
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
 
 
 def save_both(fig: plt.Figure, stem: str) -> None:
     fig.savefig(OUT_DIR / f"{stem}.png", dpi=300, bbox_inches="tight", facecolor="white")
     fig.savefig(OUT_DIR / f"{stem}.svg", bbox_inches="tight", facecolor="white")
+    fig.savefig(OUT_DIR / f"{stem}.pdf", bbox_inches="tight", facecolor="white")
     plt.close(fig)
 
 
@@ -67,17 +78,17 @@ def make_fig1_architecture() -> None:
 
     # Stage 1: Multi-tier seeding
     box(0.2, 2.35, 2.15, 1.45, "1. Multi-Tier Seeding",
-        "KP-14 Eisenstein spaced\nLASTZ11 / LASTZ12 (T=1,2)\nHSP-gated RY20, W10\n6-frame 9-group AA5",
+        "FlatSeedIndex (12 B/entry)\n16-bit prefix buckets + SDUST\nRayon LASTZ12 & 6-frame AA5\nRY20 / W10 / W9 masks",
         "#EDF6FC", OI_BLUE)
 
     # Stage 2: LIS & LCB
-    box(2.75, 2.35, 2.0, 1.45, "2. Chaining & LCBs",
-        "O(M log M) LIS chain\nBidirectional LCBs\nInter-LCB w=9 rescue\nMacro Horizon Bubbles",
+    box(2.75, 2.35, 2.0, 1.45, "2. Chaining & DAG",
+        "O(M log M) LIS + BTreeSet\nBidirectional LCBs\nhorizon_wga --graph (POA)\nMacro Horizon Bubbles",
         "#EDF6FC", OI_BLUE)
 
     # Stage 3: BOCPD + Banded MDL
     box(5.15, 2.35, 2.35, 1.45, "3. BOCPD + Banded MDL",
-        "Beta-Bernoulli BOCPD\nover KP-17 W-channel\n3-state logplus BandGrid\n+ X-drop flank extension",
+        "Beta-Bernoulli BOCPD\n3-state logplus BandGrid\nTopological DAG MDL DP\n+ X-drop flank extension",
         "#FFF7E6", OI_ORANGE)
 
     # Stage 4: Conformal Abstention
@@ -89,25 +100,30 @@ def make_fig1_architecture() -> None:
     arrow(4.78, 3.07, 5.12, 3.07)
     arrow(7.53, 3.07, 7.87, 3.07)
 
-    # Bottom row: E-graph, Sweep-line Merge, Interop
-    box(1.1, 0.3, 2.6, 1.35, "5. E-Graph Saturation",
-        "Congruence-closed e-graph\ninv(inv(X)) ↔ X, seq(X,X) → dup\nParsimony cost extraction",
+    # Bottom row: E-graph, Sweep-line Merge, Pangenome Suite, Interop
+    box(0.2, 0.3, 2.25, 1.35, "5. MdlCostModel E-Graph",
+        "horizon_resolve / --resolve-dups\ninv(inv(X)) ↔ X, seq(X,X) → dup\nMDL bit-cost extraction",
         "#EAF7F2", OI_GREEN)
 
-    box(4.15, 0.3, 2.6, 1.35, "6. O(N log N) Merge & Guide",
-        "Best-score interval netting\nQuery gap-column threading\nTransitive sister-clade rescue",
+    box(2.8, 0.3, 2.35, 1.35, "6. Merge & Progressive",
+        "horizon_merge O(N log N) sweep\nhorizon_guide transitive rescue\nAncestral consensus & netting",
         "#EAF7F2", OI_GREEN)
 
-    box(7.2, 0.3, 2.6, 1.35, "7. Lossless Interop",
-        "Bidirectional GFA ↔ MAF lens\nrGFA (SN:Z, SO:i, SR:i:0)\nPure-Rust HDF5 HAL decoder",
+    box(5.5, 0.3, 2.35, 1.35, "7. Streaming GFA Suite",
+        "horizon_gfa (stats / extract)\nhorizon_lift (BED/GFF3 liftover)\nhorizon_clean (BOCPD L-cuts)",
         "#F7EEF4", OI_PURPLE)
 
-    arrow(9.07, 2.32, 5.45, 1.70, OI_VERMILION)
-    arrow(3.73, 0.97, 4.12, 0.97, OI_GREEN)
-    arrow(6.78, 0.97, 7.17, 0.97, OI_GREEN)
+    box(8.2, 0.3, 2.05, 1.35, "8. Lossless Interop",
+        "horizon <subcommand>\nMAF v1 ↔ rGFA v1.1 lens\nPure-Rust HDF5 v0/v1 HAL",
+        "#F7EEF4", OI_PURPLE)
 
-    ax.set_title("Horizon Whole-Genome Alignment Architecture: Seeding, Adaptive MDL, Conformal Abstention, and Graph Merge",
-                 loc="left", pad=8, fontsize=10.5)
+    arrow(9.07, 2.32, 1.32, 1.70, OI_VERMILION)
+    arrow(2.48, 0.97, 2.77, 0.97, OI_GREEN)
+    arrow(5.18, 0.97, 5.47, 0.97, OI_GREEN)
+    arrow(7.88, 0.97, 8.17, 0.97, OI_PURPLE)
+
+    ax.set_title("Horizon Suite Architecture: Seeding, Adaptive MDL, Conformal Abstention, E-Graphs, and Streaming Pangenome Tools",
+                 loc="left", pad=8, fontsize=10.2)
     save_both(fig, "fig1_architecture")
 
 
@@ -643,15 +659,96 @@ def make_fig_g3_horizon_bubble_anatomy() -> None:
     save_both(fig, "fig_g3_horizon_bubble_anatomy")
 
 
+def make_fig5_pangenome_suite() -> None:
+    """Two-panel BioVis figure: chr6 FlatSeedIndex+Rayon speedup & 12 GB HPRC suite scaling."""
+    fig, (ax1, ax2) = plt.subplots(
+        1, 2, figsize=(10.6, 4.1), gridspec_kw={"width_ratios": [1.05, 1.25], "wspace": 0.34}
+    )
+
+    # Panel A: Full GRCh38.chr6 (170.8 Mbp) x CHM13.chr6 (110.7 Mbp) stage breakdown
+    configs = ["Baseline\n(1e47fe0)", "FlatSeedIndex + Rayon\n(53130b8)"]
+    stages = [
+        ("KP-14 + w=10", [29.78, 28.46], OI_BLUE),
+        ("LASTZ12 1-trans (lz1)", [588.67, 47.87], OI_ORANGE),
+        ("HSP gate + LCBs (seed_end)", [184.65, 91.04], OI_SKY),
+        ("BandGrid MDL DP", [179.93, 187.35], OI_GREEN),
+        ("X-drop + I/O", [79.42, 96.63], OI_GRAY),
+    ]
+    x = np.arange(len(configs))
+    bottom = np.zeros(len(configs))
+    for label, vals, col in stages:
+        arr = np.array(vals)
+        ax1.bar(x, arr, width=0.46, bottom=bottom, color=col, edgecolor="white", linewidth=0.7, label=label)
+        bottom += arr
+
+    ax1.text(0, 1062.45 + 24, "1,062.45 s\n(17m 42s)", ha="center", va="bottom", fontsize=8.0, fontweight="bold", color=OI_BLACK)
+    ax1.text(1, 451.35 + 24, "451.35 s\n(2.35× faster)", ha="center", va="bottom", fontsize=8.0, fontweight="bold", color=OI_BLUE)
+    ax1.annotate(
+        "lz1: 588.7s → 47.9s\n(12.3× faster)",
+        xy=(1, 52),
+        xytext=(0.66, 720),
+        ha="center",
+        fontsize=7.6,
+        fontweight="bold",
+        color=OI_VERMILION,
+        arrowprops=dict(arrowstyle="->", color=OI_VERMILION, lw=1.0),
+    )
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(configs, fontsize=8.2)
+    ax1.set_ylim(0, 1240)
+    ax1.set_ylabel("Wall-Clock Runtime (s)", fontsize=9.0)
+    ax1.set_title("Full GRCh38.chr6 × CHM13.chr6 Breakdown", loc="left", fontsize=9.8)
+    ax1.legend(frameon=False, fontsize=7.0, loc="upper right")
+    despine(ax1)
+    ax1.text(-0.16, 1.07, "A", transform=ax1.transAxes, fontsize=11.5, fontweight="bold", va="top")
+
+    # Panel B: 12 GB HPRC v1.0 Graph & Suite Scaling (Wall Time vs Peak RSS)
+    suite_runs = [
+        ("horizon_gfa stats\n(12 GB HPRC, 81.4M segs)", 99.97, 97.0, OI_PURPLE, (10, -2), "left"),
+        ("horizon_gfa extract\n(GRCh38+CHM13 chr22)", 183.29, 456.4, OI_PURPLE, (10, -6), "left"),
+        ("horizon_gfa extract\n(GRCh38+CHM13 chr6)", 244.93, 1255.1, OI_PURPLE, (10, 4), "left"),
+        ("horizon_lift --bridge-bp 10\n(500 chr22 windows)", 182.67, 619.7, OI_GREEN, (-10, 8), "right"),
+        ("horizon_wga --resolve-dups\n(chr22 50.8 × 35.6 Mbp)", 116.58, 3336.4, OI_BLUE, (10, 12), "left"),
+        ("horizon_wga --resolve-dups\n(chr6 170.8 × 110.7 Mbp)", 451.35, 10515.0, OI_BLUE, (-10, -8), "right"),
+        ("horizon_wga --resolve-dups\n(chr6 20 Mbp q-arm)", 38.23, 2409.7, OI_SKY, (8, -18), "left"),
+    ]
+    for label, wt, rss, col, (dx, dy), ha in suite_runs:
+        ax2.scatter(wt, rss, color=col, s=64, edgecolor="white", linewidth=0.9, zorder=4)
+        ax2.annotate(
+            label,
+            (wt, rss),
+            xytext=(dx, dy),
+            textcoords="offset points",
+            ha=ha,
+            va="center",
+            fontsize=7.0,
+            color=OI_BLACK,
+            arrowprops=dict(arrowstyle="-", color="#9CA3AF", lw=0.6, shrinkA=2, shrinkB=4),
+        )
+
+    ax2.set_yscale("log")
+    ax2.set_xlim(0, 500)
+    ax2.set_ylim(50, 22000)
+    ax2.set_xlabel("Wall-Clock Runtime (s)", fontsize=9.0)
+    ax2.set_ylabel("Peak RSS Memory (MB, log scale)", fontsize=9.0)
+    ax2.set_title("12 GB HPRC v1.0 Suite Runtime & Memory", loc="left", fontsize=9.8)
+    ax2.grid(True, which="major", linestyle=":", linewidth=0.5, color="#D1D5DB", alpha=0.7)
+    despine(ax2)
+    ax2.text(-0.16, 1.07, "B", transform=ax2.transAxes, fontsize=11.5, fontweight="bold", va="top")
+
+    save_both(fig, "fig5_pangenome_suite")
+
+
 if __name__ == "__main__":
     make_fig1_architecture()
     make_fig2_benchmarks()
     make_fig3_abstention_speedup()
     make_fig4_ablation_profile()
+    make_fig5_pangenome_suite()
     make_fig_c1_bocpd_mdl_trace()
     make_fig_c2_bandgrid_egraph()
     make_fig_c3_hdf5_hal_seek()
     make_fig_g1_hoxd70_vs_mdl_gc()
     make_fig_g2_hal_binary_layouts()
     make_fig_g3_horizon_bubble_anatomy()
-    print(f"Generated 10 figures (.png + .svg) in {OUT_DIR}")
+    print(f"Generated 11 figures (.png + .svg + .pdf) in {OUT_DIR}")

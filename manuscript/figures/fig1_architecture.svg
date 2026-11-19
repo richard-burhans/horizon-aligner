@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="utf-8" standalone="no"?>
 <!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
   "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
-<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="688.547578pt" height="263.226359pt" viewBox="0 0 688.547578 263.226359" xmlns="http://www.w3.org/2000/svg" version="1.1">
+<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="697.463719pt" height="262.998406pt" viewBox="0 0 697.463719 262.998406" xmlns="http://www.w3.org/2000/svg" version="1.1">
  <metadata>
   <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
    <cc:Work>
     <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
-    <dc:date>2026-11-18T13:05:09.248334</dc:date>
+    <dc:date>2026-11-19T15:54:11.927573</dc:date>
     <dc:format>image/svg+xml</dc:format>
     <dc:creator>
      <cc:Agent>
@@ -21,233 +21,264 @@
  </defs>
  <g id="figure_1">
   <g id="patch_1">
-   <path d="M 0 263.226359 
-L 688.547578 263.226359 
-L 688.547578 0 
+   <path d="M 0 262.998406 
+L 697.463719 262.998406 
+L 697.463719 0 
 L 0 0 
 z
 " style="fill: #ffffff"/>
   </g>
   <g id="axes_1">
    <g id="patch_2">
-    <path d="M 20.592 130.177559 
-L 136.098 130.177559 
-Q 142.794 130.177559 142.794 123.524759 
-L 142.794 47.571959 
-Q 142.794 40.919159 136.098 40.919159 
-L 20.592 40.919159 
-Q 13.896 40.919159 13.896 47.571959 
-L 13.896 123.524759 
-Q 13.896 130.177559 20.592 130.177559 
+    <path d="M 20.592 129.949606 
+L 136.098 129.949606 
+Q 142.794 129.949606 142.794 123.296806 
+L 142.794 47.344006 
+Q 142.794 40.691206 136.098 40.691206 
+L 20.592 40.691206 
+Q 13.896 40.691206 13.896 47.344006 
+L 13.896 123.296806 
+Q 13.896 129.949606 20.592 129.949606 
 z
-" clip-path="url(#pe5eae5ffbd)" style="fill: #edf6fc; stroke: #0072b2; stroke-width: 1.4; stroke-linejoin: miter"/>
+" clip-path="url(#p9441edadda)" style="fill: #edf6fc; stroke: #0072b2; stroke-width: 1.4; stroke-linejoin: miter"/>
    </g>
    <g id="patch_3">
-    <path d="M 162.882 130.177559 
-L 270.018 130.177559 
-Q 276.714 130.177559 276.714 123.524759 
-L 276.714 47.571959 
-Q 276.714 40.919159 270.018 40.919159 
-L 162.882 40.919159 
-Q 156.186 40.919159 156.186 47.571959 
-L 156.186 123.524759 
-Q 156.186 130.177559 162.882 130.177559 
+    <path d="M 162.882 129.949606 
+L 270.018 129.949606 
+Q 276.714 129.949606 276.714 123.296806 
+L 276.714 47.344006 
+Q 276.714 40.691206 270.018 40.691206 
+L 162.882 40.691206 
+Q 156.186 40.691206 156.186 47.344006 
+L 156.186 123.296806 
+Q 156.186 129.949606 162.882 129.949606 
 z
-" clip-path="url(#pe5eae5ffbd)" style="fill: #edf6fc; stroke: #0072b2; stroke-width: 1.4; stroke-linejoin: miter"/>
+" clip-path="url(#p9441edadda)" style="fill: #edf6fc; stroke: #0072b2; stroke-width: 1.4; stroke-linejoin: miter"/>
    </g>
    <g id="patch_4">
-    <path d="M 296.802 130.177559 
-L 423.468 130.177559 
-Q 430.164 130.177559 430.164 123.524759 
-L 430.164 47.571959 
-Q 430.164 40.919159 423.468 40.919159 
-L 296.802 40.919159 
-Q 290.106 40.919159 290.106 47.571959 
-L 290.106 123.524759 
-Q 290.106 130.177559 296.802 130.177559 
+    <path d="M 296.802 129.949606 
+L 423.468 129.949606 
+Q 430.164 129.949606 430.164 123.296806 
+L 430.164 47.344006 
+Q 430.164 40.691206 423.468 40.691206 
+L 296.802 40.691206 
+Q 290.106 40.691206 290.106 47.344006 
+L 290.106 123.296806 
+Q 290.106 129.949606 296.802 129.949606 
 z
-" clip-path="url(#pe5eae5ffbd)" style="fill: #fff7e6; stroke: #e69f00; stroke-width: 1.4; stroke-linejoin: miter"/>
+" clip-path="url(#p9441edadda)" style="fill: #fff7e6; stroke: #e69f00; stroke-width: 1.4; stroke-linejoin: miter"/>
    </g>
    <g id="patch_5">
-    <path d="M 450.252 130.177559 
-L 576.918 130.177559 
-Q 583.614 130.177559 583.614 123.524759 
-L 583.614 47.571959 
-Q 583.614 40.919159 576.918 40.919159 
-L 450.252 40.919159 
-Q 443.556 40.919159 443.556 47.571959 
-L 443.556 123.524759 
-Q 443.556 130.177559 450.252 130.177559 
+    <path d="M 450.252 129.949606 
+L 576.918 129.949606 
+Q 583.614 129.949606 583.614 123.296806 
+L 583.614 47.344006 
+Q 583.614 40.691206 576.918 40.691206 
+L 450.252 40.691206 
+Q 443.556 40.691206 443.556 47.344006 
+L 443.556 123.296806 
+Q 443.556 129.949606 450.252 129.949606 
 z
-" clip-path="url(#pe5eae5ffbd)" style="fill: #fdeee8; stroke: #d55e00; stroke-width: 1.4; stroke-linejoin: miter"/>
+" clip-path="url(#p9441edadda)" style="fill: #fdeee8; stroke: #d55e00; stroke-width: 1.4; stroke-linejoin: miter"/>
    </g>
    <g id="patch_6">
-    <path d="M 70.812 243.829559 
-L 211.428 243.829559 
-Q 218.124 243.829559 218.124 237.176759 
-L 218.124 166.767959 
-Q 218.124 160.115159 211.428 160.115159 
-L 70.812 160.115159 
-Q 64.116 160.115159 64.116 166.767959 
-L 64.116 237.176759 
-Q 64.116 243.829559 70.812 243.829559 
+    <path d="M 20.592 243.601606 
+L 141.678 243.601606 
+Q 148.374 243.601606 148.374 236.948806 
+L 148.374 166.540006 
+Q 148.374 159.887206 141.678 159.887206 
+L 20.592 159.887206 
+Q 13.896 159.887206 13.896 166.540006 
+L 13.896 236.948806 
+Q 13.896 243.601606 20.592 243.601606 
 z
-" clip-path="url(#pe5eae5ffbd)" style="fill: #eaf7f2; stroke: #009e73; stroke-width: 1.4; stroke-linejoin: miter"/>
+" clip-path="url(#p9441edadda)" style="fill: #eaf7f2; stroke: #009e73; stroke-width: 1.4; stroke-linejoin: miter"/>
    </g>
    <g id="patch_7">
-    <path d="M 241.002 243.829559 
-L 381.618 243.829559 
-Q 388.314 243.829559 388.314 237.176759 
-L 388.314 166.767959 
-Q 388.314 160.115159 381.618 160.115159 
-L 241.002 160.115159 
-Q 234.306 160.115159 234.306 166.767959 
-L 234.306 237.176759 
-Q 234.306 243.829559 241.002 243.829559 
+    <path d="M 165.672 243.601606 
+L 292.338 243.601606 
+Q 299.034 243.601606 299.034 236.948806 
+L 299.034 166.540006 
+Q 299.034 159.887206 292.338 159.887206 
+L 165.672 159.887206 
+Q 158.976 159.887206 158.976 166.540006 
+L 158.976 236.948806 
+Q 158.976 243.601606 165.672 243.601606 
 z
-" clip-path="url(#pe5eae5ffbd)" style="fill: #eaf7f2; stroke: #009e73; stroke-width: 1.4; stroke-linejoin: miter"/>
+" clip-path="url(#p9441edadda)" style="fill: #eaf7f2; stroke: #009e73; stroke-width: 1.4; stroke-linejoin: miter"/>
    </g>
    <g id="patch_8">
-    <path d="M 411.192 243.829559 
-L 551.808 243.829559 
-Q 558.504 243.829559 558.504 237.176759 
-L 558.504 166.767959 
-Q 558.504 160.115159 551.808 160.115159 
-L 411.192 160.115159 
-Q 404.496 160.115159 404.496 166.767959 
-L 404.496 237.176759 
-Q 404.496 243.829559 411.192 243.829559 
+    <path d="M 316.332 243.601606 
+L 442.998 243.601606 
+Q 449.694 243.601606 449.694 236.948806 
+L 449.694 166.540006 
+Q 449.694 159.887206 442.998 159.887206 
+L 316.332 159.887206 
+Q 309.636 159.887206 309.636 166.540006 
+L 309.636 236.948806 
+Q 309.636 243.601606 316.332 243.601606 
 z
-" clip-path="url(#pe5eae5ffbd)" style="fill: #f7eef4; stroke: #cc79a7; stroke-width: 1.4; stroke-linejoin: miter"/>
-   </g>
-   <g id="text_1">
-    <text style="font-weight: 700; font-size: 9.2px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; text-anchor: middle; fill: #1a1a1a" x="78.345" y="65.650522" transform="rotate(-0 78.345 65.650522)">1. Multi-Tier Seeding</text>
-   </g>
-   <g id="text_2">
-    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(30.179688 80.321866)">KP-14 Eisenstein spaced</text>
-    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(22.869719 90.730116)">LASTZ11 / LASTZ12 (T=1,2)</text>
-    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(35.102992 100.545866)">HSP-gated RY20, W10</text>
-    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(36.745328 110.657866)">6-frame 9-group AA5</text>
-   </g>
-   <g id="text_3">
-    <text style="font-weight: 700; font-size: 9.2px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; text-anchor: middle; fill: #1a1a1a" x="216.45" y="65.650522" transform="rotate(-0 216.45 65.650522)">2. Chaining &amp; LCBs</text>
-   </g>
-   <g id="text_4">
-    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(175.82857 80.321866)">O(M log M) LIS chain</text>
-    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(180.832109 91.199178)">Bidirectional LCBs</text>
-    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(173.641875 101.241436)">Inter-LCB w=9 rescue</text>
-    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(171.06882 111.423178)">Macro Horizon Bubbles</text>
-   </g>
-   <g id="text_5">
-    <text style="font-weight: 700; font-size: 9.2px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; text-anchor: middle; fill: #1a1a1a" x="360.135" y="65.650522" transform="rotate(-0 360.135 65.650522)">3. BOCPD + Banded MDL</text>
-   </g>
-   <g id="text_6">
-    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(317.142953 81.087178)">Beta-Bernoulli BOCPD</text>
-    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(316.677594 91.199178)">over KP-17 W-channel</text>
-    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(311.061187 100.545866)">3-state logplus BandGrid</text>
-    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(311.200055 110.657866)">+ X-drop flank extension</text>
-   </g>
-   <g id="text_7">
-    <text style="font-weight: 700; font-size: 9.2px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; text-anchor: middle; fill: #1a1a1a" x="513.585" y="65.650522" transform="rotate(-0 513.585 65.650522)">4. Conformal Risk Gate</text>
-   </g>
-   <g id="text_8">
-    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(460.064969 81.964819)">Calibrated floor λ̂ = 10 bits</text>
-    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(469.757281 90.324006)">(α = 0.07, n_cal = 15)</text>
-    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(475.711906 101.423506)">Keep ΔL ≥ λ̂ blocks</text>
-    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(471.168789 111.423178)">Emit Horizon Bubbles</text>
+" clip-path="url(#p9441edadda)" style="fill: #f7eef4; stroke: #cc79a7; stroke-width: 1.4; stroke-linejoin: miter"/>
    </g>
    <g id="patch_9">
-    <path d="M 142.000321 85.825559 
-Q 149.487275 85.825559 155.679749 85.825559 
-" style="fill: none; stroke: #6b7280; stroke-width: 1.4; stroke-linecap: round"/>
-    <path d="M 153.019749 84.115559 
-L 155.679749 85.825559 
-L 153.019749 87.535559 
+    <path d="M 466.992 243.601606 
+L 576.918 243.601606 
+Q 583.614 243.601606 583.614 236.948806 
+L 583.614 166.540006 
+Q 583.614 159.887206 576.918 159.887206 
+L 466.992 159.887206 
+Q 460.296 159.887206 460.296 166.540006 
+L 460.296 236.948806 
+Q 460.296 243.601606 466.992 243.601606 
 z
-" style="fill: #6b7280; stroke: #6b7280; stroke-width: 1.4; stroke-linecap: round"/>
+" clip-path="url(#p9441edadda)" style="fill: #f7eef4; stroke: #cc79a7; stroke-width: 1.4; stroke-linejoin: miter"/>
+   </g>
+   <g id="text_1">
+    <text style="font-weight: 700; font-size: 9.2px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; text-anchor: middle; fill: #1a1a1a" x="78.345" y="65.422569" transform="rotate(-0 78.345 65.422569)">1. Multi-Tier Seeding</text>
+   </g>
+   <g id="text_2">
+    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(25.150844 80.093913)">FlatSeedIndex (12 B/entry)</text>
+    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(18.381531 90.205913)">16-bit prefix buckets + SDUST</text>
+    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(16.58243 100.317913)">Rayon LASTZ12 &amp; 6-frame AA5</text>
+    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(31.45418 110.88478)">RY20 / W10 / W9 masks</text>
+   </g>
+   <g id="text_3">
+    <text style="font-weight: 700; font-size: 9.2px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; text-anchor: middle; fill: #1a1a1a" x="216.45" y="65.422569" transform="rotate(-0 216.45 65.422569)">2. Chaining &amp; DAG</text>
+   </g>
+   <g id="text_4">
+    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(164.533422 80.093913)">O(M log M) LIS + BTreeSet</text>
+    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(180.832109 90.971225)">Bidirectional LCBs</text>
+    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(163.551477 100.208053)">horizon_wga --graph (POA)</text>
+    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(171.06882 111.195225)">Macro Horizon Bubbles</text>
+   </g>
+   <g id="text_5">
+    <text style="font-weight: 700; font-size: 9.2px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; text-anchor: middle; fill: #1a1a1a" x="360.135" y="65.422569" transform="rotate(-0 360.135 65.422569)">3. BOCPD + Banded MDL</text>
+   </g>
+   <g id="text_6">
+    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(317.142953 80.859225)">Beta-Bernoulli BOCPD</text>
+    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(311.061187 90.205913)">3-state logplus BandGrid</text>
+    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(311.737008 100.317913)">Topological DAG MDL DP</text>
+    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(311.200055 110.429913)">+ X-drop flank extension</text>
+   </g>
+   <g id="text_7">
+    <text style="font-weight: 700; font-size: 9.2px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; text-anchor: middle; fill: #1a1a1a" x="513.585" y="65.422569" transform="rotate(-0 513.585 65.422569)">4. Conformal Risk Gate</text>
+   </g>
+   <g id="text_8">
+    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(460.064969 81.736866)">Calibrated floor λ̂ = 10 bits</text>
+    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(469.757281 90.096053)">(α = 0.07, n_cal = 15)</text>
+    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(475.711906 101.195553)">Keep ΔL ≥ λ̂ blocks</text>
+    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(471.168789 111.195225)">Emit Horizon Bubbles</text>
    </g>
    <g id="patch_10">
-    <path d="M 275.920321 85.825559 
-Q 283.407275 85.825559 289.599749 85.825559 
+    <path d="M 142.000321 85.597606 
+Q 149.487275 85.597606 155.679749 85.597606 
 " style="fill: none; stroke: #6b7280; stroke-width: 1.4; stroke-linecap: round"/>
-    <path d="M 286.939749 84.115559 
-L 289.599749 85.825559 
-L 286.939749 87.535559 
+    <path d="M 153.019749 83.887606 
+L 155.679749 85.597606 
+L 153.019749 87.307606 
 z
 " style="fill: #6b7280; stroke: #6b7280; stroke-width: 1.4; stroke-linecap: round"/>
    </g>
    <g id="patch_11">
-    <path d="M 429.370321 85.825559 
-Q 436.857275 85.825559 443.049749 85.825559 
+    <path d="M 275.920321 85.597606 
+Q 283.407275 85.597606 289.599749 85.597606 
 " style="fill: none; stroke: #6b7280; stroke-width: 1.4; stroke-linecap: round"/>
-    <path d="M 440.389749 84.115559 
-L 443.049749 85.825559 
-L 440.389749 87.535559 
+    <path d="M 286.939749 83.887606 
+L 289.599749 85.597606 
+L 286.939749 87.307606 
+z
+" style="fill: #6b7280; stroke: #6b7280; stroke-width: 1.4; stroke-linecap: round"/>
+   </g>
+   <g id="patch_12">
+    <path d="M 429.370321 85.597606 
+Q 436.857275 85.597606 443.049749 85.597606 
+" style="fill: none; stroke: #6b7280; stroke-width: 1.4; stroke-linecap: round"/>
+    <path d="M 440.389749 83.887606 
+L 443.049749 85.597606 
+L 440.389749 87.307606 
 z
 " style="fill: #6b7280; stroke: #6b7280; stroke-width: 1.4; stroke-linecap: round"/>
    </g>
    <g id="text_9">
-    <text style="font-weight: 700; font-size: 9.2px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; text-anchor: middle; fill: #1a1a1a" x="141.12" y="184.846522" transform="rotate(-0 141.12 184.846522)">5. E-Graph Saturation</text>
+    <text style="font-weight: 700; font-size: 9.2px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; text-anchor: middle; fill: #1a1a1a" x="81.135" y="184.618569" transform="rotate(-0 81.135 184.618569)">5. MdlCostModel E-Graph</text>
    </g>
    <g id="text_10">
-    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(86.489648 201.801866)">Congruence-closed e-graph</text>
-    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(79.251273 211.913866)">inv(inv(X)) ↔ X, seq(X,X) → dup</text>
-    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(89.874305 222.025866)">Parsimony cost extraction</text>
+    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(18.217055 201.464053)">horizon_resolve / --resolve-dups</text>
+    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(19.266273 211.685913)">inv(inv(X)) ↔ X, seq(X,X) → dup</text>
+    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(35.169961 222.563225)">MDL bit-cost extraction</text>
    </g>
    <g id="text_11">
-    <text style="font-weight: 700; font-size: 9.2px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; text-anchor: middle; fill: #1a1a1a" x="311.31" y="184.846522" transform="rotate(-0 311.31 184.846522)">6. O(N log N) Merge &amp; Guide</text>
+    <text style="font-weight: 700; font-size: 9.2px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; text-anchor: middle; fill: #1a1a1a" x="229.005" y="184.618569" transform="rotate(-0 229.005 184.618569)">6. Merge &amp; Progressive</text>
    </g>
    <g id="text_12">
-    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(258.815117 201.801866)">Best-score interval netting</text>
-    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(254.337422 211.913866)">Query gap-column threading</text>
-    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(254.103508 222.791178)">Transitive sister-clade rescue</text>
+    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(163.822594 201.464053)">horizon_merge O(N log N) sweep</text>
+    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(167.041844 211.576053)">horizon_guide transitive rescue</text>
+    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(168.761328 221.797912)">Ancestral consensus &amp; netting</text>
    </g>
    <g id="text_13">
-    <text style="font-weight: 700; font-size: 9.2px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; text-anchor: middle; fill: #1a1a1a" x="481.5" y="184.846522" transform="rotate(-0 481.5 184.846522)">7. Lossless Interop</text>
+    <text style="font-weight: 700; font-size: 9.2px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; text-anchor: middle; fill: #1a1a1a" x="379.665" y="184.618569" transform="rotate(-0 379.665 184.618569)">7. Streaming GFA Suite</text>
    </g>
    <g id="text_14">
-    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(424.389789 202.567178)">Bidirectional GFA ↔ MAF lens</text>
-    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(433.967305 212.214436)">rGFA (SN:Z, SO:i, SR:i:0)</text>
-    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(424.089219 222.791178)">Pure-Rust HDF5 HAL decoder</text>
+    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(324.911828 201.464053)">horizon_gfa (stats / extract)</text>
+    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(318.828211 211.576053)">horizon_lift (BED/GFF3 liftover)</text>
+    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(321.068602 221.688053)">horizon_clean (BOCPD L-cuts)</text>
    </g>
-   <g id="patch_12">
-    <path d="M 511.336465 127.740707 
-Q 412.307555 144.592035 314.55478 161.226209 
+   <g id="text_15">
+    <text style="font-weight: 700; font-size: 9.2px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; text-anchor: middle; fill: #1a1a1a" x="521.955" y="184.618569" transform="rotate(-0 521.955 184.618569)">8. Lossless Interop</text>
+   </g>
+   <g id="text_16">
+    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(472.660852 202.339225)">horizon &lt;subcommand&gt;</text>
+    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(473.130531 212.451225)">MAF v1 ↔ rGFA v1.1 lens</text>
+    <text style="font-size: 7.9px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; fill: #2d3748" transform="translate(469.600219 222.183038)">Pure-Rust HDF5 v0/v1 HAL</text>
+   </g>
+   <g id="patch_13">
+    <path d="M 511.309904 127.336264 
+Q 297.079677 144.364111 84.139861 161.289392 
 " style="fill: none; stroke: #d55e00; stroke-width: 1.4; stroke-linecap: round"/>
-    <path d="M 317.463945 162.46575 
-L 314.55478 161.226209 
-L 316.890225 159.094215 
+    <path d="M 86.926988 162.783254 
+L 84.139861 161.289392 
+L 86.656008 159.374006 
 z
 " style="fill: #d55e00; stroke: #d55e00; stroke-width: 1.4; stroke-linecap: round"/>
    </g>
-   <g id="patch_13">
-    <path d="M 217.33434 202.249559 
-Q 226.214061 202.249559 233.799301 202.249559 
-" style="fill: none; stroke: #009e73; stroke-width: 1.4; stroke-linecap: round"/>
-    <path d="M 231.139301 200.539559 
-L 233.799301 202.249559 
-L 231.139301 203.959559 
-z
-" style="fill: #009e73; stroke: #009e73; stroke-width: 1.4; stroke-linecap: round"/>
-   </g>
    <g id="patch_14">
-    <path d="M 387.52434 202.249559 
-Q 396.404061 202.249559 403.989301 202.249559 
+    <path d="M 147.586997 202.021606 
+Q 153.677806 202.021606 158.474136 202.021606 
 " style="fill: none; stroke: #009e73; stroke-width: 1.4; stroke-linecap: round"/>
-    <path d="M 401.329301 200.539559 
-L 403.989301 202.249559 
-L 401.329301 203.959559 
+    <path d="M 155.814136 200.311606 
+L 158.474136 202.021606 
+L 155.814136 203.731606 
 z
 " style="fill: #009e73; stroke: #009e73; stroke-width: 1.4; stroke-linecap: round"/>
    </g>
-   <g id="text_15">
-    <text style="font-weight: 700; font-size: 10.5px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; text-anchor: start" x="7.2" y="15.178359" transform="rotate(-0 7.2 15.178359)">Horizon Whole-Genome Alignment Architecture: Seeding, Adaptive MDL, Conformal Abstention, and Graph Merge</text>
+   <g id="patch_15">
+    <path d="M 298.246997 202.021606 
+Q 304.337806 202.021606 309.134136 202.021606 
+" style="fill: none; stroke: #009e73; stroke-width: 1.4; stroke-linecap: round"/>
+    <path d="M 306.474136 200.311606 
+L 309.134136 202.021606 
+L 306.474136 203.731606 
+z
+" style="fill: #009e73; stroke: #009e73; stroke-width: 1.4; stroke-linecap: round"/>
+   </g>
+   <g id="patch_16">
+    <path d="M 448.906997 202.021606 
+Q 454.997806 202.021606 459.794136 202.021606 
+" style="fill: none; stroke: #cc79a7; stroke-width: 1.4; stroke-linecap: round"/>
+    <path d="M 457.134136 200.311606 
+L 459.794136 202.021606 
+L 457.134136 203.731606 
+z
+" style="fill: #cc79a7; stroke: #cc79a7; stroke-width: 1.4; stroke-linecap: round"/>
+   </g>
+   <g id="text_17">
+    <text style="font-weight: 700; font-size: 10.2px; font-family: 'DejaVu Sans', 'Arial', 'Helvetica', sans-serif; text-anchor: start" x="7.2" y="14.950406" transform="rotate(-0 7.2 14.950406)">Horizon Suite Architecture: Seeding, Adaptive MDL, Conformal Abstention, E-Graphs, and Streaming Pangenome Tools</text>
    </g>
   </g>
  </g>
  <defs>
-  <clipPath id="pe5eae5ffbd">
-   <rect x="7.2" y="23.178359" width="585.9" height="232.848"/>
+  <clipPath id="p9441edadda">
+   <rect x="7.2" y="22.950406" width="585.9" height="232.848"/>
   </clipPath>
  </defs>
 </svg>
