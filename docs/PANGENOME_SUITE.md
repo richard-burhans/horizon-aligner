@@ -17,7 +17,7 @@ The target vision for the `horizon` suite extends beyond pairwise whole-genome a
 **The Proposed Solution:**
 * Ingest the sequence (`S`) lines of a GFA into a graph-aware spaced-seed index, utilizing transition-tolerant (`MASK_RY20`, 25-bp) and translated Amino Acid (`AA5`, requiring >=18-bp / 6-codon spans) masks across node boundaries.
 * Extend `BandGrid` (`src/mdl/dp.rs`, currently strictly 2D linear-diagonal) to banded partial-order / DAG MDL dynamic programming across graph bifurcations (building on prior art such as `GraphAligner` and `minigraph`).
-* **Target Impact:** Enables mapping distant relatives into established pangenomes while abstaining at low-confidence divergence thresholds (noting that on our `cactus241way` 1MB nuclear test, abstention reduces recall from 45.3% to 9.9% with 494 Horizon Bubbles).
+* **Target Impact:** Enables mapping distant relatives into established pangenomes while abstaining at low-confidence divergence thresholds (noting that in pairwise tests on `cactus241way`, recall is `45.3%` on `chr22_random` [38 kb, 233 bubbles] vs. `9.9%` on `chr22 1MB` [494 Horizon Bubbles]).
 
 ## 3. Global Structural Paralog Resolution (`horizon_resolve` — Proposed)
 **The Problem:** Complex structural variants (nested inversions, tandem duplications) produce cyclical or tangled graph topologies that complicate downstream variant calling and visualization.

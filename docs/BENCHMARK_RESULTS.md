@@ -38,5 +38,5 @@ These sets were completely locked away during algorithm development to prevent o
 | B10K 363-way | Chicken (`galGal6`) | Zebra Finch (`taeGut2`) | Deep Avian | *(Pending Data)* | - | - |
 | HPRC (v1.1) | `GRCh38` | `CHM13` | Human Pangenome | *(Graph Eval)* | - | - |
 
-> **Note on `cactus241way` (chr22 1MB):** Recall drops 4.5x from `45.3%` (`chr22_random`, 38 kb) to `9.9%` (`chr22 1MB`, 494 Horizon Bubbles) due to aggressive MDL abstention across divergent nuclear regions.
+> **Note on `cactus241way` (chr22 1MB):** Recall drops 4.6x from `45.3%` (`chr22_random`, 38 kb, 233 bubbles) to `9.9%` (`chr22 1MB`, 494 Horizon Bubbles) across the larger nuclear region.
 
