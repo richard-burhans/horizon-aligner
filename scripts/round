@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Run the shared round harness from ANY working directory in this repo.
+set -euo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROUND="${ROUND_ROOT:-$REPO/../round}"
+
+if [ ! -x "$ROUND/bin/round" ]; then
+    echo "no round harness at ${ROUND}/bin/round" >&2
+    echo "Point at a checkout with \$ROUND_ROOT, or clone it beside this repo as ../round." >&2
+    exit 2
+fi
+
+export ROUND_CONSUMER_ROOT="${ROUND_CONSUMER_ROOT:-$REPO}"
+exec "$ROUND/bin/round" "$@"
