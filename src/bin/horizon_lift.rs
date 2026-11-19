@@ -42,6 +42,8 @@ struct TargetOcc {
     target_start: usize,
     target_end: usize,
     is_fwd: bool,
+    path_idx: usize,
+    step_idx: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -156,6 +158,47 @@ fn flip_strand(strand: char) -> char {
     if strand == '-' { '+' } else { '-' }
 }
 
+fn context_jaccard(
+    src_steps: &[StepSpan],
+    src_pos: usize,
+    tgt_steps: &[String],
+    tgt_pos: usize,
+) -> f64 {
+    const CTX_RADIUS: usize = 4;
+    let s_lo = src_pos.saturating_sub(CTX_RADIUS);
+    let s_hi = (src_pos + CTX_RADIUS + 1).min(src_steps.len());
+    let t_lo = tgt_pos.saturating_sub(CTX_RADIUS);
+    let t_hi = (tgt_pos + CTX_RADIUS + 1).min(tgt_steps.len());
+    let mut src_counts: HashMap<&str, usize> = HashMap::with_capacity(s_hi - s_lo);
+    for st in &src_steps[s_lo..s_hi] {
+        *src_counts.entry(st.seg.as_str()).or_insert(0) += 1;
+    }
+    let mut tgt_counts: HashMap<&str, usize> = HashMap::with_capacity(t_hi - t_lo);
+    for seg in &tgt_steps[t_lo..t_hi] {
+        *tgt_counts.entry(seg.as_str()).or_insert(0) += 1;
+    }
+    let mut inter = 0usize;
+    let mut union = 0usize;
+    for (k, &sc) in &src_counts {
+        let tc = tgt_counts.get(k).copied().unwrap_or(0);
+        inter += sc.min(tc);
+        union += sc.max(tc);
+    }
+    for (k, &tc) in &tgt_counts {
+        if !src_counts.contains_key(k) {
+            union += tc;
+        }
+    }
+    if union == 0 {
+        0.0
+    } else {
+        #[allow(clippy::cast_precision_loss)]
+        {
+            inter as f64 / union as f64
+        }
+    }
+}
+
 /// Project a single source interval `[src_s, src_e)` on `src_steps` onto `target_index`.
 #[allow(clippy::too_many_lines)]
 fn lift_feature(
@@ -163,6 +206,7 @@ fn lift_feature(
     src_steps: &[StepSpan],
     seg_lens: &HashMap<String, usize>,
     target_index: &HashMap<String, Vec<TargetOcc>>,
+    target_step_names: &[Vec<String>],
     bridge_bp: usize,
 ) -> Vec<LiftedPiece> {
     if feat.start >= feat.end || src_steps.is_empty() {
@@ -174,7 +218,8 @@ fn lift_feature(
     let mut raw_pieces: Vec<LiftedPiece> = Vec::new();
     let mut last_target: Option<(String, usize, usize, char)> = None;
 
-    for step in &src_steps[first_idx..] {
+    for (rel_idx, step) in src_steps[first_idx..].iter().enumerate() {
+        let src_pos = first_idx + rel_idx;
         if step.path_start >= feat.end {
             break;
         }
@@ -208,23 +253,41 @@ fn lift_feature(
             continue;
         }
         let duplicated = occs.len() > 1;
-        // If multiple target occurrences exist, prefer one contiguous with last_target.
+        // Prefer highest flanking-context Jaccard similarity (Guarracino et al., 2022),
+        // breaking ties by linear proximity to last_target.
         let chosen = if occs.len() == 1 {
             &occs[0]
-        } else if let Some((ref prev_chr, prev_s, prev_e, _)) = last_target {
+        } else {
             occs.iter()
-                .min_by_key(|occ| {
-                    if &occ.target_chrom != prev_chr {
-                        usize::MAX
-                    } else if occ.target_start >= prev_e {
-                        occ.target_start - prev_e
-                    } else {
-                        prev_s.saturating_sub(occ.target_end)
-                    }
+                .max_by(|a, b| {
+                    let ja = context_jaccard(
+                        src_steps,
+                        src_pos,
+                        &target_step_names[a.path_idx],
+                        a.step_idx,
+                    );
+                    let jb = context_jaccard(
+                        src_steps,
+                        src_pos,
+                        &target_step_names[b.path_idx],
+                        b.step_idx,
+                    );
+                    let dist = |occ: &TargetOcc| -> usize {
+                        if let Some((ref prev_chr, prev_s, prev_e, _)) = last_target {
+                            if &occ.target_chrom != prev_chr {
+                                usize::MAX
+                            } else if occ.target_start >= prev_e {
+                                occ.target_start - prev_e
+                            } else {
+                                prev_s.saturating_sub(occ.target_end)
+                            }
+                        } else {
+                            0
+                        }
+                    };
+                    ja.total_cmp(&jb).then_with(|| dist(b).cmp(&dist(a)))
                 })
                 .unwrap_or(&occs[0])
-        } else {
-            &occs[0]
         };
 
         let (t_s, t_e) = if chosen.is_fwd {
@@ -420,7 +483,11 @@ fn run_lift<W1: Write, W2: Write>(
         cfg.gfa_path,
         |s| {
             if needed_segs.contains(&s.name) {
-                let len = if s.sequence == b"*" { 0 } else { s.sequence.len() };
+                let len = if s.sequence == b"*" {
+                    0
+                } else {
+                    s.sequence.len()
+                };
                 seg_lens.insert(s.name, len);
             }
             Ok(())
@@ -446,24 +513,33 @@ fn run_lift<W1: Write, W2: Write>(
             cur += slen;
         }
         for key in p.match_keys {
-            source_tables.entry(key).or_insert_with(|| (spans.clone(), cur));
+            source_tables
+                .entry(key)
+                .or_insert_with(|| (spans.clone(), cur));
         }
     }
 
     // Build target segment -> TargetOcc index.
-    let mut target_index: HashMap<String, Vec<TargetOcc>> = HashMap::with_capacity(needed_segs.len());
-    for p in target_paths {
+    let mut target_index: HashMap<String, Vec<TargetOcc>> =
+        HashMap::with_capacity(needed_segs.len());
+    let mut target_step_names: Vec<Vec<String>> = Vec::with_capacity(target_paths.len());
+    for (path_idx, p) in target_paths.into_iter().enumerate() {
         let mut cur = p.start_offset;
-        for (seg, is_fwd) in p.steps {
+        let mut names = Vec::with_capacity(p.steps.len());
+        for (step_idx, (seg, is_fwd)) in p.steps.into_iter().enumerate() {
             let slen = seg_lens.get(&seg).copied().unwrap_or(0);
+            names.push(seg.clone());
             target_index.entry(seg).or_default().push(TargetOcc {
                 target_chrom: p.display_chrom.clone(),
                 target_start: cur,
                 target_end: cur + slen,
                 is_fwd,
+                path_idx,
+                step_idx,
             });
             cur += slen;
         }
+        target_step_names.push(names);
     }
 
     let mut summary = LiftSummary {
@@ -486,7 +562,14 @@ fn run_lift<W1: Write, W2: Write>(
             continue;
         };
 
-        let pieces = lift_feature(feat, src_steps, &seg_lens, &target_index, cfg.bridge_bp);
+        let pieces = lift_feature(
+            feat,
+            src_steps,
+            &seg_lens,
+            &target_index,
+            &target_step_names,
+            cfg.bridge_bp,
+        );
         let mapped_bp: usize = pieces.iter().map(|p| p.src_end - p.src_start).sum();
         let total_bp = feat.end.saturating_sub(feat.start).max(1);
         #[allow(clippy::cast_precision_loss)]
@@ -603,7 +686,8 @@ fn main() -> Result<()> {
         }
     }
 
-    let (Some(gfa), Some(from), Some(to), Some(inp)) = (gfa_path, from_sample, to_sample, input_path)
+    let (Some(gfa), Some(from), Some(to), Some(inp)) =
+        (gfa_path, from_sample, to_sample, input_path)
     else {
         bail!(
             "usage: horizon_lift --gfa <file.gfa[.gz]|-> --from <sample> --to <sample> (--bed <in.bed> | --gff <in.gff3>) [--out <out.bed>] [--unmapped <unmapped.bed>] [--min-frac 0.0]"
@@ -740,9 +824,64 @@ W\tCHM13\t0\tchr22\t100\t130\t>s1<s2>s4
         let lines: Vec<&str> = out_str.lines().collect();
         assert!(lines[0].starts_with("CHM13.chr22\t102\t108\tf_fwd\t100\t+"));
         assert!(lines[1].starts_with("CHM13.chr22\t113\t118\tf_inv\t100\t-"));
-        assert!(lines.iter().any(|l| l.contains("f_split") && l.contains("SPLIT_1/3")));
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("f_split") && l.contains("SPLIT_1/3"))
+        );
 
         let unm_str = String::from_utf8(unmapped).expect("valid utf8 unmapped");
         assert!(unm_str.contains("f_unmapped"));
+    }
+
+    #[test]
+    fn disambiguates_multicopy_target_with_flanking_context_jaccard() {
+        // Segment `dup` (10bp) appears twice in CHM13:
+        //   copy 1 at [10..20) flanked by d1, d2 (distantly located from source context)
+        //   copy 2 at [60..70) flanked by s1, s2, s4, s5 (matching source context!)
+        // Even with a single-segment feature inside `dup` (so last_target is None),
+        // Jaccard context window must pick copy 2 [62..68) over copy 1 [12..18).
+        let gfa_path = std::env::temp_dir().join("horizon_lift_jaccard_test.gfa");
+        let gfa = "\
+H\tVN:Z:1.1
+S\ts1\tAAAAAAAAAA
+S\ts2\tCCCCCCCCCC
+S\tdup\tGGGGGGGGGG
+S\ts4\tTTTTTTTTTT
+S\ts5\tACACACACAC
+S\td1\tTGTGTGTGTG
+S\td2\tCTAGCTAGCT
+P\tGRCh38.chr1\ts1+,s2+,dup+,s4+,s5+\t0M,0M,0M,0M
+W\tCHM13\t0\tchr1\t0\t80\t>d1>dup>d2>d1>s1>s2>dup>s4>s5
+";
+        std::fs::write(&gfa_path, gfa).expect("write test GFA");
+
+        let features = vec![InputFeature {
+            chrom: "chr1".into(),
+            start: 22,
+            end: 28,
+            name: "f_dup".into(),
+            score: "100".into(),
+            strand: '+',
+        }];
+        let cfg = LiftConfig {
+            gfa_path: gfa_path.to_str().expect("valid utf8 temp path"),
+            from_sample: "GRCh38",
+            to_sample: "CHM13",
+            features: &features,
+            min_frac: 0.0,
+            bridge_bp: 0,
+        };
+        let mut out = Vec::new();
+        let summary = run_lift(&cfg, &mut out, None::<&mut Vec<u8>>).expect("run_lift succeeds");
+        let _ = std::fs::remove_file(&gfa_path);
+
+        assert_eq!(summary.lifted_exact, 1);
+        let out_str = String::from_utf8(out).expect("valid utf8 output");
+        assert!(
+            out_str.starts_with("CHM13.chr1\t62\t68\tf_dup\t100\t+"),
+            "expected copy 2 at [62, 68), got: {out_str}"
+        );
+        assert!(out_str.contains(";DUP"), "expected ;DUP tag in: {out_str}");
     }
 }

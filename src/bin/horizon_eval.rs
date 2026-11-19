@@ -1,7 +1,7 @@
 //! Evaluate `horizon-aligner` recall, precision, and abstention against truth MAF (supports single- and multi-contig FASTAs).
 
 use anyhow::{Context, Result};
-use horizon_aligner::{align_contig_pair_with_config, prepare_contig_index_opts, AlignConfig};
+use horizon_aligner::{AlignConfig, align_contig_pair_with_config, prepare_contig_index_opts};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
@@ -193,7 +193,10 @@ mod tests {
 
         fs::write(&fa_path, ">hg38.chr22\nACGT\nTGCA\n>other\nAAAA\n").unwrap();
         let contigs = read_named_contigs(&fa_path, "hg38").unwrap();
-        assert_eq!(contigs.get("hg38.chr22").map(Vec::as_slice), Some(&b"ACGTTGCA"[..]));
+        assert_eq!(
+            contigs.get("hg38.chr22").map(Vec::as_slice),
+            Some(&b"ACGTTGCA"[..])
+        );
         assert!(!contigs.contains_key("other"));
 
         fs::write(
@@ -202,7 +205,9 @@ mod tests {
         )
         .unwrap();
         let maf = parse_maf_pairs_by_contig(&maf_path, "hg38", "dog").unwrap();
-        let pairs = maf.get(&("hg38.chr22".to_string(), "dog.chr1".to_string())).unwrap();
+        let pairs = maf
+            .get(&("hg38.chr22".to_string(), "dog.chr1".to_string()))
+            .unwrap();
         assert!(pairs.contains(&(10, 44)));
         assert!(pairs.contains(&(11, 43)));
         assert!(pairs.contains(&(12, 42)));

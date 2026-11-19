@@ -4,8 +4,74 @@ use crate::bocpd::{
     MIN_POST_PROB, NEG_INF, base_probs, bocpd_gc_profile, joint_pair_bits, logsumexp2, logsumexp3,
 };
 use crate::mdl::dp::HmmParams;
-use crate::seeding::{MASK_RY20, MASK_W10, canonical_spaced_seeds_with_opts};
+use crate::seeding::{FlatSeedIndex, MASK_RY20, MASK_W10, sdust_mask};
 use std::collections::{HashMap, HashSet};
+
+/// Adaptive banded per-node DP grid (`abPOA`, Gao et al. 2021).
+#[derive(Clone)]
+struct DagBandGrid {
+    bounds: Vec<(usize, usize, usize)>, // (j_lo, j_hi, offset) per row 0..=nu
+    data: Vec<f64>,
+}
+
+impl DagBandGrid {
+    fn new(bounds: Vec<(usize, usize, usize)>, total_cells: usize, init: f64) -> Self {
+        Self {
+            bounds,
+            data: vec![init; total_cells],
+        }
+    }
+
+    #[inline]
+    fn row_range(&self, i: usize) -> (usize, usize) {
+        let (lo, hi, _) = self.bounds[i];
+        (lo, hi)
+    }
+
+    #[inline]
+    fn get(&self, i: usize, j: usize) -> f64 {
+        let (lo, hi, off) = self.bounds[i];
+        if j < lo || j > hi {
+            NEG_INF
+        } else {
+            self.data[off + (j - lo)]
+        }
+    }
+
+    #[inline]
+    fn set(&mut self, i: usize, j: usize, val: f64) {
+        let (lo, hi, off) = self.bounds[i];
+        if j >= lo && j <= hi {
+            self.data[off + (j - lo)] = val;
+        }
+    }
+}
+
+fn build_node_bounds(
+    nu: usize,
+    s_min: usize,
+    s_max: usize,
+    total_max: usize,
+    m: usize,
+) -> (Vec<(usize, usize, usize)>, usize) {
+    let mut bounds = Vec::with_capacity(nu + 1);
+    let mut off = 0usize;
+    let use_band = m > 128 && total_max > 0;
+    let band_w = (m / 8).clamp(64, 512);
+    for i in 0..=nu {
+        let (j_lo, j_hi) = if use_band {
+            let lo_est = ((s_min + i) * m) / total_max;
+            let hi_est = ((s_max + i) * m) / total_max;
+            (lo_est.saturating_sub(band_w), (hi_est + band_w).min(m))
+        } else {
+            (0, m)
+        };
+        let len = j_hi.saturating_sub(j_lo) + 1;
+        bounds.push((j_lo, j_hi, off));
+        off += len;
+    }
+    (bounds, off)
+}
 
 /// A topologically ordered node in a sequence DAG for partial-order MDL alignment.
 #[derive(Debug, Clone)]
@@ -94,100 +160,83 @@ pub fn align_seq_to_dag_mdl(
     let mm_ln = mm_bits * ln2;
     let im_ln = im_bits * ln2;
 
-    let cols = m + 1;
-    let mut m_dp: Vec<Vec<f64>> = Vec::with_capacity(num_nodes);
-    let mut ix_dp: Vec<Vec<f64>> = Vec::with_capacity(num_nodes);
-    let mut iy_dp: Vec<Vec<f64>> = Vec::with_capacity(num_nodes);
-    let mut fm: Vec<Vec<f64>> = Vec::with_capacity(num_nodes);
-    let mut fix: Vec<Vec<f64>> = Vec::with_capacity(num_nodes);
-    let mut fiy: Vec<Vec<f64>> = Vec::with_capacity(num_nodes);
-    let mut pred_bt: Vec<Vec<[Option<usize>; 3]>> = Vec::with_capacity(num_nodes);
+    let mut start_min = vec![0usize; num_nodes];
+    let mut start_max = vec![0usize; num_nodes];
+    for u in 0..num_nodes {
+        let mut mn = usize::MAX;
+        let mut mx = 0usize;
+        let mut has_pred = false;
+        for &p in &nodes[u].preds {
+            if p < u {
+                has_pred = true;
+                mn = mn.min(start_min[p] + nodes[p].seq.len());
+                mx = mx.max(start_max[p] + nodes[p].seq.len());
+            }
+        }
+        if has_pred {
+            start_min[u] = mn;
+            start_max[u] = mx;
+        }
+    }
+    let total_max = (0..num_nodes)
+        .filter(|&u| succs[u].is_empty())
+        .map(|u| start_max[u] + nodes[u].seq.len())
+        .max()
+        .unwrap_or(0);
 
-    for nd in nodes {
-        let rows = nd.seq.len() + 1;
-        m_dp.push(vec![NEG_INF; rows * cols]);
-        ix_dp.push(vec![NEG_INF; rows * cols]);
-        iy_dp.push(vec![NEG_INF; rows * cols]);
-        fm.push(vec![NEG_INF; rows * cols]);
-        fix.push(vec![NEG_INF; rows * cols]);
-        fiy.push(vec![NEG_INF; rows * cols]);
-        pred_bt.push(vec![[None, None, None]; cols]);
+    let mut fm: Vec<DagBandGrid> = Vec::with_capacity(num_nodes);
+    let mut fix: Vec<DagBandGrid> = Vec::with_capacity(num_nodes);
+    let mut fiy: Vec<DagBandGrid> = Vec::with_capacity(num_nodes);
+
+    for (u, nd) in nodes.iter().enumerate() {
+        let (bounds, cells) =
+            build_node_bounds(nd.seq.len(), start_min[u], start_max[u], total_max, m);
+        fm.push(DagBandGrid::new(bounds.clone(), cells, NEG_INF));
+        fix.push(DagBandGrid::new(bounds.clone(), cells, NEG_INF));
+        fiy.push(DagBandGrid::new(bounds, cells, NEG_INF));
     }
 
     for u in 0..num_nodes {
         let nu = nodes[u].seq.len();
+        let (j0_lo, j0_hi) = fm[u].row_range(0);
         if nodes[u].preds.is_empty() {
-            m_dp[u][0] = 0.0;
-            fm[u][0] = 0.0;
+            fm[u].set(0, 0, 0.0);
         } else {
-            for j in 0..=m {
-                let mut best_m = NEG_INF;
-                let mut best_ix = NEG_INF;
-                let mut best_iy = NEG_INF;
-                let mut pm = None;
-                let mut pix = None;
-                let mut piy = None;
+            for j in j0_lo..=j0_hi {
                 let mut sum_fm = NEG_INF;
                 let mut sum_fix = NEG_INF;
                 let mut sum_fiy = NEG_INF;
-
                 for &p in &nodes[u].preds {
                     if p >= u {
                         continue;
                     }
-                    let pend = nodes[p].seq.len() * cols + j;
-                    if m_dp[p][pend] > best_m {
-                        best_m = m_dp[p][pend];
-                        pm = Some(p);
-                    }
-                    if ix_dp[p][pend] > best_ix {
-                        best_ix = ix_dp[p][pend];
-                        pix = Some(p);
-                    }
-                    if iy_dp[p][pend] > best_iy {
-                        best_iy = iy_dp[p][pend];
-                        piy = Some(p);
-                    }
-                    sum_fm = logsumexp2(sum_fm, fm[p][pend]);
-                    sum_fix = logsumexp2(sum_fix, fix[p][pend]);
-                    sum_fiy = logsumexp2(sum_fiy, fiy[p][pend]);
+                    let pend = nodes[p].seq.len();
+                    sum_fm = logsumexp2(sum_fm, fm[p].get(pend, j));
+                    sum_fix = logsumexp2(sum_fix, fix[p].get(pend, j));
+                    sum_fiy = logsumexp2(sum_fiy, fiy[p].get(pend, j));
                 }
-                m_dp[u][j] = best_m;
-                ix_dp[u][j] = best_ix;
-                iy_dp[u][j] = best_iy;
-                fm[u][j] = sum_fm;
-                fix[u][j] = sum_fix;
-                fiy[u][j] = sum_fiy;
-                pred_bt[u][j] = [pm, pix, piy];
+                fm[u].set(0, j, sum_fm);
+                fix[u].set(0, j, sum_fix);
+                fiy[u].set(0, j, sum_fiy);
             }
         }
 
-        for j in 1..=m {
-            let v_iy = (m_dp[u][j - 1] + go_bits).max(iy_dp[u][j - 1] + ge_bits);
-            if v_iy > iy_dp[u][j] {
-                iy_dp[u][j] = v_iy;
-                pred_bt[u][j][2] = None;
-            }
-            fiy[u][j] = logsumexp2(fiy[u][j], logsumexp2(fm[u][j - 1] + go, fiy[u][j - 1] + ge));
+        for j in (j0_lo.max(1))..=j0_hi {
+            let cur = fiy[u].get(0, j);
+            let from_left = logsumexp2(fm[u].get(0, j - 1) + go, fiy[u].get(0, j - 1) + ge);
+            fiy[u].set(0, j, logsumexp2(cur, from_left));
         }
 
         for i in 1..=nu {
-            let row = i * cols;
-            let prev_row = (i - 1) * cols;
-            for j in 0..=m {
-                let idx = row + j;
-                let up = prev_row + j;
-                let v_ix = (m_dp[u][up] + go_bits).max(ix_dp[u][up] + ge_bits);
-                ix_dp[u][idx] = v_ix;
-                fix[u][idx] = logsumexp2(fm[u][up] + go, fix[u][up] + ge);
+            let (j_lo, j_hi) = fm[u].row_range(i);
+            for j in j_lo..=j_hi {
+                let v_fix = logsumexp2(fm[u].get(i - 1, j) + go, fix[u].get(i - 1, j) + ge);
+                fix[u].set(i, j, v_fix);
 
                 if j > 0 {
-                    let left = row + j - 1;
-                    let v_iy = (m_dp[u][left] + go_bits).max(iy_dp[u][left] + ge_bits);
-                    iy_dp[u][idx] = v_iy;
-                    fiy[u][idx] = logsumexp2(fm[u][left] + go, fiy[u][left] + ge);
+                    let v_fiy = logsumexp2(fm[u].get(i, j - 1) + go, fiy[u].get(i, j - 1) + ge);
+                    fiy[u].set(i, j, v_fiy);
 
-                    let diag = prev_row + j - 1;
                     let sb = joint_pair_bits(
                         nodes[u].seq[i - 1],
                         seq_y[j - 1],
@@ -195,88 +244,80 @@ pub fn align_seq_to_dag_mdl(
                         pi_y[j - 1],
                         id_prior,
                     );
-                    let prev_m = (m_dp[u][diag] + mm_bits)
-                        .max(ix_dp[u][diag] + im_bits)
-                        .max(iy_dp[u][diag] + im_bits);
-                    m_dp[u][idx] = prev_m + sb;
                     let prev_fm = logsumexp3(
-                        fm[u][diag] + mm_ln,
-                        fix[u][diag] + im_ln,
-                        fiy[u][diag] + im_ln,
+                        fm[u].get(i - 1, j - 1) + mm_ln,
+                        fix[u].get(i - 1, j - 1) + im_ln,
+                        fiy[u].get(i - 1, j - 1) + im_ln,
                     );
-                    fm[u][idx] = prev_fm + sb * ln2;
+                    fm[u].set(i, j, prev_fm + sb * ln2);
                 }
             }
         }
     }
 
-    let mut best_end_node = 0usize;
-    let mut best_end_score = NEG_INF;
     let mut z_fwd = NEG_INF;
     for u in 0..num_nodes {
         if succs[u].is_empty() {
-            let end_idx = nodes[u].seq.len() * cols + m;
-            let sc = m_dp[u][end_idx].max(ix_dp[u][end_idx]).max(iy_dp[u][end_idx]);
-            if sc > best_end_score {
-                best_end_score = sc;
-                best_end_node = u;
-            }
+            let nu = nodes[u].seq.len();
             z_fwd = logsumexp2(
                 z_fwd,
-                logsumexp3(fm[u][end_idx], fix[u][end_idx], fiy[u][end_idx]),
+                logsumexp3(fm[u].get(nu, m), fix[u].get(nu, m), fiy[u].get(nu, m)),
             );
         }
     }
+    let score_bits = z_fwd / ln2;
 
-    if z_fwd <= NEG_INF * 0.5 || best_end_score <= NEG_INF * 0.5 {
+    if z_fwd <= NEG_INF * 0.5 {
         return GraphAlignment {
             path_nodes: Vec::new(),
             kept_pairs: Vec::new(),
             bubbles: 1,
-            score_bits: best_end_score,
+            score_bits,
         };
     }
 
-    let mut bm: Vec<Vec<f64>> = Vec::with_capacity(num_nodes);
-    let mut bix: Vec<Vec<f64>> = Vec::with_capacity(num_nodes);
-    let mut biy: Vec<Vec<f64>> = Vec::with_capacity(num_nodes);
-    for nd in nodes {
-        let rows = nd.seq.len() + 1;
-        bm.push(vec![NEG_INF; rows * cols]);
-        bix.push(vec![NEG_INF; rows * cols]);
-        biy.push(vec![NEG_INF; rows * cols]);
-    }
+    let mut bm: Vec<DagBandGrid> = fm
+        .iter()
+        .map(|g| DagBandGrid::new(g.bounds.clone(), g.data.len(), NEG_INF))
+        .collect();
+    let mut bix: Vec<DagBandGrid> = fm
+        .iter()
+        .map(|g| DagBandGrid::new(g.bounds.clone(), g.data.len(), NEG_INF))
+        .collect();
+    let mut biy: Vec<DagBandGrid> = fm
+        .iter()
+        .map(|g| DagBandGrid::new(g.bounds.clone(), g.data.len(), NEG_INF))
+        .collect();
 
     for u in (0..num_nodes).rev() {
         let nu = nodes[u].seq.len();
         if succs[u].is_empty() {
-            let end_idx = nu * cols + m;
-            bm[u][end_idx] = 0.0;
-            bix[u][end_idx] = 0.0;
-            biy[u][end_idx] = 0.0;
+            bm[u].set(nu, m, 0.0);
+            bix[u].set(nu, m, 0.0);
+            biy[u].set(nu, m, 0.0);
         } else {
-            let row = nu * cols;
-            for j in 0..=m {
+            let (j_lo, j_hi) = bm[u].row_range(nu);
+            for j in j_lo..=j_hi {
                 let mut s_bm = NEG_INF;
                 let mut s_bix = NEG_INF;
                 let mut s_biy = NEG_INF;
                 for &s in &succs[u] {
-                    s_bm = logsumexp2(s_bm, bm[s][j]);
-                    s_bix = logsumexp2(s_bix, bix[s][j]);
-                    s_biy = logsumexp2(s_biy, biy[s][j]);
+                    s_bm = logsumexp2(s_bm, bm[s].get(0, j));
+                    s_bix = logsumexp2(s_bix, bix[s].get(0, j));
+                    s_biy = logsumexp2(s_biy, biy[s].get(0, j));
                 }
-                bm[u][row + j] = s_bm;
-                bix[u][row + j] = s_bix;
-                biy[u][row + j] = s_biy;
+                bm[u].set(nu, j, s_bm);
+                bix[u].set(nu, j, s_bix);
+                biy[u].set(nu, j, s_biy);
             }
         }
 
         for i in (0..=nu).rev() {
-            for j in (0..=m).rev() {
+            let (j_lo, j_hi) = bm[u].row_range(i);
+            for j in (j_lo..=j_hi).rev() {
                 if i == nu && j == m {
                     continue;
                 }
-                let idx = i * cols + j;
                 let m_next = if i < nu && j < m {
                     let sb = joint_pair_bits(
                         nodes[u].seq[i],
@@ -285,33 +326,110 @@ pub fn align_seq_to_dag_mdl(
                         pi_y[j],
                         id_prior,
                     );
-                    bm[u][(i + 1) * cols + j + 1] + sb * ln2
+                    bm[u].get(i + 1, j + 1) + sb * ln2
                 } else {
                     NEG_INF
                 };
                 let ix_open = if i < nu {
-                    bix[u][(i + 1) * cols + j] + go
+                    bix[u].get(i + 1, j) + go
                 } else {
                     NEG_INF
                 };
                 let ix_ext = if i < nu {
-                    bix[u][(i + 1) * cols + j] + ge
+                    bix[u].get(i + 1, j) + ge
                 } else {
                     NEG_INF
                 };
                 let iy_open = if j < m {
-                    biy[u][i * cols + j + 1] + go
+                    biy[u].get(i, j + 1) + go
                 } else {
                     NEG_INF
                 };
                 let iy_ext = if j < m {
-                    biy[u][i * cols + j + 1] + ge
+                    biy[u].get(i, j + 1) + ge
                 } else {
                     NEG_INF
                 };
-                bm[u][idx] = logsumexp2(bm[u][idx], logsumexp3(m_next + mm_ln, ix_open, iy_open));
-                bix[u][idx] = logsumexp2(bix[u][idx], logsumexp2(m_next + im_ln, ix_ext));
-                biy[u][idx] = logsumexp2(biy[u][idx], logsumexp2(m_next + im_ln, iy_ext));
+                let cur_bm = bm[u].get(i, j);
+                let cur_bix = bix[u].get(i, j);
+                let cur_biy = biy[u].get(i, j);
+                bm[u].set(
+                    i,
+                    j,
+                    logsumexp2(cur_bm, logsumexp3(m_next + mm_ln, ix_open, iy_open)),
+                );
+                bix[u].set(
+                    i,
+                    j,
+                    logsumexp2(cur_bix, logsumexp2(m_next + im_ln, ix_ext)),
+                );
+                biy[u].set(
+                    i,
+                    j,
+                    logsumexp2(cur_biy, logsumexp2(m_next + im_ln, iy_ext)),
+                );
+            }
+        }
+    }
+
+    // Pure Forward-Backward MEA decoding over the DAG:
+    // reuse `fm[u]` for MEA cumulative score and `bm[u]` for posterior match probability.
+    for u in 0..num_nodes {
+        let nu = nodes[u].seq.len();
+        let (j0_lo, j0_hi) = fm[u].row_range(0);
+        if nodes[u].preds.is_empty() {
+            for j in j0_lo..=j0_hi {
+                fm[u].set(0, j, 0.0);
+            }
+        } else {
+            for j in j0_lo..=j0_hi {
+                let mut best_p = NEG_INF;
+                for &p in &nodes[u].preds {
+                    if p < u {
+                        best_p = best_p.max(fm[p].get(nodes[p].seq.len(), j));
+                    }
+                }
+                fm[u].set(0, j, best_p);
+            }
+            for j in (j0_lo.max(1))..=j0_hi {
+                let left = fm[u].get(0, j - 1);
+                if left > fm[u].get(0, j) {
+                    fm[u].set(0, j, left);
+                }
+            }
+        }
+
+        for i in 1..=nu {
+            let (j_lo, j_hi) = fm[u].row_range(i);
+            for j in j_lo..=j_hi {
+                let post_m = if j > 0 {
+                    (fm[u].get(i, j) + bm[u].get(i, j) - z_fwd).min(0.0).exp()
+                } else {
+                    0.0
+                };
+                if j > 0 {
+                    bm[u].set(i, j, post_m);
+                }
+                let d = if j > 0 {
+                    fm[u].get(i - 1, j - 1) + (post_m - 0.25)
+                } else {
+                    NEG_INF
+                };
+                let up = fm[u].get(i - 1, j);
+                let left = if j > 0 { fm[u].get(i, j - 1) } else { NEG_INF };
+                fm[u].set(i, j, d.max(up).max(left));
+            }
+        }
+    }
+
+    let mut best_end_node = 0usize;
+    let mut best_mea = NEG_INF;
+    for u in 0..num_nodes {
+        if succs[u].is_empty() {
+            let sc = fm[u].get(nodes[u].seq.len(), m);
+            if sc > best_mea {
+                best_mea = sc;
+                best_end_node = u;
             }
         }
     }
@@ -321,20 +439,18 @@ pub fn align_seq_to_dag_mdl(
     let mut u = best_end_node;
     let mut i = nodes[u].seq.len();
     let mut j = m;
-    let end_idx = i * cols + j;
-    let mut state = if m_dp[u][end_idx] >= ix_dp[u][end_idx]
-        && m_dp[u][end_idx] >= iy_dp[u][end_idx]
-    {
-        0usize
-    } else if ix_dp[u][end_idx] >= iy_dp[u][end_idx] {
-        1usize
-    } else {
-        2usize
-    };
 
     loop {
         if i == 0 {
-            if let Some(p) = pred_bt[u][j][state] {
+            let cur = fm[u].get(0, j);
+            let mut switched_pred = None;
+            for &p in &nodes[u].preds {
+                if p < u && (fm[p].get(nodes[p].seq.len(), j) - cur).abs() < 1e-9 {
+                    switched_pred = Some(p);
+                    break;
+                }
+            }
+            if let Some(p) = switched_pred {
                 u = p;
                 i = nodes[u].seq.len();
                 path_nodes.push(u);
@@ -345,14 +461,21 @@ pub fn align_seq_to_dag_mdl(
             }
             raw_cols.push((None, Some(j - 1), ge_bits, 0.0));
             j -= 1;
-            let left_m = m_dp[u][j] + go_bits;
-            let left_iy = iy_dp[u][j] + ge_bits;
-            state = if left_m >= left_iy { 0 } else { 2 };
             continue;
         }
 
-        let cur_idx = i * cols + j;
-        if state == 0 && j > 0 {
+        let cur = fm[u].get(i, j);
+        if cur <= NEG_INF * 0.5 {
+            break;
+        }
+        let post_p = if j > 0 { bm[u].get(i, j) } else { 0.0 };
+        let d = if j > 0 {
+            fm[u].get(i - 1, j - 1) + (post_p - 0.25)
+        } else {
+            NEG_INF
+        };
+        let up = fm[u].get(i - 1, j);
+        if j > 0 && (cur - d).abs() < 1e-9 {
             let sb = joint_pair_bits(
                 nodes[u].seq[i - 1],
                 seq_y[j - 1],
@@ -360,34 +483,14 @@ pub fn align_seq_to_dag_mdl(
                 pi_y[j - 1],
                 id_prior,
             );
-            let post_p = (fm[u][cur_idx] + bm[u][cur_idx] - z_fwd).min(0.0).exp();
             raw_cols.push((Some((u, i - 1)), Some(j - 1), sb, post_p));
-            let diag = (i - 1) * cols + (j - 1);
-            let vm = m_dp[u][diag] + mm_bits;
-            let vix = ix_dp[u][diag] + im_bits;
-            let viy = iy_dp[u][diag] + im_bits;
-            state = if vm >= vix && vm >= viy {
-                0
-            } else if vix >= viy {
-                1
-            } else {
-                2
-            };
             i -= 1;
             j -= 1;
-        } else if state == 1 {
+        } else if (cur - up).abs() < 1e-9 {
             raw_cols.push((Some((u, i - 1)), None, ge_bits, 0.0));
-            let up = (i - 1) * cols + j;
-            let vm = m_dp[u][up] + go_bits;
-            let vix = ix_dp[u][up] + ge_bits;
-            state = usize::from(vm < vix);
             i -= 1;
         } else if j > 0 {
             raw_cols.push((None, Some(j - 1), ge_bits, 0.0));
-            let left = i * cols + (j - 1);
-            let vm = m_dp[u][left] + go_bits;
-            let viy = iy_dp[u][left] + ge_bits;
-            state = if vm >= viy { 0 } else { 2 };
             j -= 1;
         } else {
             break;
@@ -449,7 +552,7 @@ pub fn align_seq_to_dag_mdl(
         path_nodes,
         kept_pairs,
         bubbles,
-        score_bits: best_end_score,
+        score_bits,
     }
 }
 
@@ -467,14 +570,20 @@ pub fn align_seq_to_dag_seeded(
         return align_seq_to_dag_mdl(nodes, seq_y, params, min_block_bits);
     }
 
+    let y_sdust = sdust_mask(seq_y);
     let mut seed_hits: HashSet<usize> = HashSet::new();
     for (mask, ry) in [(MASK_W10, false), (MASK_RY20, true)] {
-        if let Ok(q_seeds) = canonical_spaced_seeds_with_opts(seq_y, mask, 8, false, ry)
-            && !q_seeds.is_empty()
+        if let Ok(q_idx) =
+            FlatSeedIndex::build_with_sdust(seq_y, mask, 8, false, ry, Some(&y_sdust))
+            && !q_idx.keys.is_empty()
         {
             for (nid, nd) in nodes.iter().enumerate() {
-                if let Ok(n_seeds) = canonical_spaced_seeds_with_opts(&nd.seq, mask, 8, false, ry)
-                    && n_seeds.keys().any(|k| q_seeds.contains_key(k))
+                if nd.seq.len() < mask.len() {
+                    continue;
+                }
+                if let Ok(n_idx) =
+                    FlatSeedIndex::build_with_sdust(&nd.seq, mask, 8, false, ry, None)
+                    && q_idx.shared_unique_keys(&n_idx) > 0
                 {
                     seed_hits.insert(nid);
                 }
@@ -617,7 +726,8 @@ mod tests {
             seq: b"CATGCATGCATGCATGCATGCATGCATG".to_vec(),
             preds: vec![7, 8],
         });
-        let query = b"ACTGACTGACTGACTGACTGACTGACTGGATTACAGATTACAGATTACAGATTACACATGCATGCATGCATGCATGCATGCATG";
+        let query =
+            b"ACTGACTGACTGACTGACTGACTGACTGGATTACAGATTACAGATTACAGATTACACATGCATGCATGCATGCATGCATGCATG";
         let aln = align_seq_to_dag_seeded(&nodes, query, &HmmParams::default(), 10.0);
         assert_eq!(aln.path_nodes, vec![6, 8, 9]);
         assert_eq!(aln.kept_pairs.len(), query.len());

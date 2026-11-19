@@ -165,7 +165,9 @@ where
                 let _ = s_parts.next();
                 let name = s_parts.next().unwrap_or("").to_string();
                 let sequence = s_parts.next().unwrap_or("").as_bytes().to_vec();
-                let tags = s_parts.next().and_then(|t| (!t.is_empty()).then(|| t.to_string()));
+                let tags = s_parts
+                    .next()
+                    .and_then(|t| (!t.is_empty()).then(|| t.to_string()));
                 on_segment(GfaSegment {
                     name,
                     sequence,
@@ -222,8 +224,8 @@ where
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use flate2::write::GzEncoder;
     use flate2::Compression;
+    use flate2::write::GzEncoder;
     use std::io::{Cursor, Write};
 
     #[test]

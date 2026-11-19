@@ -7,12 +7,12 @@
 use crate::AlignError;
 use crate::bocpd::MIN_POST_PROB;
 use crate::seeding::{
-    ContigIndex, FlatSeedIndex, MASK_PRIMARY_11_15, MASK_LASTZ11, MASK_LASTZ12, MASK_RY20,
-    MASK_W9, MASK_W10, append_hsp_gated_aa_lcbs, append_hsp_gated_lastz12_lcbs,
-    append_nonoverlapping_lcbs, canonical_spaced_seeds_with_opts, find_lastz11_1transition_hits,
-    find_lastz12_1transition_hits, find_lastz12_2transition_hits, find_translated_aa5_hits,
-    find_w10_1transition_hits_flat, find_w12_raw_lcbs, local_w9_subchain, merge_colinear_lcbs,
-    prepare_contig_index,
+    ContigIndex, FlatSeedIndex, MASK_LASTZ11, MASK_LASTZ12, MASK_PH11_18, MASK_PRIMARY_11_15,
+    MASK_RY20, MASK_W9, MASK_W10, append_hsp_gated_aa_lcbs, append_hsp_gated_lastz12_lcbs,
+    append_nonoverlapping_lcbs, append_two_hit_diagonal_lcbs, find_lastz11_1transition_hits_flat,
+    find_lastz12_1transition_hits_flat, find_lastz12_2transition_hits_flat,
+    find_translated_aa5_hits, find_w10_1transition_hits_flat, find_w12_raw_lcbs, local_w9_subchain,
+    merge_colinear_lcbs, prepare_contig_index,
 };
 use rayon::prelude::*;
 
@@ -179,13 +179,12 @@ pub fn align_contig_pair_with_config(
         }
     }
     #[allow(clippy::cast_precision_loss)]
-
     // MDL-derived default for HSP thresholds
     #[allow(clippy::cast_possible_truncation)]
-    let base_hsp_thresh = cfg.hsp_threshold.unwrap_or_else(|| {
-        (100.0 + (effective_min_bits * 1.5)).round() as i32
-    });
-    
+    let base_hsp_thresh = cfg
+        .hsp_threshold
+        .unwrap_or_else(|| (100.0 + (effective_min_bits * 1.5)).round() as i32);
+
     // MDL-derived default fallback coverage threshold
     // If the expected bit savings of the primary coverage is less than the effective min bits
     // across the sequence, trigger fallback.
@@ -196,7 +195,7 @@ pub fn align_contig_pair_with_config(
         // Map this to a reasonable coverage threshold (e.g. 0.05 to 0.95)
         (bit_ratio * 10.0).clamp(0.05, 0.95)
     });
-    
+
     #[allow(clippy::cast_precision_loss)]
     let primary_cov = (covered_bp as f64) / (seq_x.len().max(1) as f64);
 
@@ -207,19 +206,21 @@ pub fn align_contig_pair_with_config(
     };
 
     // Sparse-exon fallback: w=10 exact seeds in intervals not covered by w=12 LCBs.
-    let x10_idx = FlatSeedIndex::build(
+    let x10_idx = FlatSeedIndex::build_with_sdust(
         seq_x,
         MASK_W10,
         cfg.fallback_max_occ,
         cfg.skip_softmasked,
         false,
+        Some(&idx_x.sdust),
     )?;
-    let y10_idx = FlatSeedIndex::build(
+    let y10_idx = FlatSeedIndex::build_with_sdust(
         seq_y,
         MASK_W10,
         cfg.fallback_max_occ,
         cfg.skip_softmasked,
         false,
+        Some(&idx_y.sdust),
     )?;
     let (mut hits10_fwd, mut hits10_rc) = x10_idx.intersect(&y10_idx);
     let t_w10 = t_start.elapsed();
@@ -244,23 +245,21 @@ pub fn align_contig_pair_with_config(
 
     // LASTZ-style 12-of-19 + 1-transition hits gated by ungapped X-drop HSP score
     // (skip when w=12 already covers >= 85% of the target contig).
-    let (iy_lz_fwd, iy_lz_rc) = if primary_cov < min_fallback_cov {
-        let f = canonical_spaced_seeds_with_opts(
+    let y_lz12 = if primary_cov < min_fallback_cov {
+        let idx = FlatSeedIndex::build_with_sdust(
             seq_y,
             MASK_LASTZ12,
             cfg.fallback_max_occ,
             cfg.skip_softmasked,
             false,
+            Some(&idx_y.sdust),
         )?;
-        let r = canonical_spaced_seeds_with_opts(
-            seq_y_rc,
-            MASK_LASTZ12,
-            cfg.fallback_max_occ,
+        let (mut hits_lz_fwd, mut hits_lz_rc) = find_lastz12_1transition_hits_flat(
+            seq_x,
+            Some(&idx_x.sdust),
+            &idx,
             cfg.skip_softmasked,
-            false,
-        )?;
-        let (mut hits_lz_fwd, mut hits_lz_rc) =
-            find_lastz12_1transition_hits(seq_x, &f, &r, cfg.skip_softmasked);
+        );
         filter_uncovered(&mut hits_lz_fwd);
         filter_uncovered(&mut hits_lz_rc);
         append_hsp_gated_lastz12_lcbs(
@@ -277,9 +276,9 @@ pub fn align_contig_pair_with_config(
             &hits_lz_rc,
             base_hsp_thresh + hsp_bonus,
         );
-        (Some(f), Some(r))
+        Some(idx)
     } else {
-        (None, None)
+        None
     };
     let t_lz1 = t_start.elapsed();
 
@@ -287,10 +286,14 @@ pub fn align_contig_pair_with_config(
         // Skip O(N * 264) 2-transition scan once search space exceeds ~10^9 cell lookups
         // where single-transition + AA5 + BOCPD/MDL already dominate runtime.
         if (seq_x.len() as u128) * (seq_y.len() as u128) < 1_000_000_000
-            && let (Some(lz_fwd), Some(lz_rc)) = (&iy_lz_fwd, &iy_lz_rc)
+            && let Some(lz_idx) = &y_lz12
         {
-            let (mut double_trans_fwd, mut double_trans_rc) =
-                find_lastz12_2transition_hits(seq_x, lz_fwd, lz_rc, cfg.skip_softmasked);
+            let (mut double_trans_fwd, mut double_trans_rc) = find_lastz12_2transition_hits_flat(
+                seq_x,
+                Some(&idx_x.sdust),
+                lz_idx,
+                cfg.skip_softmasked,
+            );
             filter_uncovered(&mut double_trans_fwd);
             filter_uncovered(&mut double_trans_rc);
             append_hsp_gated_lastz12_lcbs(
@@ -309,22 +312,20 @@ pub fn align_contig_pair_with_config(
             );
         }
 
-        let iy_11_fwd = canonical_spaced_seeds_with_opts(
+        let y_lz11 = FlatSeedIndex::build_with_sdust(
             seq_y,
             MASK_LASTZ11,
             cfg.fallback_max_occ,
             cfg.skip_softmasked,
             false,
+            Some(&idx_y.sdust),
         )?;
-        let iy_11_rc = canonical_spaced_seeds_with_opts(
-            seq_y_rc,
-            MASK_LASTZ11,
-            cfg.fallback_max_occ,
+        let (mut hits_11_fwd, mut hits_11_rc) = find_lastz11_1transition_hits_flat(
+            seq_x,
+            Some(&idx_x.sdust),
+            &y_lz11,
             cfg.skip_softmasked,
-            false,
-        )?;
-        let (mut hits_11_fwd, mut hits_11_rc) =
-            find_lastz11_1transition_hits(seq_x, &iy_11_fwd, &iy_11_rc, cfg.skip_softmasked);
+        );
         filter_uncovered(&mut hits_11_fwd);
         filter_uncovered(&mut hits_11_rc);
         append_hsp_gated_lastz12_lcbs(
@@ -342,14 +343,49 @@ pub fn align_contig_pair_with_config(
             base_hsp_thresh + 30 + hsp_bonus,
         );
 
+        // PatternHunter II weight-11 spaced seed with 2-hit diagonal gating (Ma et al. 2002).
+        let x_ph = FlatSeedIndex::build_with_sdust(
+            seq_x,
+            MASK_PH11_18,
+            cfg.fallback_max_occ,
+            cfg.skip_softmasked,
+            false,
+            Some(&idx_x.sdust),
+        )?;
+        let y_ph = FlatSeedIndex::build_with_sdust(
+            seq_y,
+            MASK_PH11_18,
+            cfg.fallback_max_occ,
+            cfg.skip_softmasked,
+            false,
+            Some(&idx_y.sdust),
+        )?;
+        let (mut ph_fwd, mut ph_rc) = x_ph.intersect(&y_ph);
+        filter_uncovered(&mut ph_fwd);
+        filter_uncovered(&mut ph_rc);
+        append_two_hit_diagonal_lcbs(&mut combined_fwd, &ph_fwd, 64, 4);
+        append_two_hit_diagonal_lcbs(&mut combined_rc, &ph_rc, 64, 4);
+
         // Apply R/Y (1-bit) and w=10 1-transition only while random-collision density
         // stays tractable (< 10^9 search space cells).
         if (seq_x.len() as u128) * (seq_y.len() as u128) < 1_000_000_000 {
             // HSP-gated 1-bit purine/pyrimidine (R/Y) seeding for multi-transition divergent homologs.
-            let x_ry =
-                FlatSeedIndex::build(seq_x, MASK_RY20, 2, cfg.skip_softmasked, true)?;
-            let y_ry =
-                FlatSeedIndex::build(seq_y, MASK_RY20, 2, cfg.skip_softmasked, true)?;
+            let x_ry = FlatSeedIndex::build_with_sdust(
+                seq_x,
+                MASK_RY20,
+                2,
+                cfg.skip_softmasked,
+                true,
+                Some(&idx_x.sdust),
+            )?;
+            let y_ry = FlatSeedIndex::build_with_sdust(
+                seq_y,
+                MASK_RY20,
+                2,
+                cfg.skip_softmasked,
+                true,
+                Some(&idx_y.sdust),
+            )?;
             let (mut hits_ry_fwd, mut hits_ry_rc) = x_ry.intersect(&y_ry);
             filter_uncovered(&mut hits_ry_fwd);
             filter_uncovered(&mut hits_ry_rc);
@@ -394,14 +430,40 @@ pub fn align_contig_pair_with_config(
         let mut aa_rc = find_translated_aa5_hits(seq_x, seq_y_rc, 4, cfg.skip_softmasked);
         filter_uncovered(&mut aa_fwd);
         filter_uncovered(&mut aa_rc);
-        append_hsp_gated_aa_lcbs(&mut combined_fwd, seq_x, seq_y, &aa_fwd, (base_hsp_thresh / 2) + aa_bonus);
-        append_hsp_gated_aa_lcbs(&mut combined_rc, seq_x, seq_y_rc, &aa_rc, (base_hsp_thresh / 2) + aa_bonus);
+        append_hsp_gated_aa_lcbs(
+            &mut combined_fwd,
+            seq_x,
+            seq_y,
+            &aa_fwd,
+            (base_hsp_thresh / 2) + aa_bonus,
+        );
+        append_hsp_gated_aa_lcbs(
+            &mut combined_rc,
+            seq_x,
+            seq_y_rc,
+            &aa_rc,
+            (base_hsp_thresh / 2) + aa_bonus,
+        );
     }
 
     // Transition-tolerant R/Y (1-bit purine/pyrimidine) fallback for divergent homologs.
     if cfg.use_ry_seeds {
-        let x_ry = FlatSeedIndex::build(seq_x, MASK_RY20, 2, cfg.skip_softmasked, true)?;
-        let y_ry = FlatSeedIndex::build(seq_y, MASK_RY20, 2, cfg.skip_softmasked, true)?;
+        let x_ry = FlatSeedIndex::build_with_sdust(
+            seq_x,
+            MASK_RY20,
+            2,
+            cfg.skip_softmasked,
+            true,
+            Some(&idx_x.sdust),
+        )?;
+        let y_ry = FlatSeedIndex::build_with_sdust(
+            seq_y,
+            MASK_RY20,
+            2,
+            cfg.skip_softmasked,
+            true,
+            Some(&idx_y.sdust),
+        )?;
         let (hits_ry_fwd, hits_ry_rc) = x_ry.intersect(&y_ry);
         let prev_fwd = combined_fwd.clone();
         let prev_rc = combined_rc.clone();
@@ -788,7 +850,8 @@ fn estimate_hmm_params(
     // LCB anchors are enriched for conserved exons; cap upper identity_prior at 0.72
     // so inter-anchor gaps in divergent mammals still receive adequate homology sensitivity.
     #[allow(clippy::cast_precision_loss)]
-    let identity_prior = ((matches as f64 + 195.0) / (total_bases as f64 + 300.0)).clamp(0.60, 0.72);
+    let identity_prior =
+        ((matches as f64 + 195.0) / (total_bases as f64 + 300.0)).clamp(0.60, 0.72);
     #[allow(clippy::cast_precision_loss)]
     let gap_open_bits = if total_span >= 200 {
         ((indel_events as f64 + 1.0) / (total_span as f64 + 22.0))

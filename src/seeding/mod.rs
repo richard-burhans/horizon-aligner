@@ -31,6 +31,84 @@ fn is_low_complexity_window(sub: &[u8]) -> bool {
     max_c * 4 >= sub.len() * 3 || (sub.len() >= 14 && distinct <= 2)
 }
 
+/// Linear-time SDUST-style triplet low-complexity masker (`W in {16, 32, 64}`, `T = 2.0`,
+/// Morgulis et al., 2006). Masks homopolymers, dinucleotide, trinucleotide, and tetranucleotide
+/// simple repeats in `O(N)` time so seeders avoid `O(span)` per-position checks.
+#[must_use]
+pub(crate) fn sdust_mask(seq: &[u8]) -> Vec<bool> {
+    let n = seq.len();
+    let mut masked = vec![false; n];
+    if n < 16 {
+        return masked;
+    }
+
+    let mut triplets = vec![255_u8; n - 2];
+    for (i, slot) in triplets.iter_mut().enumerate() {
+        if let (Some(a), Some(b), Some(c)) = (
+            base_to_idx(seq[i]),
+            base_to_idx(seq[i + 1]),
+            base_to_idx(seq[i + 2]),
+        ) {
+            *slot = u8::try_from((a << 4) | (b << 2) | c).unwrap_or(255);
+        }
+    }
+
+    for &w in &[16_usize, 24_usize, 32_usize] {
+        if n < w {
+            continue;
+        }
+        let nw = w - 2;
+        let min_c = 3_u16;
+        let thresh = 2_i32 * i32::try_from(w - 3).unwrap_or(i32::MAX);
+        let mut counts = [0_u16; 64];
+        let mut sum_pairs = 0_i32;
+
+        for &t in &triplets[..nw] {
+            if t < 64 {
+                let ti = t as usize;
+                sum_pairs += i32::from(counts[ti]);
+                counts[ti] += 1;
+            }
+        }
+        if sum_pairs > thresh {
+            for (p, &t) in triplets[..nw].iter().enumerate() {
+                if t < 64 && counts[t as usize] >= min_c {
+                    masked[p] = true;
+                    masked[p + 1] = true;
+                    masked[p + 2] = true;
+                }
+            }
+        }
+
+        for start in 1..=(triplets.len() - nw) {
+            let out_t = triplets[start - 1];
+            if out_t < 64 {
+                let oi = out_t as usize;
+                counts[oi] -= 1;
+                sum_pairs -= i32::from(counts[oi]);
+            }
+            let in_t = triplets[start + nw - 1];
+            if in_t < 64 {
+                let ii = in_t as usize;
+                sum_pairs += i32::from(counts[ii]);
+                counts[ii] += 1;
+            }
+            if sum_pairs > thresh {
+                for (offset, &t) in triplets[start..start + nw].iter().enumerate() {
+                    if t < 64 && counts[t as usize] >= min_c {
+                        let p = start + offset;
+                        masked[p] = true;
+                        masked[p + 1] = true;
+                        masked[p + 2] = true;
+                    }
+                }
+            }
+        }
+    }
+
+    masked
+}
+
 /// Extract canonical strand-symmetric spaced-seed positions with at most `max_occ` hits.
 ///
 /// # Errors
@@ -365,12 +443,14 @@ pub(crate) struct FlatSeedIndex {
 }
 
 impl FlatSeedIndex {
-    pub(crate) fn build(
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn build_with_sdust(
         seq: &[u8],
         mask: &str,
         max_occ: usize,
         skip_softmasked: bool,
         ry_mode: bool,
+        sdust: Option<&[bool]>,
     ) -> Result<Self, AlignError> {
         if mask.is_empty() {
             return Err(AlignError::InvalidMask("mask is empty".to_owned()));
@@ -414,16 +494,20 @@ impl FlatSeedIndex {
         let mut pairs: Vec<(u64, u32)> = Vec::with_capacity((seq.len() - span + 1).min(1 << 24));
 
         for i in 0..=(seq.len() - span) {
+            if let Some(m) = sdust
+                && (m[i] || m[i + span - 1])
+            {
+                continue;
+            }
             let sub = &seq[i..i + span];
-            if span >= 12 && is_low_complexity_window(sub) {
+            if sdust.is_none() && span >= 12 && is_low_complexity_window(sub) {
                 continue;
             }
             let mut fwd = 0_u64;
             let mut rc = 0_u64;
             let mut valid = true;
             for (&fo, &ro) in offsets.iter().zip(&rev_offsets) {
-                if skip_softmasked
-                    && (sub[fo].is_ascii_lowercase() || sub[ro].is_ascii_lowercase())
+                if skip_softmasked && (sub[fo].is_ascii_lowercase() || sub[ro].is_ascii_lowercase())
                 {
                     valid = false;
                     break;
@@ -570,6 +654,7 @@ impl FlatSeedIndex {
 pub struct ContigIndex {
     pub(crate) seq: Vec<u8>,
     pub(crate) seq_rc: Vec<u8>,
+    pub(crate) sdust: Vec<bool>,
     pub(crate) seeds: FlatSeedIndex,
 }
 
@@ -593,11 +678,19 @@ pub fn prepare_contig_index_opts(
     skip_softmasked: bool,
 ) -> Result<ContigIndex, AlignError> {
     let max_occ = if seq.len() >= 100_000 { 2 } else { 4 };
-    let seeds =
-        FlatSeedIndex::build(seq, MASK_PRIMARY_11_15, max_occ, skip_softmasked, false)?;
+    let sdust = sdust_mask(seq);
+    let seeds = FlatSeedIndex::build_with_sdust(
+        seq,
+        MASK_PRIMARY_11_15,
+        max_occ,
+        skip_softmasked,
+        false,
+        Some(&sdust),
+    )?;
     Ok(ContigIndex {
         seq: seq.to_vec(),
         seq_rc: revcomp(seq),
+        sdust,
         seeds,
     })
 }
@@ -734,51 +827,39 @@ pub fn find_lastz12_2transition_hits<S: std::hash::BuildHasher>(
     )
 }
 
-pub(crate) fn find_lastz11_1transition_hits<S: std::hash::BuildHasher>(
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn find_spaced_transition_hits_flat(
     seq_x: &[u8],
-    iy_fwd: &HashMap<u64, Vec<usize>, S>,
-    iy_rc: &HashMap<u64, Vec<usize>, S>,
-    skip_softmasked: bool,
-) -> (AnchorPairs, AnchorPairs) {
-    const OFFSETS: [usize; 11] = [0, 1, 2, 4, 7, 8, 11, 13, 15, 16, 17];
-    const REV_OFFSETS: [usize; 11] = [17, 16, 15, 13, 10, 9, 6, 4, 2, 1, 0];
-    find_spaced_transition_hits(
-        seq_x,
-        &OFFSETS,
-        &REV_OFFSETS,
-        18,
-        iy_fwd,
-        iy_rc,
-        skip_softmasked,
-        0,
-        1,
-    )
-}
-
-pub(crate) fn find_w10_1transition_hits_flat(
-    seq_x: &[u8],
+    sdust_x: Option<&[bool]>,
+    offsets: &[usize],
+    rev_offsets: &[usize],
+    span: usize,
     iy: &FlatSeedIndex,
     skip_softmasked: bool,
+    min_transitions: usize,
+    max_transitions: usize,
 ) -> (AnchorPairs, AnchorPairs) {
-    const OFFSETS: [usize; 10] = [0, 1, 3, 4, 6, 7, 9, 10, 12, 13];
-    const REV_OFFSETS: [usize; 10] = [13, 12, 10, 9, 7, 6, 4, 3, 1, 0];
-    let span = 14;
     if seq_x.len() < span {
         return (Vec::new(), Vec::new());
     }
-    let w = OFFSETS.len();
+    let w = offsets.len();
     let mut hits_fwd = Vec::new();
     let mut hits_rc = Vec::new();
-    let mut keys = Vec::with_capacity(w + 1);
+    let mut keys = Vec::with_capacity(w * w / 2 + w + 1);
     for i in 0..=(seq_x.len() - span) {
+        if let Some(m) = sdust_x
+            && (m[i] || m[i + span - 1])
+        {
+            continue;
+        }
         let sub = &seq_x[i..i + span];
-        if is_low_complexity_window(sub) {
+        if sdust_x.is_none() && span >= 12 && is_low_complexity_window(sub) {
             continue;
         }
         let mut fwd = 0_u64;
         let mut rc = 0_u64;
         let mut valid = true;
-        for (&fo, &ro) in OFFSETS.iter().zip(&REV_OFFSETS) {
+        for (&fo, &ro) in offsets.iter().zip(rev_offsets) {
             if skip_softmasked && (sub[fo].is_ascii_lowercase() || sub[ro].is_ascii_lowercase()) {
                 valid = false;
                 break;
@@ -794,11 +875,26 @@ pub(crate) fn find_w10_1transition_hits_flat(
             continue;
         }
         keys.clear();
-        keys.push(fwd.min(rc));
-        for b in 0..w {
-            let mf = fwd ^ (2_u64 << (2 * (w - 1 - b)));
-            let mr = rc ^ (2_u64 << (2 * b));
-            keys.push(mf.min(mr));
+        if min_transitions == 0 {
+            keys.push(fwd.min(rc));
+        }
+        if min_transitions <= 1 && max_transitions >= 1 {
+            for b in 0..w {
+                let mf = fwd ^ (2_u64 << (2 * (w - 1 - b)));
+                let mr = rc ^ (2_u64 << (2 * b));
+                keys.push(mf.min(mr));
+            }
+        }
+        if max_transitions >= 2 {
+            for a in 0..w {
+                let ma_f = fwd ^ (2_u64 << (2 * (w - 1 - a)));
+                let ma_r = rc ^ (2_u64 << (2 * a));
+                for b in (a + 1)..w {
+                    let mf = ma_f ^ (2_u64 << (2 * (w - 1 - b)));
+                    let mr = ma_r ^ (2_u64 << (2 * b));
+                    keys.push(mf.min(mr));
+                }
+            }
         }
         for &key in &keys {
             for &py in iy.get(key) {
@@ -809,6 +905,85 @@ pub(crate) fn find_w10_1transition_hits_flat(
         }
     }
     (hits_fwd, hits_rc)
+}
+
+pub(crate) fn find_lastz12_1transition_hits_flat(
+    seq_x: &[u8],
+    sdust_x: Option<&[bool]>,
+    iy: &FlatSeedIndex,
+    skip_softmasked: bool,
+) -> (AnchorPairs, AnchorPairs) {
+    find_spaced_transition_hits_flat(
+        seq_x,
+        sdust_x,
+        &LASTZ12_OFFSETS,
+        &LASTZ12_REV_OFFSETS,
+        19,
+        iy,
+        skip_softmasked,
+        0,
+        1,
+    )
+}
+
+pub(crate) fn find_lastz12_2transition_hits_flat(
+    seq_x: &[u8],
+    sdust_x: Option<&[bool]>,
+    iy: &FlatSeedIndex,
+    skip_softmasked: bool,
+) -> (AnchorPairs, AnchorPairs) {
+    find_spaced_transition_hits_flat(
+        seq_x,
+        sdust_x,
+        &LASTZ12_OFFSETS,
+        &LASTZ12_REV_OFFSETS,
+        19,
+        iy,
+        skip_softmasked,
+        2,
+        2,
+    )
+}
+
+pub(crate) fn find_lastz11_1transition_hits_flat(
+    seq_x: &[u8],
+    sdust_x: Option<&[bool]>,
+    iy: &FlatSeedIndex,
+    skip_softmasked: bool,
+) -> (AnchorPairs, AnchorPairs) {
+    const OFFSETS: [usize; 11] = [0, 1, 2, 4, 7, 8, 11, 13, 15, 16, 17];
+    const REV_OFFSETS: [usize; 11] = [17, 16, 15, 13, 10, 9, 6, 4, 2, 1, 0];
+    find_spaced_transition_hits_flat(
+        seq_x,
+        sdust_x,
+        &OFFSETS,
+        &REV_OFFSETS,
+        18,
+        iy,
+        skip_softmasked,
+        0,
+        1,
+    )
+}
+
+pub(crate) fn find_w10_1transition_hits_flat(
+    seq_x: &[u8],
+    iy: &FlatSeedIndex,
+    skip_softmasked: bool,
+) -> (AnchorPairs, AnchorPairs) {
+    const OFFSETS: [usize; 10] = [0, 1, 3, 4, 6, 7, 9, 10, 12, 13];
+    const REV_OFFSETS: [usize; 10] = [13, 12, 10, 9, 7, 6, 4, 3, 1, 0];
+    find_spaced_transition_hits_flat(
+        seq_x,
+        None,
+        &OFFSETS,
+        &REV_OFFSETS,
+        14,
+        iy,
+        skip_softmasked,
+        0,
+        1,
+    )
 }
 
 /// Promote 2-hit gapped diagonal pairs (`<= max_gap` bp apart, `<= max_ddiag` bp indel shift)
@@ -985,5 +1160,25 @@ mod tests {
         assert_eq!(shared_seed_count(&idx_f, &idx_r), fwd_map.len());
         let (_hits_fwd, hits_rc) = idx_f.seeds.intersect(&idx_r.seeds);
         assert!(hits_rc.len() >= fwd_map.len());
+    }
+
+    #[test]
+    fn sdust_masks_simple_repeats_and_preserves_unique_dna() {
+        let mut seq = b"ACGTTGCATGCAACTGGTCAGTCGATCGTAGCTAGCTGAT".to_vec(); // 40bp unique
+        let rep_start = seq.len();
+        seq.extend_from_slice(b"CACACACACACACACACACACACACACACACACACACACA"); // 40bp (CA)20
+        let rep_end = seq.len();
+        seq.extend_from_slice(b"TGACCTAGGCTAGATTGCCAATGACAGTTCCAGGCTATGC"); // 40bp unique
+
+        let mask = sdust_mask(&seq);
+        assert!(mask[..16].iter().all(|&m| !m), "unique prefix was masked");
+        assert!(
+            mask[rep_start + 4..rep_end - 4].iter().all(|&m| m),
+            "dinucleotide repeat core was not masked"
+        );
+        assert!(
+            mask[rep_end + 16..].iter().all(|&m| !m),
+            "unique suffix was masked"
+        );
     }
 }

@@ -17,7 +17,12 @@ impl Interval {
     /// Construct a new interval (bounds on forward strand).
     #[must_use]
     pub fn new(start: usize, end: usize, strand: char, src_size: usize) -> Self {
-        Self { start, end, strand, src_size }
+        Self {
+            start,
+            end,
+            strand,
+            src_size,
+        }
     }
 
     /// The span length of the interval.

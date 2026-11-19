@@ -149,15 +149,11 @@ pub fn banded_mdl_gap_with_params(
     let mm_ln = mm_bits * ln2;
     let im_ln = im_bits * ln2;
 
-    let mut m_dp = BandGrid::new(n, m, band_w, NEG_INF);
-    let mut ix_dp = BandGrid::new(n, m, band_w, NEG_INF);
-    let mut iy_dp = BandGrid::new(n, m, band_w, NEG_INF);
     let mut fm = BandGrid::new(n, m, band_w, NEG_INF);
     let mut fix = BandGrid::new(n, m, band_w, NEG_INF);
     let mut fiy = BandGrid::new(n, m, band_w, NEG_INF);
     let mut sub_grid = BandGrid::new(n, m, band_w, 0.0);
 
-    m_dp.set(0, 0, 0.0);
     fm.set(0, 0, 0.0);
 
     for i in 0..=n {
@@ -169,8 +165,6 @@ pub fn banded_mdl_gap_with_params(
                 continue;
             }
             if i > 0 {
-                let v_ix = (m_dp.get(i - 1, j) + go_bits).max(ix_dp.get(i - 1, j) + ge_bits);
-                ix_dp.set(i, j, v_ix);
                 fix.set(
                     i,
                     j,
@@ -178,8 +172,6 @@ pub fn banded_mdl_gap_with_params(
                 );
             }
             if j > 0 {
-                let v_iy = (m_dp.get(i, j - 1) + go_bits).max(iy_dp.get(i, j - 1) + ge_bits);
-                iy_dp.set(i, j, v_iy);
                 fiy.set(
                     i,
                     j,
@@ -195,10 +187,6 @@ pub fn banded_mdl_gap_with_params(
                     id_prior,
                 );
                 sub_grid.set(i - 1, j - 1, sb);
-                let prev_m = (m_dp.get(i - 1, j - 1) + mm_bits)
-                    .max(ix_dp.get(i - 1, j - 1) + im_bits)
-                    .max(iy_dp.get(i - 1, j - 1) + im_bits);
-                m_dp.set(i, j, prev_m + sb);
                 let prev_fm = logsumexp3(
                     fm.get(i - 1, j - 1) + mm_ln,
                     fix.get(i - 1, j - 1) + im_ln,
@@ -210,12 +198,12 @@ pub fn banded_mdl_gap_with_params(
     }
 
     let z_fwd = logsumexp3(fm.get(n, m), fix.get(n, m), fiy.get(n, m));
-    let best_end = m_dp.get(n, m).max(ix_dp.get(n, m)).max(iy_dp.get(n, m));
+    let score_bits = z_fwd / ln2;
     if z_fwd <= NEG_INF * 0.5 {
         return GapResult {
             kept_pairs: Vec::new(),
             bubbles: 1,
-            score_bits: best_end,
+            score_bits,
         };
     }
 
@@ -265,23 +253,56 @@ pub fn banded_mdl_gap_with_params(
         }
     }
 
+    // Pure Forward-Backward Maximum Expected Accuracy (MEA) decoding (Durbin et al. 1998):
+    // reuse `fm` for MEA cumulative score and `bm` for posterior match probability.
+    for i in 0..=n {
+        let center = (i * m) / n;
+        let j_lo = center.saturating_sub(band_w);
+        let j_hi = (center + band_w).min(m);
+        for j in j_lo..=j_hi {
+            if i == 0 && j == 0 {
+                fm.set(0, 0, 0.0);
+                continue;
+            }
+            let post_m = if i > 0 && j > 0 {
+                (fm.get(i, j) + bm.get(i, j) - z_fwd).min(0.0).exp()
+            } else {
+                0.0
+            };
+            if i > 0 && j > 0 {
+                bm.set(i, j, post_m);
+            }
+            let d = if i > 0 && j > 0 {
+                fm.get(i - 1, j - 1) + (post_m - 0.25)
+            } else {
+                NEG_INF
+            };
+            let u = if i > 0 { fm.get(i - 1, j) } else { NEG_INF };
+            let l = if j > 0 { fm.get(i, j - 1) } else { NEG_INF };
+            fm.set(i, j, d.max(u).max(l));
+        }
+    }
+
     let mut raw_cols: Vec<(Option<usize>, Option<usize>, f64, f64)> = Vec::with_capacity(n + m);
     let (mut i, mut j) = (n, m);
     while i > 0 || j > 0 {
-        let vm = m_dp.get(i, j);
-        let vix = ix_dp.get(i, j);
-        let viy = iy_dp.get(i, j);
-        let best = vm.max(vix).max(viy);
-        if best <= NEG_INF * 0.5 {
+        let cur = fm.get(i, j);
+        if cur <= NEG_INF * 0.5 {
             break;
         }
-        if i > 0 && j > 0 && (vm - best).abs() < 1e-7 {
+        let d = if i > 0 && j > 0 {
+            fm.get(i - 1, j - 1) + (bm.get(i, j) - 0.25)
+        } else {
+            NEG_INF
+        };
+        let u = if i > 0 { fm.get(i - 1, j) } else { NEG_INF };
+        if i > 0 && j > 0 && (cur - d).abs() < 1e-9 {
             let sb = sub_grid.get(i - 1, j - 1);
-            let post_p = (fm.get(i, j) + bm.get(i, j) - z_fwd).min(0.0).exp();
+            let post_p = bm.get(i, j);
             raw_cols.push((Some(i - 1), Some(j - 1), sb, post_p));
             i -= 1;
             j -= 1;
-        } else if i > 0 && (vix - best).abs() < 1e-7 {
+        } else if i > 0 && (cur - u).abs() < 1e-9 {
             raw_cols.push((Some(i - 1), None, ge_bits, 0.0));
             i -= 1;
         } else if j > 0 {
@@ -344,7 +365,7 @@ pub fn banded_mdl_gap_with_params(
     GapResult {
         kept_pairs,
         bubbles,
-        score_bits: best_end,
+        score_bits,
     }
 }
 

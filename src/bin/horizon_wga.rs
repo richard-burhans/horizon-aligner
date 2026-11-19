@@ -200,13 +200,10 @@ fn main() -> Result<()> {
             let aln = align_seq_to_dag_seeded(&dag_nodes, qseq, &dag_params, 10.0);
             total_pairs += aln.kept_pairs.len();
             total_bubbles += aln.bubbles;
-            let path_str = aln
-                .path_nodes
-                .iter()
-                .fold(String::new(), |mut acc, &idx| {
-                    let _ = write!(acc, ">{}", dag_nodes[idx].name);
-                    acc
-                });
+            let path_str = aln.path_nodes.iter().fold(String::new(), |mut acc, &idx| {
+                let _ = write!(acc, ">{}", dag_nodes[idx].name);
+                acc
+            });
             println!(
                 "{}\t{}\t{}\tkept_bp={}\tscore_bits={:.1}\tbubbles={}",
                 qname,
@@ -510,8 +507,7 @@ fn load_gfa_dag(path: &std::path::Path) -> Result<Vec<GraphNode>> {
         .iter()
         .any(|(_, fo, _, to)| *fo == b'-' || *to == b'-');
 
-    let (oriented_segs, directed_edges): (OrientedSegs, DirectedEdges) = if has_rev
-    {
+    let (oriented_segs, directed_edges): (OrientedSegs, DirectedEdges) = if has_rev {
         let mut o_segs = Vec::with_capacity(segs.len() * 2);
         for (name, seq) in &segs {
             o_segs.push((format!("{name}+"), seq.clone()));
@@ -527,8 +523,7 @@ fn load_gfa_dag(path: &std::path::Path) -> Result<Vec<GraphNode>> {
         let flip = |o: u8| -> u8 { if o == b'-' { b'+' } else { b'-' } };
         let mut d_edges = Vec::with_capacity(raw_edges.len() * 2);
         for (u_name, uo, v_name, vo) in &raw_edges {
-            if let (Some(&u_raw), Some(&v_raw)) =
-                (name_to_raw.get(u_name), name_to_raw.get(v_name))
+            if let (Some(&u_raw), Some(&v_raw)) = (name_to_raw.get(u_name), name_to_raw.get(v_name))
             {
                 let u = orient_idx(u_raw, *uo);
                 let v = orient_idx(v_raw, *vo);

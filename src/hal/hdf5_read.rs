@@ -274,7 +274,10 @@ fn walk_btree_v1_group_entries(
     // B-tree v1 header with 8-byte offsets: 8 bytes prefix + 2 * 8 bytes sibling addrs = 24 bytes.
     // Entries are alternating (key: u64, child_addr: u64) for `n_entries`.
     for i in 0..n_entries {
-        let Some(child_off) = i.checked_mul(16).and_then(|o| node_addr.checked_add(24 + o + 8)) else {
+        let Some(child_off) = i
+            .checked_mul(16)
+            .and_then(|o| node_addr.checked_add(24 + o + 8))
+        else {
             break;
         };
         let Some(child_u64) = read_u64_le(bytes, child_off) else {
@@ -509,7 +512,11 @@ fn walk_btree_v1_group_entries_seek<R: std::io::Read + std::io::Seek>(
     }
     let node_level = hdr[5];
     let n_entries = usize::from(u16::from_le_bytes([hdr[6], hdr[7]]));
-    let body = read_at(r, node_addr.saturating_add(24), n_entries.saturating_mul(16))?;
+    let body = read_at(
+        r,
+        node_addr.saturating_add(24),
+        n_entries.saturating_mul(16),
+    )?;
     for i in 0..n_entries {
         let Some(child_addr) = read_u64_le(&body, i * 16 + 8) else {
             break;
@@ -665,7 +672,11 @@ fn walk_chunk_btree_v1_seek<R: std::io::Read + std::io::Seek>(
     let n_entries = usize::from(u16::from_le_bytes([hdr[6], hdr[7]]));
     let key_bytes = 8usize.saturating_add(ndim.saturating_add(1).saturating_mul(8));
     let rec_bytes = key_bytes.saturating_add(8);
-    let body = read_at(r, node_addr.saturating_add(24), n_entries.saturating_mul(rec_bytes))?;
+    let body = read_at(
+        r,
+        node_addr.saturating_add(24),
+        n_entries.saturating_mul(rec_bytes),
+    )?;
     for i in 0..n_entries {
         let key_off = i * rec_bytes;
         let Some(sz_bytes) = body.get(key_off..key_off + 4) else {
@@ -777,7 +788,8 @@ pub fn read_hdf5_v0_dataset_bytes_seek<R: std::io::Read + std::io::Seek>(
         let raw_chunk = read_at(r, ch.addr, len)?;
         if deflated {
             use std::io::Read as _;
-            let rem = MAX_CHUNK_DECOMPRESSED_BYTES.saturating_sub(u64::try_from(out.len()).unwrap_or(u64::MAX));
+            let rem = MAX_CHUNK_DECOMPRESSED_BYTES
+                .saturating_sub(u64::try_from(out.len()).unwrap_or(u64::MAX));
             let dec = flate2::read::ZlibDecoder::new(raw_chunk.as_slice());
             let mut bounded = dec.take(rem + 1);
             let n = bounded.read_to_end(&mut out)?;
@@ -877,7 +889,10 @@ fn walk_chunk_btree_v1(
     let key_bytes = 8usize.saturating_add(ndim.saturating_add(1).saturating_mul(8));
     let rec_bytes = key_bytes.saturating_add(8);
     for i in 0..n_entries {
-        let Some(key_off) = i.checked_mul(rec_bytes).and_then(|o| node_addr.checked_add(24 + o)) else {
+        let Some(key_off) = i
+            .checked_mul(rec_bytes)
+            .and_then(|o| node_addr.checked_add(24 + o))
+        else {
             break;
         };
         let Some(sz_end) = key_off.checked_add(4) else {
@@ -1010,7 +1025,8 @@ pub fn read_hdf5_v0_dataset_bytes(bytes: &[u8], obj_addr: usize) -> Option<Vec<u
         let raw_chunk = bytes.get(start..end)?;
         if deflated {
             use std::io::Read as _;
-            let rem = MAX_CHUNK_DECOMPRESSED_BYTES.saturating_sub(u64::try_from(out.len()).unwrap_or(u64::MAX));
+            let rem = MAX_CHUNK_DECOMPRESSED_BYTES
+                .saturating_sub(u64::try_from(out.len()).unwrap_or(u64::MAX));
             let dec = flate2::read::ZlibDecoder::new(raw_chunk);
             let mut bounded = dec.take(rem + 1);
             let n = bounded.read_to_end(&mut out).ok()?;

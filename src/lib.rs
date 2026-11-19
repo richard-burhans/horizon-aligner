@@ -24,11 +24,11 @@ pub use mdl::{
 };
 pub use merge::merge_pairwise_mafs;
 pub use seeding::{
-    ContigIndex, MASK_PRIMARY_11_15, MASK_LASTZ11, MASK_LASTZ12, MASK_W9, MASK_W10, canonical_spaced_seeds,
-    canonical_spaced_seeds_with_opts, cluster_strand_lcbs, complement_base,
-    find_lastz12_1transition_hits, find_lastz12_2transition_hits, lis_chain, local_w9_subchain, prepare_contig_index,
-    prepare_contig_index_opts, revcomp, score_contig_pair_lcb, select_top_k_pairs,
-    shared_seed_count,
+    ContigIndex, MASK_LASTZ11, MASK_LASTZ12, MASK_PRIMARY_11_15, MASK_W9, MASK_W10,
+    canonical_spaced_seeds, canonical_spaced_seeds_with_opts, cluster_strand_lcbs, complement_base,
+    find_lastz12_1transition_hits, find_lastz12_2transition_hits, lis_chain, local_w9_subchain,
+    prepare_contig_index, prepare_contig_index_opts, revcomp, score_contig_pair_lcb,
+    select_top_k_pairs, shared_seed_count,
 };
 
 use thiserror::Error;
@@ -205,8 +205,8 @@ mod tests {
 
     #[test]
     fn shared_seed_count_separates_homologs_from_unrelated() {
-        let sx = b"ATATATATATATATATATATGCGCGCGCGCGCGCGCGCGCATATATATATATATATATAT";
-        let sy_same = b"ATATATATATATCTATATATGCGCGCGCGCGCGCGCGCGCATATATATATATATATATAT";
+        let sx = b"ACGTTGCATGCAACTGGTCAGTCGATCGTAGCTAGCTGATCGATCGATGCTAGCATCGAT";
+        let sy_same = b"ACGTTGCATGCAACTGGTCAGTCGATCGTCGCTAGCTGATCGATCGATGCTAGCATCGAT";
         let sy_diff = b"CCCCCCCCCCCCCCCCCCCCGGGGGGGGGGGGGGGGGGGGCCCCCCCCCCCCCCCCCCCC";
         let ix = prepare_contig_index(sx).expect("valid");
         let iy_same = prepare_contig_index(sy_same).expect("valid");

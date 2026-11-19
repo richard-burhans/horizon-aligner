@@ -275,13 +275,8 @@ fn decompose_and_resolve(
             }
             j += 1;
         }
-        let (win_steps, win_tag) = resolve_window(
-            &steps[i..j],
-            seg_lens,
-            divergence,
-            collapse_dups,
-            stats,
-        );
+        let (win_steps, win_tag) =
+            resolve_window(&steps[i..j], seg_lens, divergence, collapse_dups, stats);
         out_steps.extend(win_steps);
         if let Some(t) = win_tag {
             tags.push(t);
@@ -371,7 +366,8 @@ fn pass2_rewrite<W: Write>(
     let mut raw_l_lines: Vec<String> = Vec::new();
     let mut used_edges: HashSet<(String, bool, String, bool)> = HashSet::new();
 
-    let record_edges = |steps: &[(String, bool)], used: &mut HashSet<(String, bool, String, bool)>| {
+    let record_edges = |steps: &[(String, bool)],
+                        used: &mut HashSet<(String, bool, String, bool)>| {
         for win in steps.windows(2) {
             let (ref u, uf) = win[0];
             let (ref v, vf) = win[1];
@@ -544,9 +540,8 @@ fn main() -> Result<()> {
     let (seg_lens, anchors) = pass1_index(&cli.gfa_in, cli.min_anchor_bp)?;
 
     let stats = if let Some(ref out_p) = cli.out_path {
-        let mut writer = BufWriter::new(
-            File::create(out_p).with_context(|| format!("creating {out_p}"))?,
-        );
+        let mut writer =
+            BufWriter::new(File::create(out_p).with_context(|| format!("creating {out_p}"))?);
         pass2_rewrite(&cli.gfa_in, &mut writer, &seg_lens, &anchors, &cli)?
     } else {
         let mut sink = io::sink();

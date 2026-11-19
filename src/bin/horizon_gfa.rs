@@ -139,10 +139,9 @@ fn cmd_extract(gfa_path: &str, specs: &[ExtractSpec], max_bp: Option<usize>) -> 
             Ok(())
         },
         |w| {
-            if let Some(idx) = specs
-                .iter()
-                .position(|spec| w.sample.starts_with(&spec.sample_prefix) && w.seq_id == spec.seq_id)
-            {
+            if let Some(idx) = specs.iter().position(|spec| {
+                w.sample.starts_with(&spec.sample_prefix) && w.seq_id == spec.seq_id
+            }) {
                 let steps: Vec<(String, bool)> = parse_walk_steps(&w.walk)
                     .into_iter()
                     .map(|(s, fwd)| (s.to_string(), fwd))
@@ -203,7 +202,9 @@ fn cmd_extract(gfa_path: &str, specs: &[ExtractSpec], max_bp: Option<usize>) -> 
                 .get(seg)
                 .with_context(|| format!("missing segment '{seg}' in GFA"))?;
             if seg_seq == b"*" {
-                bail!("segment '{seg}' has placeholder sequence '*' and cannot be extracted to FASTA");
+                bail!(
+                    "segment '{seg}' has placeholder sequence '*' and cannot be extracted to FASTA"
+                );
             }
             if *is_fwd {
                 seq_out.extend_from_slice(seg_seq);
@@ -271,7 +272,10 @@ fn main() -> Result<()> {
                 }
                 let parts: Vec<&str> = args[i].split(':').collect();
                 if parts.len() != 3 {
-                    bail!("extract spec must be sample_prefix:seq_id:out.fa, got {}", args[i]);
+                    bail!(
+                        "extract spec must be sample_prefix:seq_id:out.fa, got {}",
+                        args[i]
+                    );
                 }
                 specs.push(ExtractSpec {
                     sample_prefix: parts[0].to_string(),

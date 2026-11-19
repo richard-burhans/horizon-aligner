@@ -496,13 +496,20 @@ mod tests {
 
         let mut low_div = MdlCostModel::from_egraph(&eg);
         low_div.block_stats.insert("B".to_owned(), (1000, 0.02));
-        let (cost_low, expr_low) = extract_min_mdl_cost(&mut eg, root, &low_div).expect("extracted");
-        assert!(has_dup_of(&expr_low, "B"), "2% div should collapse dup: {expr_low:?}");
+        let (cost_low, expr_low) =
+            extract_min_mdl_cost(&mut eg, root, &low_div).expect("extracted");
+        assert!(
+            has_dup_of(&expr_low, "B"),
+            "2% div should collapse dup: {expr_low:?}"
+        );
         assert!(cost_low < 2500.0, "expected <2500 bits, got {cost_low}");
 
         let mut high_div = MdlCostModel::from_egraph(&eg);
         high_div.block_stats.insert("B".to_owned(), (1000, 0.75));
         let (_, expr_high) = extract_min_mdl_cost(&mut eg, root, &high_div).expect("extracted");
-        assert!(!has_dup_of(&expr_high, "B"), "75% (JC-saturated) div should NOT collapse dup: {expr_high:?}");
+        assert!(
+            !has_dup_of(&expr_high, "B"),
+            "75% (JC-saturated) div should NOT collapse dup: {expr_high:?}"
+        );
     }
 }

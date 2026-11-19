@@ -121,11 +121,7 @@ fn score_junction_cp_bits(flank_u: &[u8], flank_v: &[u8]) -> f64 {
     let left_gc = gc_prof[split - 1];
     let right_gc = gc_prof[(split + 15).min(gc_prof.len() - 1)];
     let bocpd_jump = (right_gc - left_gc).abs();
-    if bocpd_jump < 0.10 {
-        0.0
-    } else {
-        cp_bits
-    }
+    if bocpd_jump < 0.10 { 0.0 } else { cp_bits }
 }
 
 struct CleanConfig {
@@ -153,7 +149,11 @@ fn clean_gfa<W: Write>(gfa_path: &str, cfg: &CleanConfig, out: &mut W) -> Result
     stream_gfa(
         gfa_path,
         |s| {
-            let len = if s.sequence == b"*" { 0 } else { s.sequence.len() };
+            let len = if s.sequence == b"*" {
+                0
+            } else {
+                s.sequence.len()
+            };
             let prefix = if len > 0 {
                 s.sequence[..len.min(cfg.flank_bp)].to_vec()
             } else {
@@ -253,7 +253,13 @@ fn clean_gfa<W: Write>(gfa_path: &str, cfg: &CleanConfig, out: &mut W) -> Result
         |s| {
             let seq_str = String::from_utf8_lossy(&s.sequence);
             if let Some(ref tags) = s.tags {
-                writeln!(out_cell.borrow_mut(), "S\t{}\t{}\t{}", s.name, seq_str, tags)?;
+                writeln!(
+                    out_cell.borrow_mut(),
+                    "S\t{}\t{}\t{}",
+                    s.name,
+                    seq_str,
+                    tags
+                )?;
             } else {
                 writeln!(out_cell.borrow_mut(), "S\t{}\t{}", s.name, seq_str)?;
             }
@@ -470,8 +476,10 @@ fn main() -> Result<()> {
 
     let mut spooled_stdin: Option<std::path::PathBuf> = None;
     let effective_gfa = if gfa == "-" {
-        let tmp = std::env::temp_dir().join(format!("horizon_clean_stdin_{}.gfa", std::process::id()));
-        let mut f = File::create(&tmp).with_context(|| format!("creating stdin spool {}", tmp.display()))?;
+        let tmp =
+            std::env::temp_dir().join(format!("horizon_clean_stdin_{}.gfa", std::process::id()));
+        let mut f = File::create(&tmp)
+            .with_context(|| format!("creating stdin spool {}", tmp.display()))?;
         let stdin = io::stdin();
         let mut locked = stdin.lock();
         io::copy(&mut locked, &mut f)?;
