@@ -177,7 +177,7 @@ impl HalAlignment {
         let mut out = String::from("##maf version=1 scoring=horizon_hal\n");
 
         for bseg in &root.bottom_segments {
-            let r_end = (bseg.start + bseg.length).min(root.dna.len());
+            let r_end = bseg.start.saturating_add(bseg.length).min(root.dna.len());
             if r_end <= bseg.start {
                 continue;
             }
@@ -197,10 +197,16 @@ impl HalAlignment {
                 let Some((t_idx, rev)) = *link else {
                     continue;
                 };
-                let child_idx = root.children[c_pos];
-                let child = &self.genomes[child_idx];
-                let tseg = &child.top_segments[t_idx];
-                let c_end = (tseg.start + tseg.length).min(child.dna.len());
+                let Some(&child_idx) = root.children.get(c_pos) else {
+                    continue;
+                };
+                let Some(child) = self.genomes.get(child_idx) else {
+                    continue;
+                };
+                let Some(tseg) = child.top_segments.get(t_idx) else {
+                    continue;
+                };
+                let c_end = tseg.start.saturating_add(tseg.length).min(child.dna.len());
                 if c_end <= tseg.start {
                     continue;
                 }
@@ -258,10 +264,9 @@ pub type HalBottomRecord = (i64, u64, i64, Vec<(i64, bool)>);
 /// Decode HAL `BOTTOM_ARRAY` packed records (`24 + 9 * num_children` bytes per segment).
 #[must_use]
 pub fn decode_hal_bottom_array(raw: &[u8], num_children: usize) -> Vec<HalBottomRecord> {
-    let rec_size = 24 + 9 * num_children;
-    if rec_size == 0 {
+    let Some(rec_size) = num_children.checked_mul(9).and_then(|n| n.checked_add(24)) else {
         return Vec::new();
-    }
+    };
     let mut out = Vec::with_capacity(raw.len() / rec_size);
     for rec in raw.chunks_exact(rec_size) {
         let start = i64::from_le_bytes(rec[0..8].try_into().unwrap_or([0; 8]));

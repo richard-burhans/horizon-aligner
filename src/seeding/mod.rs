@@ -93,7 +93,7 @@ fn canonical_spaced_seeds_impl(
         return Ok(HashMap::new());
     }
 
-    let rev_offsets: Vec<usize> = offsets.iter().rev().map(|&o| span - 1 - o).collect();
+    let rev_offsets: Vec<usize> = offsets.iter().map(|&o| span - 1 - o).collect();
     let mut counts: HashMap<u64, usize> = HashMap::with_capacity(seq.len() / 2);
     let mut positions: HashMap<u64, Vec<usize>> = HashMap::with_capacity(seq.len() / 2);
 
@@ -324,13 +324,225 @@ pub(crate) fn merge_colinear_lcbs(
     merged
 }
 
+/// Compact flat sorted spaced-seed index (`12 bytes/entry` vs `~100 bytes/entry` for `HashMap<u64, Vec<usize>>`).
+///
+/// Since canonical seeds (`fwd.min(rc)`) are strand-symmetric, reverse-complement positions are
+/// derived directly as `seq_len - span - pos`, halving memory and build time.
+#[derive(Debug, Clone)]
+pub(crate) struct FlatSeedIndex {
+    pub(crate) keys: Vec<u64>,
+    pub(crate) pos: Vec<u32>,
+    pub(crate) span: usize,
+    pub(crate) seq_len: usize,
+}
+
+impl FlatSeedIndex {
+    pub(crate) fn build(
+        seq: &[u8],
+        mask: &str,
+        max_occ: usize,
+        skip_softmasked: bool,
+        ry_mode: bool,
+    ) -> Result<Self, AlignError> {
+        if mask.is_empty() {
+            return Err(AlignError::InvalidMask("mask is empty".to_owned()));
+        }
+        let bytes = mask.as_bytes();
+        let span = bytes.len();
+        let mut offsets = Vec::new();
+        for (idx, &ch) in bytes.iter().enumerate() {
+            match ch {
+                b'1' => offsets.push(idx),
+                b'0' => {}
+                _ => {
+                    return Err(AlignError::InvalidMask(format!(
+                        "unexpected char '{}'",
+                        ch as char
+                    )));
+                }
+            }
+        }
+        let max_bits = if ry_mode { 62 } else { 31 };
+        if offsets.is_empty() || offsets.len() > max_bits {
+            return Err(AlignError::InvalidMask(format!(
+                "active mask bits must be in 1..={max_bits}"
+            )));
+        }
+        if seq.len() < span {
+            return Ok(Self {
+                keys: Vec::new(),
+                pos: Vec::new(),
+                span,
+                seq_len: seq.len(),
+            });
+        }
+        if seq.len() > u32::MAX as usize {
+            return Err(AlignError::InvalidMask(
+                "sequence length exceeds 4 Gbp u32 index limit".to_owned(),
+            ));
+        }
+
+        let rev_offsets: Vec<usize> = offsets.iter().map(|&o| span - 1 - o).collect();
+        let mut pairs: Vec<(u64, u32)> = Vec::with_capacity((seq.len() - span + 1).min(1 << 24));
+
+        for i in 0..=(seq.len() - span) {
+            let sub = &seq[i..i + span];
+            if span >= 12 && is_low_complexity_window(sub) {
+                continue;
+            }
+            let mut fwd = 0_u64;
+            let mut rc = 0_u64;
+            let mut valid = true;
+            for (&fo, &ro) in offsets.iter().zip(&rev_offsets) {
+                if skip_softmasked
+                    && (sub[fo].is_ascii_lowercase() || sub[ro].is_ascii_lowercase())
+                {
+                    valid = false;
+                    break;
+                }
+                let (Some(bf), Some(br)) = (base_to_idx(sub[fo]), base_to_idx(sub[ro])) else {
+                    valid = false;
+                    break;
+                };
+                if ry_mode {
+                    fwd = (fwd << 1) | ((bf & 1) as u64);
+                    rc = (rc << 1) | ((1 - (br & 1)) as u64);
+                } else {
+                    fwd = (fwd << 2) | (bf as u64);
+                    rc = (rc << 2) | ((3 - br) as u64);
+                }
+            }
+            if !valid {
+                continue;
+            }
+            #[allow(clippy::cast_possible_truncation)]
+            pairs.push((fwd.min(rc), i as u32));
+        }
+
+        pairs.sort_unstable();
+
+        let mut keys = Vec::with_capacity(pairs.len());
+        let mut pos = Vec::with_capacity(pairs.len());
+        let mut i = 0;
+        while i < pairs.len() {
+            let k = pairs[i].0;
+            let mut j = i + 1;
+            while j < pairs.len() && pairs[j].0 == k {
+                j += 1;
+            }
+            if j - i <= max_occ {
+                for &(key, p) in &pairs[i..j] {
+                    keys.push(key);
+                    pos.push(p);
+                }
+            }
+            i = j;
+        }
+        drop(pairs);
+        keys.shrink_to_fit();
+        pos.shrink_to_fit();
+
+        Ok(Self {
+            keys,
+            pos,
+            span,
+            seq_len: seq.len(),
+        })
+    }
+
+    pub(crate) fn get(&self, key: u64) -> &[u32] {
+        let start = self.keys.partition_point(|&k| k < key);
+        if start >= self.keys.len() || self.keys[start] != key {
+            return &[];
+        }
+        let mut end = start + 1;
+        while end < self.keys.len() && self.keys[end] == key {
+            end += 1;
+        }
+        &self.pos[start..end]
+    }
+
+    pub(crate) fn shared_unique_keys(&self, other: &Self) -> usize {
+        let mut i = 0;
+        let mut j = 0;
+        let mut count = 0;
+        while i < self.keys.len() && j < other.keys.len() {
+            let ka = self.keys[i];
+            let kb = other.keys[j];
+            match ka.cmp(&kb) {
+                std::cmp::Ordering::Less => {
+                    while i < self.keys.len() && self.keys[i] == ka {
+                        i += 1;
+                    }
+                }
+                std::cmp::Ordering::Greater => {
+                    while j < other.keys.len() && other.keys[j] == kb {
+                        j += 1;
+                    }
+                }
+                std::cmp::Ordering::Equal => {
+                    count += 1;
+                    while i < self.keys.len() && self.keys[i] == ka {
+                        i += 1;
+                    }
+                    while j < other.keys.len() && other.keys[j] == kb {
+                        j += 1;
+                    }
+                }
+            }
+        }
+        count
+    }
+
+    pub(crate) fn intersect(&self, other: &Self) -> (AnchorPairs, AnchorPairs) {
+        let mut hits_fwd = Vec::new();
+        let mut hits_rc = Vec::new();
+        let mut i = 0;
+        let mut j = 0;
+        while i < self.keys.len() && j < other.keys.len() {
+            let ka = self.keys[i];
+            let kb = other.keys[j];
+            match ka.cmp(&kb) {
+                std::cmp::Ordering::Less => {
+                    while i < self.keys.len() && self.keys[i] == ka {
+                        i += 1;
+                    }
+                }
+                std::cmp::Ordering::Greater => {
+                    while j < other.keys.len() && other.keys[j] == kb {
+                        j += 1;
+                    }
+                }
+                std::cmp::Ordering::Equal => {
+                    let i_start = i;
+                    while i < self.keys.len() && self.keys[i] == ka {
+                        i += 1;
+                    }
+                    let j_start = j;
+                    while j < other.keys.len() && other.keys[j] == kb {
+                        j += 1;
+                    }
+                    for &px in &self.pos[i_start..i] {
+                        let x_pos = px as usize;
+                        for &py in &other.pos[j_start..j] {
+                            let y_pos = py as usize;
+                            hits_fwd.push((x_pos, y_pos));
+                            hits_rc.push((x_pos, other.seq_len - other.span - y_pos));
+                        }
+                    }
+                }
+            }
+        }
+        (hits_fwd, hits_rc)
+    }
+}
+
 /// Precomputed strand-symmetric KP-14 seed index for one contig.
 #[derive(Debug, Clone)]
 pub struct ContigIndex {
     pub(crate) seq: Vec<u8>,
     pub(crate) seq_rc: Vec<u8>,
-    pub(crate) seeds_fwd: HashMap<u64, Vec<usize>>,
-    pub(crate) seeds_rc: HashMap<u64, Vec<usize>>,
+    pub(crate) seeds: FlatSeedIndex,
 }
 
 /// Precompute forward and reverse-complement KP-14 seed maps for a contig.
@@ -352,79 +564,25 @@ pub fn prepare_contig_index_opts(
     seq: &[u8],
     skip_softmasked: bool,
 ) -> Result<ContigIndex, AlignError> {
-    let seq_rc_case: Vec<u8> = seq
-        .iter()
-        .rev()
-        .map(|&b| match b {
-            b'A' => b'T',
-            b'T' => b'A',
-            b'C' => b'G',
-            b'G' => b'C',
-            b'a' => b't',
-            b't' => b'a',
-            b'c' => b'g',
-            b'g' => b'c',
-            other => other,
-        })
-        .collect();
     let max_occ = if seq.len() >= 100_000 { 2 } else { 4 };
-    let seeds_fwd =
-        canonical_spaced_seeds_with_opts(seq, MASK_PRIMARY_11_15, max_occ, skip_softmasked, false)?;
-    let seeds_rc =
-        canonical_spaced_seeds_with_opts(&seq_rc_case, MASK_PRIMARY_11_15, max_occ, skip_softmasked, false)?;
+    let seeds =
+        FlatSeedIndex::build(seq, MASK_PRIMARY_11_15, max_occ, skip_softmasked, false)?;
     Ok(ContigIndex {
         seq: seq.to_vec(),
         seq_rc: revcomp(seq),
-        seeds_fwd,
-        seeds_rc,
+        seeds,
     })
 }
 
 /// Count shared KP-14 seeds (on either strand) between two pre-indexed contigs.
 #[must_use]
 pub fn shared_seed_count(idx_x: &ContigIndex, idx_y: &ContigIndex) -> usize {
-    let fwd = idx_x
-        .seeds_fwd
-        .keys()
-        .filter(|k| idx_y.seeds_fwd.contains_key(*k))
-        .count();
-    let rc = idx_x
-        .seeds_fwd
-        .keys()
-        .filter(|k| idx_y.seeds_rc.contains_key(*k))
-        .count();
-    fwd.max(rc)
+    idx_x.seeds.shared_unique_keys(&idx_y.seeds)
 }
 
 type LcbList = Vec<Vec<(usize, usize)>>;
 
 type AnchorPairs = Vec<(usize, usize)>;
-
-pub(crate) fn intersect_seed_maps(
-    ix: &HashMap<u64, Vec<usize>>,
-    iy_fwd: &HashMap<u64, Vec<usize>>,
-    iy_rc: &HashMap<u64, Vec<usize>>,
-) -> (AnchorPairs, AnchorPairs) {
-    let mut hits_fwd = Vec::new();
-    let mut hits_rc = Vec::new();
-    for (k, pxs) in ix {
-        if let Some(pys) = iy_fwd.get(k) {
-            for &px in pxs {
-                for &py in pys {
-                    hits_fwd.push((px, py));
-                }
-            }
-        }
-        if let Some(pys) = iy_rc.get(k) {
-            for &px in pxs {
-                for &py in pys {
-                    hits_rc.push((px, py));
-                }
-            }
-        }
-    }
-    (hits_fwd, hits_rc)
-}
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn find_spaced_transition_hits<S: std::hash::BuildHasher>(
@@ -504,7 +662,7 @@ pub(crate) fn find_spaced_transition_hits<S: std::hash::BuildHasher>(
 }
 
 const LASTZ12_OFFSETS: [usize; 12] = [0, 1, 2, 4, 7, 8, 11, 13, 15, 16, 17, 18];
-const LASTZ12_REV_OFFSETS: [usize; 12] = [0, 1, 2, 3, 5, 7, 10, 11, 14, 16, 17, 18];
+const LASTZ12_REV_OFFSETS: [usize; 12] = [18, 17, 16, 14, 11, 10, 7, 5, 3, 2, 1, 0];
 
 /// Find `12-of-19` (`MASK_LASTZ12`) seed hits including 1-transition (`A<->G`, `C<->T`) neighbors.
 #[must_use]
@@ -555,7 +713,7 @@ pub(crate) fn find_lastz11_1transition_hits<S: std::hash::BuildHasher>(
     skip_softmasked: bool,
 ) -> (AnchorPairs, AnchorPairs) {
     const OFFSETS: [usize; 11] = [0, 1, 2, 4, 7, 8, 11, 13, 15, 16, 17];
-    const REV_OFFSETS: [usize; 11] = [0, 1, 2, 4, 6, 9, 10, 13, 15, 16, 17];
+    const REV_OFFSETS: [usize; 11] = [17, 16, 15, 13, 10, 9, 6, 4, 2, 1, 0];
     find_spaced_transition_hits(
         seq_x,
         &OFFSETS,
@@ -569,24 +727,60 @@ pub(crate) fn find_lastz11_1transition_hits<S: std::hash::BuildHasher>(
     )
 }
 
-pub(crate) fn find_w10_1transition_hits<S: std::hash::BuildHasher>(
+pub(crate) fn find_w10_1transition_hits_flat(
     seq_x: &[u8],
-    iy_fwd: &HashMap<u64, Vec<usize>, S>,
-    iy_rc: &HashMap<u64, Vec<usize>, S>,
+    iy: &FlatSeedIndex,
     skip_softmasked: bool,
 ) -> (AnchorPairs, AnchorPairs) {
     const OFFSETS: [usize; 10] = [0, 1, 3, 4, 6, 7, 9, 10, 12, 13];
-    find_spaced_transition_hits(
-        seq_x,
-        &OFFSETS,
-        &OFFSETS,
-        14,
-        iy_fwd,
-        iy_rc,
-        skip_softmasked,
-        0,
-        1,
-    )
+    const REV_OFFSETS: [usize; 10] = [13, 12, 10, 9, 7, 6, 4, 3, 1, 0];
+    let span = 14;
+    if seq_x.len() < span {
+        return (Vec::new(), Vec::new());
+    }
+    let w = OFFSETS.len();
+    let mut hits_fwd = Vec::new();
+    let mut hits_rc = Vec::new();
+    let mut keys = Vec::with_capacity(w + 1);
+    for i in 0..=(seq_x.len() - span) {
+        let sub = &seq_x[i..i + span];
+        if is_low_complexity_window(sub) {
+            continue;
+        }
+        let mut fwd = 0_u64;
+        let mut rc = 0_u64;
+        let mut valid = true;
+        for (&fo, &ro) in OFFSETS.iter().zip(&REV_OFFSETS) {
+            if skip_softmasked && (sub[fo].is_ascii_lowercase() || sub[ro].is_ascii_lowercase()) {
+                valid = false;
+                break;
+            }
+            let (Some(bf), Some(br)) = (base_to_idx(sub[fo]), base_to_idx(sub[ro])) else {
+                valid = false;
+                break;
+            };
+            fwd = (fwd << 2) | (bf as u64);
+            rc = (rc << 2) | ((3 - br) as u64);
+        }
+        if !valid {
+            continue;
+        }
+        keys.clear();
+        keys.push(fwd.min(rc));
+        for b in 0..w {
+            let mf = fwd ^ (2_u64 << (2 * (w - 1 - b)));
+            let mr = rc ^ (2_u64 << (2 * b));
+            keys.push(mf.min(mr));
+        }
+        for &key in &keys {
+            for &py in iy.get(key) {
+                let py_u = py as usize;
+                hits_fwd.push((i, py_u));
+                hits_rc.push((i, iy.seq_len - iy.span - py_u));
+            }
+        }
+    }
+    (hits_fwd, hits_rc)
 }
 
 /// Promote 2-hit gapped diagonal pairs (`<= max_gap` bp apart, `<= max_ddiag` bp indel shift)
@@ -711,6 +905,22 @@ pub fn select_top_k_pairs(
 
 /// Align two pre-indexed contigs without recomputing KP-14 seed maps.
 ///
+/// Complement a single DNA base (preserving case for `A`/`C`/`G`/`T`).
+#[must_use]
+pub fn complement_base(b: u8) -> u8 {
+    match b {
+        b'A' => b'T',
+        b'T' => b'A',
+        b'C' => b'G',
+        b'G' => b'C',
+        b'a' => b't',
+        b't' => b'a',
+        b'c' => b'g',
+        b'g' => b'c',
+        other => other,
+    }
+}
+
 /// Reverse-complement a DNA byte slice (uppercasing ASCII bases).
 #[must_use]
 pub fn revcomp(seq: &[u8]) -> Vec<u8> {
@@ -724,4 +934,28 @@ pub fn revcomp(seq: &[u8]) -> Vec<u8> {
             other => other,
         })
         .collect()
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn non_palindromic_revcomp_seeds_match_exactly() {
+        let seq = b"ACGTTAGCAGTCAGTCAGTCAGGTAACCGGTTAACCGATGCTAGCTAG";
+        let rc = revcomp(seq);
+        let fwd_map = canonical_spaced_seeds(seq, MASK_PRIMARY_11_15, 4).unwrap();
+        let rc_map = canonical_spaced_seeds(&rc, MASK_PRIMARY_11_15, 4).unwrap();
+        assert_eq!(fwd_map.len(), rc_map.len());
+        for k in fwd_map.keys() {
+            assert!(rc_map.contains_key(k), "missing rc seed key {k}");
+        }
+
+        let idx_f = prepare_contig_index(seq).unwrap();
+        let idx_r = prepare_contig_index(&rc).unwrap();
+        assert_eq!(shared_seed_count(&idx_f, &idx_r), fwd_map.len());
+        let (_hits_fwd, hits_rc) = idx_f.seeds.intersect(&idx_r.seeds);
+        assert!(hits_rc.len() >= fwd_map.len());
+    }
 }

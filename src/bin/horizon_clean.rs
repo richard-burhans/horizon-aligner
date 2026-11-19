@@ -143,6 +143,7 @@ struct CleanStats {
 }
 
 #[allow(clippy::too_many_lines)]
+#[allow(clippy::type_complexity)]
 fn clean_gfa<W: Write>(gfa_path: &str, cfg: &CleanConfig, out: &mut W) -> Result<CleanStats> {
     let seg_flanks = std::cell::RefCell::new(HashMap::<String, SegFlank>::new());
     let links = std::cell::RefCell::new(Vec::<GfaLink>::new());
@@ -183,8 +184,10 @@ fn clean_gfa<W: Write>(gfa_path: &str, cfg: &CleanConfig, out: &mut W) -> Result
             for win in steps.windows(2) {
                 let e = DirectedEdge::new(win[0].0, win[0].1, win[1].0, win[1].1);
                 let rev = e.rev();
-                *sup.entry(e).or_insert(0) += 1;
-                *sup.entry(rev).or_insert(0) += 1;
+                *sup.entry(e.clone()).or_insert(0) += 1;
+                if rev != e {
+                    *sup.entry(rev).or_insert(0) += 1;
+                }
             }
             Ok(())
         },
@@ -194,8 +197,10 @@ fn clean_gfa<W: Write>(gfa_path: &str, cfg: &CleanConfig, out: &mut W) -> Result
             for win in steps.windows(2) {
                 let e = DirectedEdge::new(win[0].0, win[0].1, win[1].0, win[1].1);
                 let rev = e.rev();
-                *sup.entry(e).or_insert(0) += 1;
-                *sup.entry(rev).or_insert(0) += 1;
+                *sup.entry(e.clone()).or_insert(0) += 1;
+                if rev != e {
+                    *sup.entry(rev).or_insert(0) += 1;
+                }
             }
             Ok(())
         },
@@ -226,7 +231,7 @@ fn clean_gfa<W: Write>(gfa_path: &str, cfg: &CleanConfig, out: &mut W) -> Result
         };
 
         let should_sever =
-            (cfg.prune_unsupported && sup == 0) || (sup == 0 && cp_bits >= cfg.min_cp_bits);
+            (cfg.prune_unsupported && sup == 0) || (sup <= 1 && cp_bits >= cfg.min_cp_bits);
         if should_sever {
             severed_links += 1;
             severed_info.insert(edge, cp_bits);
@@ -247,7 +252,11 @@ fn clean_gfa<W: Write>(gfa_path: &str, cfg: &CleanConfig, out: &mut W) -> Result
         gfa_path,
         |s| {
             let seq_str = String::from_utf8_lossy(&s.sequence);
-            writeln!(out_cell.borrow_mut(), "S\t{}\t{}", s.name, seq_str)?;
+            if let Some(ref tags) = s.tags {
+                writeln!(out_cell.borrow_mut(), "S\t{}\t{}\t{}", s.name, seq_str, tags)?;
+            } else {
+                writeln!(out_cell.borrow_mut(), "S\t{}\t{}", s.name, seq_str)?;
+            }
             Ok(())
         },
         |l| {
@@ -472,6 +481,7 @@ fn main() -> Result<()> {
         s
     };
 
+    #[allow(clippy::cast_precision_loss)]
     let hwm_mb = read_vm_hwm_kb().map_or(0.0, |kb| kb as f64 / 1024.0);
     eprintln!(
         "horizon_clean: total_links={} kept={} severed={} bubbles={} split_walks={} elapsed={:.2}s peak_rss_mb={:.1}",
@@ -487,6 +497,7 @@ fn main() -> Result<()> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

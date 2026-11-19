@@ -7,11 +7,11 @@
 use crate::AlignError;
 use crate::bocpd::MIN_POST_PROB;
 use crate::seeding::{
-    ContigIndex, MASK_PRIMARY_11_15, MASK_LASTZ11, MASK_LASTZ12, MASK_RY20, MASK_W9, MASK_W10,
-    append_hsp_gated_aa_lcbs, append_hsp_gated_lastz12_lcbs, append_nonoverlapping_lcbs,
-    canonical_spaced_seeds_with_opts, find_lastz11_1transition_hits, find_lastz12_1transition_hits,
-    find_lastz12_2transition_hits, find_translated_aa5_hits, find_w10_1transition_hits,
-    find_w12_raw_lcbs, intersect_seed_maps, local_w9_subchain, merge_colinear_lcbs,
+    ContigIndex, FlatSeedIndex, MASK_PRIMARY_11_15, MASK_LASTZ11, MASK_LASTZ12, MASK_RY20,
+    MASK_W9, MASK_W10, append_hsp_gated_aa_lcbs, append_hsp_gated_lastz12_lcbs,
+    append_nonoverlapping_lcbs, canonical_spaced_seeds_with_opts, find_lastz11_1transition_hits,
+    find_lastz12_1transition_hits, find_lastz12_2transition_hits, find_translated_aa5_hits,
+    find_w10_1transition_hits_flat, find_w12_raw_lcbs, local_w9_subchain, merge_colinear_lcbs,
     prepare_contig_index,
 };
 use rayon::prelude::*;
@@ -207,28 +207,21 @@ pub fn align_contig_pair_with_config(
     };
 
     // Sparse-exon fallback: w=10 exact seeds in intervals not covered by w=12 LCBs.
-    let ix10 = canonical_spaced_seeds_with_opts(
+    let x10_idx = FlatSeedIndex::build(
         seq_x,
         MASK_W10,
         cfg.fallback_max_occ,
         cfg.skip_softmasked,
         false,
     )?;
-    let iy10_fwd = canonical_spaced_seeds_with_opts(
+    let y10_idx = FlatSeedIndex::build(
         seq_y,
         MASK_W10,
         cfg.fallback_max_occ,
         cfg.skip_softmasked,
         false,
     )?;
-    let iy10_rc = canonical_spaced_seeds_with_opts(
-        seq_y_rc,
-        MASK_W10,
-        cfg.fallback_max_occ,
-        cfg.skip_softmasked,
-        false,
-    )?;
-    let (mut hits10_fwd, mut hits10_rc) = intersect_seed_maps(&ix10, &iy10_fwd, &iy10_rc);
+    let (mut hits10_fwd, mut hits10_rc) = x10_idx.intersect(&y10_idx);
     let t_w10 = t_start.elapsed();
     filter_uncovered(&mut hits10_fwd);
     filter_uncovered(&mut hits10_rc);
@@ -251,15 +244,15 @@ pub fn align_contig_pair_with_config(
 
     // LASTZ-style 12-of-19 + 1-transition hits gated by ungapped X-drop HSP score
     // (skip when w=12 already covers >= 85% of the target contig).
-    if primary_cov < min_fallback_cov {
-        let iy_lz_fwd = canonical_spaced_seeds_with_opts(
+    let (iy_lz_fwd, iy_lz_rc) = if primary_cov < min_fallback_cov {
+        let f = canonical_spaced_seeds_with_opts(
             seq_y,
             MASK_LASTZ12,
             cfg.fallback_max_occ,
             cfg.skip_softmasked,
             false,
         )?;
-        let iy_lz_rc = canonical_spaced_seeds_with_opts(
+        let r = canonical_spaced_seeds_with_opts(
             seq_y_rc,
             MASK_LASTZ12,
             cfg.fallback_max_occ,
@@ -267,7 +260,7 @@ pub fn align_contig_pair_with_config(
             false,
         )?;
         let (mut hits_lz_fwd, mut hits_lz_rc) =
-            find_lastz12_1transition_hits(seq_x, &iy_lz_fwd, &iy_lz_rc, cfg.skip_softmasked);
+            find_lastz12_1transition_hits(seq_x, &f, &r, cfg.skip_softmasked);
         filter_uncovered(&mut hits_lz_fwd);
         filter_uncovered(&mut hits_lz_rc);
         append_hsp_gated_lastz12_lcbs(
@@ -284,29 +277,20 @@ pub fn align_contig_pair_with_config(
             &hits_lz_rc,
             base_hsp_thresh + hsp_bonus,
         );
-    }
+        (Some(f), Some(r))
+    } else {
+        (None, None)
+    };
     let t_lz1 = t_start.elapsed();
 
     if cfg.use_multi_shape_seeds && primary_cov < min_fallback_cov {
         // Skip O(N * 264) 2-transition scan once search space exceeds ~10^9 cell lookups
         // where single-transition + AA5 + BOCPD/MDL already dominate runtime.
-        if (seq_x.len() as u128) * (seq_y.len() as u128) < 1_000_000_000 {
-            let iy_lz_fwd = canonical_spaced_seeds_with_opts(
-                seq_y,
-                MASK_LASTZ12,
-                cfg.fallback_max_occ,
-                cfg.skip_softmasked,
-                false,
-            )?;
-            let iy_lz_rc = canonical_spaced_seeds_with_opts(
-                seq_y_rc,
-                MASK_LASTZ12,
-                cfg.fallback_max_occ,
-                cfg.skip_softmasked,
-                false,
-            )?;
+        if (seq_x.len() as u128) * (seq_y.len() as u128) < 1_000_000_000
+            && let (Some(lz_fwd), Some(lz_rc)) = (&iy_lz_fwd, &iy_lz_rc)
+        {
             let (mut double_trans_fwd, mut double_trans_rc) =
-                find_lastz12_2transition_hits(seq_x, &iy_lz_fwd, &iy_lz_rc, cfg.skip_softmasked);
+                find_lastz12_2transition_hits(seq_x, lz_fwd, lz_rc, cfg.skip_softmasked);
             filter_uncovered(&mut double_trans_fwd);
             filter_uncovered(&mut double_trans_rc);
             append_hsp_gated_lastz12_lcbs(
@@ -362,19 +346,11 @@ pub fn align_contig_pair_with_config(
         // stays tractable (< 10^9 search space cells).
         if (seq_x.len() as u128) * (seq_y.len() as u128) < 1_000_000_000 {
             // HSP-gated 1-bit purine/pyrimidine (R/Y) seeding for multi-transition divergent homologs.
-            let ix_ry =
-                canonical_spaced_seeds_with_opts(seq_x, MASK_RY20, 2, cfg.skip_softmasked, true)?;
-            let iy_ry_fwd =
-                canonical_spaced_seeds_with_opts(seq_y, MASK_RY20, 2, cfg.skip_softmasked, true)?;
-            let iy_ry_rc = canonical_spaced_seeds_with_opts(
-                seq_y_rc,
-                MASK_RY20,
-                2,
-                cfg.skip_softmasked,
-                true,
-            )?;
-            let (mut hits_ry_fwd, mut hits_ry_rc) =
-                intersect_seed_maps(&ix_ry, &iy_ry_fwd, &iy_ry_rc);
+            let x_ry =
+                FlatSeedIndex::build(seq_x, MASK_RY20, 2, cfg.skip_softmasked, true)?;
+            let y_ry =
+                FlatSeedIndex::build(seq_y, MASK_RY20, 2, cfg.skip_softmasked, true)?;
+            let (mut hits_ry_fwd, mut hits_ry_rc) = x_ry.intersect(&y_ry);
             filter_uncovered(&mut hits_ry_fwd);
             filter_uncovered(&mut hits_ry_rc);
             append_hsp_gated_lastz12_lcbs(
@@ -394,7 +370,7 @@ pub fn align_contig_pair_with_config(
 
             // HSP-gated w=10 (10-of-14) 1-transition seeding.
             let (mut hits_w10_fwd, mut hits_w10_rc) =
-                find_w10_1transition_hits(seq_x, &iy10_fwd, &iy10_rc, cfg.skip_softmasked);
+                find_w10_1transition_hits_flat(seq_x, &y10_idx, cfg.skip_softmasked);
             filter_uncovered(&mut hits_w10_fwd);
             filter_uncovered(&mut hits_w10_rc);
             append_hsp_gated_lastz12_lcbs(
@@ -424,13 +400,9 @@ pub fn align_contig_pair_with_config(
 
     // Transition-tolerant R/Y (1-bit purine/pyrimidine) fallback for divergent homologs.
     if cfg.use_ry_seeds {
-        let ix_ry =
-            canonical_spaced_seeds_with_opts(seq_x, MASK_RY20, 2, cfg.skip_softmasked, true)?;
-        let iy_ry_fwd =
-            canonical_spaced_seeds_with_opts(seq_y, MASK_RY20, 2, cfg.skip_softmasked, true)?;
-        let iy_ry_rc =
-            canonical_spaced_seeds_with_opts(seq_y_rc, MASK_RY20, 2, cfg.skip_softmasked, true)?;
-        let (hits_ry_fwd, hits_ry_rc) = intersect_seed_maps(&ix_ry, &iy_ry_fwd, &iy_ry_rc);
+        let x_ry = FlatSeedIndex::build(seq_x, MASK_RY20, 2, cfg.skip_softmasked, true)?;
+        let y_ry = FlatSeedIndex::build(seq_y, MASK_RY20, 2, cfg.skip_softmasked, true)?;
+        let (hits_ry_fwd, hits_ry_rc) = x_ry.intersect(&y_ry);
         let prev_fwd = combined_fwd.clone();
         let prev_rc = combined_rc.clone();
         append_nonoverlapping_lcbs(
@@ -702,7 +674,7 @@ pub fn align_contig_pair_with_config(
         .par_iter()
         .map(|&(is_rc, x0, x1, y0, y1, rev)| {
             let y_work = if is_rc { seq_y_rc } else { seq_y };
-            let pairs = mdl_xdrop_extend(
+            let pairs = mdl_xdrop_extend_with_params(
                 &seq_x[x0..x1],
                 &y_work[y0..y1],
                 x0,
@@ -710,6 +682,7 @@ pub fn align_contig_pair_with_config(
                 rev,
                 cfg.max_ext,
                 40,
+                &hmm_params,
             );
             (is_rc, pairs)
         })

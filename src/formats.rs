@@ -2,7 +2,7 @@
 
 use crate::egraph;
 use crate::mdl::ContigAlignment;
-use crate::seeding::revcomp;
+use crate::seeding::complement_base;
 use std::fmt::Write as _;
 
 /// Format aligned LCBs and Horizon Bubbles as minimal GFA v1.1 records.
@@ -174,7 +174,7 @@ pub fn format_maf_blocks(
         ax.push(seq_x[prev_x].to_ascii_uppercase() as char);
         let first_y = seq_y[prev_y].to_ascii_uppercase();
         ay.push(if is_rev {
-            revcomp(&[first_y])[0] as char
+            complement_base(first_y) as char
         } else {
             first_y as char
         });
@@ -187,7 +187,7 @@ pub fn format_maf_blocks(
             if is_rev {
                 for &by in seq_y[(y + 1)..prev_y].iter().rev() {
                     ax.push('-');
-                    ay.push(revcomp(&[by])[0] as char);
+                    ay.push(complement_base(by.to_ascii_uppercase()) as char);
                 }
             } else {
                 for &by in &seq_y[(prev_y + 1)..y] {
@@ -198,7 +198,7 @@ pub fn format_maf_blocks(
             ax.push(seq_x[x].to_ascii_uppercase() as char);
             let by = seq_y[y].to_ascii_uppercase();
             ay.push(if is_rev {
-                revcomp(&[by])[0] as char
+                complement_base(by) as char
             } else {
                 by as char
             });
@@ -209,7 +209,7 @@ pub fn format_maf_blocks(
         let (y_start, y_span, y_strand) = if is_rev {
             let y_lo = blk[blk.len() - 1].1;
             let y_hi = blk[0].1 + 1;
-            (len_y - y_hi, y_hi - y_lo, '-')
+            (len_y.saturating_sub(y_hi), y_hi - y_lo, '-')
         } else {
             let y_lo = blk[0].1;
             let y_hi = blk[blk.len() - 1].1 + 1;

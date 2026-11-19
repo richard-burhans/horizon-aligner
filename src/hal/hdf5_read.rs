@@ -157,7 +157,7 @@ pub fn read_hdf5_object_header(slice: &[u8]) -> Option<Hdf5ObjectHeader> {
             chunk_sz |= usize::from(slice[pos + b]) << (8 * b);
         }
         pos += chunk_sz_bytes;
-        let end = (pos + chunk_sz).min(slice.len());
+        let end = pos.saturating_add(chunk_sz).min(slice.len());
         let mut msg_types = Vec::new();
         while pos + 4 <= end {
             let mtype = u16::from(slice[pos]);
@@ -205,17 +205,23 @@ fn collect_snod_entries(
     heap_data: &[u8],
     out: &mut Vec<Hdf5GroupEntry>,
 ) {
-    if bytes.get(snod_addr..snod_addr + 4) != Some(b"SNOD") {
+    let Some(magic_end) = snod_addr.checked_add(4) else {
+        return;
+    };
+    if bytes.get(snod_addr..magic_end) != Some(b"SNOD") {
         return;
     }
-    let Some(n_syms) = bytes
-        .get(snod_addr + 6..snod_addr + 8)
+    let Some(n_syms) = snod_addr
+        .checked_add(8)
+        .and_then(|end| bytes.get(snod_addr + 6..end))
         .map(|b| usize::from(u16::from_le_bytes([b[0], b[1]])))
     else {
         return;
     };
     for i in 0..n_syms {
-        let entry_off = snod_addr + 8 + i * 40;
+        let Some(entry_off) = i.checked_mul(40).and_then(|o| snod_addr.checked_add(8 + o)) else {
+            break;
+        };
         let Some(name_off_u64) = read_u64_le(bytes, entry_off) else {
             break;
         };
@@ -244,25 +250,33 @@ fn walk_btree_v1_group_entries(
     node_addr: usize,
     heap_data: &[u8],
     out: &mut Vec<Hdf5GroupEntry>,
+    visited: &mut std::collections::HashSet<usize>,
+    depth: usize,
 ) {
-    if bytes.get(node_addr..node_addr + 4) != Some(b"TREE") {
+    if depth > 64 || !visited.insert(node_addr) {
         return;
     }
-    let node_type = *bytes.get(node_addr + 4).unwrap_or(&255);
-    let node_level = *bytes.get(node_addr + 5).unwrap_or(&255);
-    let Some(n_entries) = bytes
-        .get(node_addr + 6..node_addr + 8)
-        .map(|b| usize::from(u16::from_le_bytes([b[0], b[1]])))
-    else {
+    let Some(magic_end) = node_addr.checked_add(8) else {
         return;
     };
+    if bytes.get(node_addr..node_addr + 4) != Some(b"TREE") || magic_end > bytes.len() {
+        return;
+    }
+    let node_type = bytes[node_addr + 4];
+    let node_level = bytes[node_addr + 5];
+    let n_entries = usize::from(u16::from_le_bytes([
+        bytes[node_addr + 6],
+        bytes[node_addr + 7],
+    ]));
     if node_type != 0 {
         return;
     }
     // B-tree v1 header with 8-byte offsets: 8 bytes prefix + 2 * 8 bytes sibling addrs = 24 bytes.
     // Entries are alternating (key: u64, child_addr: u64) for `n_entries`.
     for i in 0..n_entries {
-        let child_off = node_addr + 24 + i * 16 + 8;
+        let Some(child_off) = i.checked_mul(16).and_then(|o| node_addr.checked_add(24 + o + 8)) else {
+            break;
+        };
         let Some(child_u64) = read_u64_le(bytes, child_off) else {
             break;
         };
@@ -272,7 +286,7 @@ fn walk_btree_v1_group_entries(
         if node_level == 0 {
             collect_snod_entries(bytes, child_addr, heap_data, out);
         } else {
-            walk_btree_v1_group_entries(bytes, child_addr, heap_data, out);
+            walk_btree_v1_group_entries(bytes, child_addr, heap_data, out, visited, depth + 1);
         }
     }
 }
@@ -298,14 +312,17 @@ pub fn read_hdf5_v0_group_entries(
         std::ops::ControlFlow::Continue(())
     })?;
     let (btree_addr, heap_addr) = symtab_addrs?;
-    if bytes.get(heap_addr..heap_addr + 4) != Some(b"HEAP") {
+    let heap_end = heap_addr.checked_add(4)?;
+    if bytes.get(heap_addr..heap_end) != Some(b"HEAP") {
         return None;
     }
-    let data_seg_size = usize::try_from(read_u64_le(bytes, heap_addr + 8)?).ok()?;
-    let data_seg_addr = usize::try_from(read_u64_le(bytes, heap_addr + 24)?).ok()?;
-    let heap_data = bytes.get(data_seg_addr..data_seg_addr + data_seg_size)?;
+    let data_seg_size = usize::try_from(read_u64_le(bytes, heap_addr.checked_add(8)?)?).ok()?;
+    let data_seg_addr = usize::try_from(read_u64_le(bytes, heap_addr.checked_add(24)?)?).ok()?;
+    let seg_end = data_seg_addr.checked_add(data_seg_size)?;
+    let heap_data = bytes.get(data_seg_addr..seg_end)?;
     let mut entries = Vec::new();
-    walk_btree_v1_group_entries(bytes, btree_addr, heap_data, &mut entries);
+    let mut visited = std::collections::HashSet::new();
+    walk_btree_v1_group_entries(bytes, btree_addr, heap_data, &mut entries, &mut visited, 0);
     Some(entries)
 }
 
@@ -480,14 +497,19 @@ fn walk_btree_v1_group_entries_seek<R: std::io::Read + std::io::Seek>(
     node_addr: u64,
     heap_data: &[u8],
     out: &mut Vec<Hdf5GroupEntry>,
+    visited: &mut std::collections::HashSet<u64>,
+    depth: usize,
 ) -> std::io::Result<()> {
+    if depth > 64 || !visited.insert(node_addr) {
+        return Ok(());
+    }
     let hdr = read_at(r, node_addr, 24)?;
     if hdr.len() < 24 || &hdr[0..4] != b"TREE" || hdr[4] != 0 {
         return Ok(());
     }
     let node_level = hdr[5];
     let n_entries = usize::from(u16::from_le_bytes([hdr[6], hdr[7]]));
-    let body = read_at(r, node_addr + 24, n_entries * 16)?;
+    let body = read_at(r, node_addr.saturating_add(24), n_entries.saturating_mul(16))?;
     for i in 0..n_entries {
         let Some(child_addr) = read_u64_le(&body, i * 16 + 8) else {
             break;
@@ -495,7 +517,7 @@ fn walk_btree_v1_group_entries_seek<R: std::io::Read + std::io::Seek>(
         if node_level == 0 {
             collect_snod_entries_seek(r, child_addr, heap_data, out)?;
         } else {
-            walk_btree_v1_group_entries_seek(r, child_addr, heap_data, out)?;
+            walk_btree_v1_group_entries_seek(r, child_addr, heap_data, out, visited, depth + 1)?;
         }
     }
     Ok(())
@@ -542,7 +564,8 @@ pub fn read_hdf5_v0_group_entries_seek<R: std::io::Read + std::io::Seek>(
     };
     let heap_data = read_at(r, data_seg_addr, data_seg_size)?;
     let mut entries = Vec::new();
-    walk_btree_v1_group_entries_seek(r, btree_addr, &heap_data, &mut entries)?;
+    let mut visited = std::collections::HashSet::new();
+    walk_btree_v1_group_entries_seek(r, btree_addr, &heap_data, &mut entries, &mut visited, 0)?;
     Ok(Some(entries))
 }
 
@@ -628,16 +651,21 @@ fn walk_chunk_btree_v1_seek<R: std::io::Read + std::io::Seek>(
     node_addr: u64,
     ndim: usize,
     out: &mut Vec<Hdf5Chunk>,
+    visited: &mut std::collections::HashSet<u64>,
+    depth: usize,
 ) -> std::io::Result<()> {
+    if depth > 64 || !visited.insert(node_addr) {
+        return Ok(());
+    }
     let hdr = read_at(r, node_addr, 24)?;
     if hdr.len() < 24 || &hdr[0..4] != b"TREE" || hdr[4] != 1 {
         return Ok(());
     }
     let node_level = hdr[5];
     let n_entries = usize::from(u16::from_le_bytes([hdr[6], hdr[7]]));
-    let key_bytes = 8 + (ndim + 1) * 8;
-    let rec_bytes = key_bytes + 8;
-    let body = read_at(r, node_addr + 24, n_entries * rec_bytes)?;
+    let key_bytes = 8usize.saturating_add(ndim.saturating_add(1).saturating_mul(8));
+    let rec_bytes = key_bytes.saturating_add(8);
+    let body = read_at(r, node_addr.saturating_add(24), n_entries.saturating_mul(rec_bytes))?;
     for i in 0..n_entries {
         let key_off = i * rec_bytes;
         let Some(sz_bytes) = body.get(key_off..key_off + 4) else {
@@ -653,7 +681,7 @@ fn walk_chunk_btree_v1_seek<R: std::io::Read + std::io::Seek>(
                 addr: child_addr,
             });
         } else {
-            walk_chunk_btree_v1_seek(r, child_addr, ndim, out)?;
+            walk_chunk_btree_v1_seek(r, child_addr, ndim, out, visited, depth + 1)?;
         }
     }
     Ok(())
@@ -727,28 +755,41 @@ pub fn read_hdf5_v0_dataset_bytes_seek<R: std::io::Read + std::io::Seek>(
     };
 
     if let Some((addr, size)) = contig {
+        if u64::try_from(size).unwrap_or(u64::MAX) > MAX_CHUNK_DECOMPRESSED_BYTES {
+            return Ok(None);
+        }
         return read_at(r, addr, size).map(Some);
     }
     let Some((btree_addr, ndim)) = chunk_btree else {
         return Ok(None);
     };
     let mut chunks = Vec::new();
-    walk_chunk_btree_v1_seek(r, btree_addr, ndim, &mut chunks)?;
+    let mut visited = std::collections::HashSet::new();
+    walk_chunk_btree_v1_seek(r, btree_addr, ndim, &mut chunks, &mut visited, 0)?;
     let mut out = Vec::new();
     for ch in chunks {
         let Ok(len) = usize::try_from(ch.size) else {
             return Ok(None);
         };
+        if u64::try_from(len).unwrap_or(u64::MAX) > MAX_CHUNK_DECOMPRESSED_BYTES {
+            return Ok(None);
+        }
         let raw_chunk = read_at(r, ch.addr, len)?;
         if deflated {
             use std::io::Read as _;
+            let rem = MAX_CHUNK_DECOMPRESSED_BYTES.saturating_sub(u64::try_from(out.len()).unwrap_or(u64::MAX));
             let dec = flate2::read::ZlibDecoder::new(raw_chunk.as_slice());
-            let mut bounded = dec.take(MAX_CHUNK_DECOMPRESSED_BYTES + 1);
+            let mut bounded = dec.take(rem + 1);
             let n = bounded.read_to_end(&mut out)?;
-            if u64::try_from(n).unwrap_or(u64::MAX) > MAX_CHUNK_DECOMPRESSED_BYTES {
+            if u64::try_from(n).unwrap_or(u64::MAX) > rem {
                 return Ok(None);
             }
         } else {
+            if u64::try_from(out.len().saturating_add(raw_chunk.len())).unwrap_or(u64::MAX)
+                > MAX_CHUNK_DECOMPRESSED_BYTES
+            {
+                return Ok(None);
+            }
             out.extend_from_slice(&raw_chunk);
         }
     }
@@ -787,8 +828,9 @@ pub fn read_hdf5_v0_contiguous_data(bytes: &[u8], obj_addr: usize) -> Option<&[u
             && let Some(size_u64) = read_u64_le(body, 10)
             && let (Ok(data_addr), Ok(data_size)) =
                 (usize::try_from(addr_u64), usize::try_from(size_u64))
+            && let Some(data_end) = data_addr.checked_add(data_size)
         {
-            result = bytes.get(data_addr..data_addr + data_size);
+            result = bytes.get(data_addr..data_end);
             return std::ops::ControlFlow::Break(());
         }
         std::ops::ControlFlow::Continue(())
@@ -805,27 +847,43 @@ pub struct Hdf5Chunk {
     pub addr: u64,
 }
 
-fn walk_chunk_btree_v1(bytes: &[u8], node_addr: usize, ndim: usize, out: &mut Vec<Hdf5Chunk>) {
-    if bytes.get(node_addr..node_addr + 4) != Some(b"TREE") {
+fn walk_chunk_btree_v1(
+    bytes: &[u8],
+    node_addr: usize,
+    ndim: usize,
+    out: &mut Vec<Hdf5Chunk>,
+    visited: &mut std::collections::HashSet<usize>,
+    depth: usize,
+) {
+    if depth > 64 || !visited.insert(node_addr) {
         return;
     }
-    let node_type = *bytes.get(node_addr + 4).unwrap_or(&255);
-    let node_level = *bytes.get(node_addr + 5).unwrap_or(&255);
-    let Some(n_entries) = bytes
-        .get(node_addr + 6..node_addr + 8)
-        .map(|b| usize::from(u16::from_le_bytes([b[0], b[1]])))
-    else {
+    let Some(magic_end) = node_addr.checked_add(8) else {
         return;
     };
+    if bytes.get(node_addr..node_addr + 4) != Some(b"TREE") || magic_end > bytes.len() {
+        return;
+    }
+    let node_type = bytes[node_addr + 4];
+    let node_level = bytes[node_addr + 5];
+    let n_entries = usize::from(u16::from_le_bytes([
+        bytes[node_addr + 6],
+        bytes[node_addr + 7],
+    ]));
     if node_type != 1 {
         return;
     }
     // Type-1 chunk key: 4 bytes chunk_size + 4 bytes filter_mask + (ndim + 1) * 8 bytes coords.
-    let key_bytes = 8 + (ndim + 1) * 8;
-    let rec_bytes = key_bytes + 8;
+    let key_bytes = 8usize.saturating_add(ndim.saturating_add(1).saturating_mul(8));
+    let rec_bytes = key_bytes.saturating_add(8);
     for i in 0..n_entries {
-        let key_off = node_addr + 24 + i * rec_bytes;
-        let Some(sz_bytes) = bytes.get(key_off..key_off + 4) else {
+        let Some(key_off) = i.checked_mul(rec_bytes).and_then(|o| node_addr.checked_add(24 + o)) else {
+            break;
+        };
+        let Some(sz_end) = key_off.checked_add(4) else {
+            break;
+        };
+        let Some(sz_bytes) = bytes.get(key_off..sz_end) else {
             break;
         };
         let chunk_size = u32::from_le_bytes([sz_bytes[0], sz_bytes[1], sz_bytes[2], sz_bytes[3]]);
@@ -838,7 +896,7 @@ fn walk_chunk_btree_v1(bytes: &[u8], node_addr: usize, ndim: usize, out: &mut Ve
                 addr: child_addr,
             });
         } else if let Ok(sub) = usize::try_from(child_addr) {
-            walk_chunk_btree_v1(bytes, sub, ndim, out);
+            walk_chunk_btree_v1(bytes, sub, ndim, out, visited, depth + 1);
         }
     }
 }
@@ -857,7 +915,8 @@ pub fn read_hdf5_v0_chunk_addrs(bytes: &[u8], obj_addr: usize) -> Option<Vec<Hdf
         {
             let ndim = usize::from(body[2]);
             let mut chunks = Vec::new();
-            walk_chunk_btree_v1(bytes, btree_addr, ndim, &mut chunks);
+            let mut visited = std::collections::HashSet::new();
+            walk_chunk_btree_v1(bytes, btree_addr, ndim, &mut chunks, &mut visited, 0);
             result = Some(chunks);
             return std::ops::ControlFlow::Break(());
         }
@@ -947,16 +1006,23 @@ pub fn read_hdf5_v0_dataset_bytes(bytes: &[u8], obj_addr: usize) -> Option<Vec<u
     for ch in chunks {
         let start = usize::try_from(ch.addr).ok()?;
         let len = usize::try_from(ch.size).ok()?;
-        let raw_chunk = bytes.get(start..start + len)?;
+        let end = start.checked_add(len)?;
+        let raw_chunk = bytes.get(start..end)?;
         if deflated {
             use std::io::Read as _;
+            let rem = MAX_CHUNK_DECOMPRESSED_BYTES.saturating_sub(u64::try_from(out.len()).unwrap_or(u64::MAX));
             let dec = flate2::read::ZlibDecoder::new(raw_chunk);
-            let mut bounded = dec.take(MAX_CHUNK_DECOMPRESSED_BYTES + 1);
+            let mut bounded = dec.take(rem + 1);
             let n = bounded.read_to_end(&mut out).ok()?;
-            if u64::try_from(n).unwrap_or(u64::MAX) > MAX_CHUNK_DECOMPRESSED_BYTES {
+            if u64::try_from(n).unwrap_or(u64::MAX) > rem {
                 return None;
             }
         } else {
+            if u64::try_from(out.len().saturating_add(raw_chunk.len())).unwrap_or(u64::MAX)
+                > MAX_CHUNK_DECOMPRESSED_BYTES
+            {
+                return None;
+            }
             out.extend_from_slice(raw_chunk);
         }
     }

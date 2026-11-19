@@ -168,11 +168,16 @@ fn parse_pairwise_maf_blocks(
         rows.clear();
     };
 
-    for line in maf_text.lines() {
-        if line.is_empty() || line.starts_with("##") {
+    for raw_line in maf_text.lines() {
+        let line = raw_line.trim();
+        if line.starts_with('#') {
             continue;
         }
-        if line.starts_with("a ") {
+        if line.is_empty() {
+            flush(&mut cur_rows, by_contig, &mut tokens);
+            continue;
+        }
+        if line == "a" || line.starts_with("a ") {
             flush(&mut cur_rows, by_contig, &mut tokens);
         } else if let Some(rest) = line.strip_prefix("s ") {
             let parts: Vec<&str> = rest.split_whitespace().collect();

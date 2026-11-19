@@ -20,13 +20,13 @@ pub use mdl::{
     AlignConfig, ContigAlignment, GapResult, GraphAlignment, GraphNode, HmmParams,
     align_contig_pair, align_contig_pair_indexed, align_contig_pair_indexed_with_min_lcb,
     align_contig_pair_with_config, align_seq_to_dag_mdl, align_seq_to_dag_seeded, banded_mdl_gap,
-    banded_mdl_gap_with_params, mdl_xdrop_extend,
+    banded_mdl_gap_with_params, mdl_xdrop_extend, mdl_xdrop_extend_with_params,
 };
 pub use merge::merge_pairwise_mafs;
 pub use seeding::{
     ContigIndex, MASK_PRIMARY_11_15, MASK_LASTZ11, MASK_LASTZ12, MASK_W9, MASK_W10, canonical_spaced_seeds,
-    canonical_spaced_seeds_with_opts, cluster_strand_lcbs, find_lastz12_1transition_hits,
-    find_lastz12_2transition_hits, lis_chain, local_w9_subchain, prepare_contig_index,
+    canonical_spaced_seeds_with_opts, cluster_strand_lcbs, complement_base,
+    find_lastz12_1transition_hits, find_lastz12_2transition_hits, lis_chain, local_w9_subchain, prepare_contig_index,
     prepare_contig_index_opts, revcomp, score_contig_pair_lcb, select_top_k_pairs,
     shared_seed_count,
 };
@@ -74,7 +74,8 @@ mod tests {
     fn spaced_seeds_are_strand_symmetric_and_match_oracle() {
         let seq = b"ATATATATATATATATATATGCGCGCGCGCGCGCGCGCGCATATATATATATATATATAT";
         let seeds = canonical_spaced_seeds(seq, MASK_PRIMARY_11_15, 2).expect("valid mask");
-        assert_eq!(seeds.len(), 28);
+        // 60bp palindrome: 14 boundary windows on the left half each pair with their RC on the right half.
+        assert_eq!(seeds.len(), 14);
 
         let rc: Vec<u8> = seq
             .iter()

@@ -14,73 +14,84 @@ fn read_named_contigs(path: &Path, target: &str) -> Result<HashMap<String, Vec<u
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix('>') {
             let id = rest.split_whitespace().next().unwrap_or("");
-            if id == target || id.starts_with(&format!("{}.", target)) {
+            if id == target || id.starts_with(&format!("{target}.")) {
                 active_id = Some(id.to_string());
                 contigs.entry(id.to_string()).or_default();
             } else {
                 active_id = None;
             }
-        } else if let Some(ref id) = active_id {
-            if let Some(seq) = contigs.get_mut(id) {
-                seq.extend_from_slice(line.trim().as_bytes());
-            }
+        } else if let Some(ref id) = active_id
+            && let Some(seq) = contigs.get_mut(id)
+        {
+            seq.extend_from_slice(line.trim().as_bytes());
         }
     }
     Ok(contigs)
 }
 
+type MafPairMap = HashMap<(String, String), HashSet<(usize, usize)>>;
+type MafEntry = ((String, String), HashSet<(usize, usize)>);
+
 #[allow(clippy::similar_names)]
-fn parse_maf_pairs_by_contig(
-    path: &Path,
-    cx: &str,
-    cy: &str,
-) -> Result<HashMap<(String, String), HashSet<(usize, usize)>>> {
+fn parse_maf_pairs_by_contig(path: &Path, cx: &str, cy: &str) -> Result<MafPairMap> {
     let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    let mut out: HashMap<(String, String), HashSet<(usize, usize)>> = HashMap::new();
+    let mut out: MafPairMap = HashMap::new();
     let mut cur: Vec<Vec<String>> = Vec::new();
+    let flush = |cur: &mut Vec<Vec<String>>, out: &mut MafPairMap| -> Result<()> {
+        if cur.len() == 2
+            && cur[0].len() >= 7
+            && cur[1].len() >= 7
+            && cur[0][1].contains(cx)
+            && cur[1][1].contains(cy)
+        {
+            let ref_id = cur[0][1].clone();
+            let tgt_id = cur[1][1].clone();
+            let sx: usize = cur[0][2].parse()?;
+            let stx = &cur[0][4];
+            let src_lx: usize = cur[0][5].parse()?;
+            let ax = cur[0][6].as_bytes();
+
+            let sy: usize = cur[1][2].parse()?;
+            let sty = &cur[1][4];
+            let src_ly: usize = cur[1][5].parse()?;
+            let ay = cur[1][6].as_bytes();
+
+            let pair_set = out.entry((ref_id, tgt_id)).or_default();
+            let (mut ix, mut iy) = (0usize, 0usize);
+            for (&ca, &cb) in ax.iter().zip(ay) {
+                if ca != b'-' && cb != b'-' {
+                    let px = if stx == "+" {
+                        sx + ix
+                    } else {
+                        src_lx.saturating_sub(1 + sx + ix)
+                    };
+                    let py = if sty == "+" {
+                        sy + iy
+                    } else {
+                        src_ly.saturating_sub(1 + sy + iy)
+                    };
+                    pair_set.insert((px, py));
+                }
+                if ca != b'-' {
+                    ix += 1;
+                }
+                if cb != b'-' {
+                    iy += 1;
+                }
+            }
+        }
+        cur.clear();
+        Ok(())
+    };
     for line in text.lines() {
         if line.starts_with("s ") {
             cur.push(line.split_whitespace().map(str::to_owned).collect());
         } else if line.trim().is_empty() && !cur.is_empty() {
-            if cur.len() == 2 && cur[0][1].contains(cx) && cur[1][1].contains(cy) {
-                let ref_id = cur[0][1].clone();
-                let tgt_id = cur[1][1].clone();
-                let sx: usize = cur[0][2].parse()?;
-                let stx = &cur[0][4];
-                let src_lx: usize = cur[0][5].parse()?;
-                let ax = cur[0][6].as_bytes();
-
-                let sy: usize = cur[1][2].parse()?;
-                let sty = &cur[1][4];
-                let src_ly: usize = cur[1][5].parse()?;
-                let ay = cur[1][6].as_bytes();
-
-                let pair_set = out.entry((ref_id, tgt_id)).or_default();
-                let (mut ix, mut iy) = (0usize, 0usize);
-                for (&ca, &cb) in ax.iter().zip(ay) {
-                    if ca != b'-' && cb != b'-' {
-                        let px = if stx == "+" {
-                            sx + ix
-                        } else {
-                            src_lx - 1 - (sx + ix)
-                        };
-                        let py = if sty == "+" {
-                            sy + iy
-                        } else {
-                            src_ly - 1 - (sy + iy)
-                        };
-                        pair_set.insert((px, py));
-                    }
-                    if ca != b'-' {
-                        ix += 1;
-                    }
-                    if cb != b'-' {
-                        iy += 1;
-                    }
-                }
-            }
-            cur.clear();
+            flush(&mut cur, &mut out)?;
         }
+    }
+    if !cur.is_empty() {
+        flush(&mut cur, &mut out)?;
     }
     Ok(out)
 }
@@ -134,8 +145,7 @@ fn main() -> Result<()> {
     let mut total_overlap = 0usize;
     let mut total_bubbles = 0usize;
 
-    let mut pairs: Vec<((String, String), HashSet<(usize, usize)>)> =
-        maf_by_pair.into_iter().collect();
+    let mut pairs: Vec<MafEntry> = maf_by_pair.into_iter().collect();
     pairs.sort_by(|a, b| a.0.cmp(&b.0));
 
     for ((ref_id, tgt_id), maf_set) in &pairs {
@@ -152,19 +162,52 @@ fn main() -> Result<()> {
     }
 
     let elapsed = t0.elapsed().as_secs_f64();
+    #[allow(clippy::cast_precision_loss)]
     let recall = if total_maf == 0 {
         0.0
     } else {
         100.0 * total_overlap as f64 / total_maf as f64
     };
+    #[allow(clippy::cast_precision_loss)]
     let precision = if total_proto == 0 {
         0.0
     } else {
         100.0 * total_overlap as f64 / total_proto as f64
     };
     println!(
-        "elapsed={:.3}s proto_pairs={} maf_pairs={} overlap={} raw_maf_recall={:.1}% raw_maf_precision={:.1}% bubbles={}",
-        elapsed, total_proto, total_maf, total_overlap, recall, precision, total_bubbles
+        "elapsed={elapsed:.3}s proto_pairs={total_proto} maf_pairs={total_maf} overlap={total_overlap} raw_maf_recall={recall:.1}% raw_maf_precision={precision:.1}% bubbles={total_bubbles}"
     );
     Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_named_contigs_and_maf_pairs() {
+        let dir = std::env::temp_dir();
+        let fa_path = dir.join("horizon_eval_test.fa");
+        let maf_path = dir.join("horizon_eval_test.maf");
+
+        fs::write(&fa_path, ">hg38.chr22\nACGT\nTGCA\n>other\nAAAA\n").unwrap();
+        let contigs = read_named_contigs(&fa_path, "hg38").unwrap();
+        assert_eq!(contigs.get("hg38.chr22").map(Vec::as_slice), Some(&b"ACGTTGCA"[..]));
+        assert!(!contigs.contains_key("other"));
+
+        fs::write(
+            &maf_path,
+            "a score=10\ns hg38.chr22 10 3 + 100 ACG\ns dog.chr1 5 3 - 50 TGC\n\n",
+        )
+        .unwrap();
+        let maf = parse_maf_pairs_by_contig(&maf_path, "hg38", "dog").unwrap();
+        let pairs = maf.get(&("hg38.chr22".to_string(), "dog.chr1".to_string())).unwrap();
+        assert!(pairs.contains(&(10, 44)));
+        assert!(pairs.contains(&(11, 43)));
+        assert!(pairs.contains(&(12, 42)));
+
+        let _ = fs::remove_file(&fa_path);
+        let _ = fs::remove_file(&maf_path);
+    }
 }

@@ -120,3 +120,19 @@ fn main() -> Result<()> {
     );
     Ok(())
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn revcomp_and_read_first_contig_work() {
+        assert_eq!(revcomp(b"ACGTN"), b"NACGT");
+        let fa_path = std::env::temp_dir().join("bench_chr1_test.fa");
+        fs::write(&fa_path, ">c1\nACGT\nTTAA\n>c2\nGGGG\n").unwrap();
+        let seq = read_first_contig(&fa_path).unwrap();
+        let _ = fs::remove_file(&fa_path);
+        assert_eq!(seq, b"ACGTTTAA");
+    }
+}

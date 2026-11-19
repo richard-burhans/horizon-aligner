@@ -69,12 +69,18 @@ pub fn bocpd_gc_profile(seq: &[u8], hazard: f64, max_run: usize) -> Vec<f64> {
     let mut gc_est = Vec::with_capacity(seq.len());
 
     for &b in seq {
-        let is_gc = matches!(b.to_ascii_uppercase(), b'G' | b'C');
+        let upper = b.to_ascii_uppercase();
+        let is_acgt = matches!(upper, b'A' | b'C' | b'G' | b'T');
+        let is_gc = matches!(upper, b'G' | b'C');
         let mut pred_gc: f64 = 0.0;
         for idx in 0..run_probs.len() {
             pred_gc += run_probs[idx] * (alphas[idx] / (alphas[idx] + betas[idx]));
         }
         gc_est.push(pred_gc.clamp(0.02, 0.98));
+
+        if !is_acgt {
+            continue;
+        }
 
         next_probs.clear();
         next_alphas.clear();
@@ -116,4 +122,18 @@ pub fn bocpd_gc_profile(seq: &[u8], hazard: f64, max_run: usize) -> Vec<f64> {
     }
 
     gc_est
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bocpd_ignores_n_bases() {
+        let with_n = b"GCGCGCGCGCGCGCGCGCGCNNNNNNNNNNNNNNNNNNNN";
+        let gc = bocpd_gc_profile(with_n, 1.0 / 120.0, 200);
+        assert_eq!(gc.len(), with_n.len());
+        assert!(gc[20] > 0.70);
+        assert!((gc[39] - gc[20]).abs() < 1e-12);
+    }
 }

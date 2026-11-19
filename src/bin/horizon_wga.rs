@@ -133,8 +133,12 @@ fn parse_args() -> Result<CliArgs> {
             "usage: horizon_wga <target.fa> <query.fa> [max_contigs] [--maf out.maf] [--gfa out.gfa] [--graph target.gfa] [--hal-info file.hal] [--top-k K] [--rbest] [--resolve-dups] [--respect-softmask] [--ry-seeds|--no-ry-seeds]"
         );
     }
-    let (fa_x, fa_y, max_contigs) = if graph_path.is_some() && pos.len() == 1 {
-        (PathBuf::new(), PathBuf::from(&pos[0]), 1)
+    let (fa_x, fa_y, max_contigs) = if graph_path.is_some() && (pos.len() == 1 || pos.len() == 2) {
+        (
+            PathBuf::new(),
+            PathBuf::from(&pos[0]),
+            pos.get(1).and_then(|s| s.parse().ok()).unwrap_or(1),
+        )
     } else {
         (
             pos.first().map_or_default(PathBuf::from),
@@ -192,7 +196,8 @@ fn main() -> Result<()> {
         let mut total_pairs = 0usize;
         let mut total_bubbles = 0usize;
         for (qname, qseq) in &queries {
-            let aln = align_seq_to_dag_seeded(&dag_nodes, qseq, &HmmParams::default(), 10.0);
+            let dag_params = estimate_dag_hmm_params(&dag_nodes, qseq);
+            let aln = align_seq_to_dag_seeded(&dag_nodes, qseq, &dag_params, 10.0);
             total_pairs += aln.kept_pairs.len();
             total_bubbles += aln.bubbles;
             let path_str = aln
@@ -255,6 +260,8 @@ fn main() -> Result<()> {
     };
 
     let mut total_pairs = 0usize;
+    let mut total_unique_x = 0usize;
+    let mut total_unique_y = 0usize;
     let mut total_bubbles = 0usize;
     let mut pruned_pairs = 0usize;
     let mut summary_out = String::new();
@@ -292,6 +299,20 @@ fn main() -> Result<()> {
                 continue;
             }
             total_pairs += aln.aligned_pairs.len();
+            let mut ux = 0usize;
+            let mut last_x = usize::MAX;
+            let mut ys: Vec<usize> = Vec::with_capacity(aln.aligned_pairs.len());
+            for &(px, py) in &aln.aligned_pairs {
+                if px != last_x {
+                    ux += 1;
+                    last_x = px;
+                }
+                ys.push(py);
+            }
+            ys.sort_unstable();
+            ys.dedup();
+            total_unique_x += ux;
+            total_unique_y += ys.len();
             total_bubbles += aln.macro_bubbles + aln.internal_bubbles;
             summary_out.push_str(&format_gfa_summary(nx, ny, &aln));
 
@@ -327,11 +348,13 @@ fn main() -> Result<()> {
 
     let elapsed = t0.elapsed().as_secs_f64();
     println!(
-        "contigs_x={} contigs_y={} pruned_pairs={} aligned_pairs={} total_bubbles={} elapsed_s={:.4}",
+        "contigs_x={} contigs_y={} pruned_pairs={} aligned_pairs={} unique_x_bp={} unique_y_bp={} total_bubbles={} elapsed_s={:.4}",
         contigs_x.len(),
         contigs_y.len(),
         pruned_pairs,
         total_pairs,
+        total_unique_x,
+        total_unique_y,
         total_bubbles,
         elapsed
     );
@@ -341,6 +364,82 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+fn estimate_dag_hmm_params(nodes: &[GraphNode], seq_y: &[u8]) -> HmmParams {
+    use horizon_aligner::complement_base;
+    use horizon_aligner::seeding::{MASK_W10, canonical_spaced_seeds_with_opts};
+    let Ok(q_seeds) = canonical_spaced_seeds_with_opts(seq_y, MASK_W10, 4, false, false) else {
+        return HmmParams::default();
+    };
+    let span = MASK_W10.len();
+    let mut matches = 0usize;
+    let mut total = 0usize;
+    for nd in nodes {
+        let Ok(n_seeds) = canonical_spaced_seeds_with_opts(&nd.seq, MASK_W10, 4, false, false)
+        else {
+            continue;
+        };
+        let mut keys: Vec<u64> = n_seeds.keys().copied().collect();
+        keys.sort_unstable();
+        for k in keys {
+            if let (Some(n_pos), Some(q_pos)) = (n_seeds.get(&k), q_seeds.get(&k)) {
+                for &np in n_pos {
+                    for &qp in q_pos {
+                        if np + span <= nd.seq.len() && qp + span <= seq_y.len() {
+                            let mut fwd_m = 0usize;
+                            let mut rc_m = 0usize;
+                            let mut valid_n = 0usize;
+                            for off in 0..span {
+                                let bx = nd.seq[np + off].to_ascii_uppercase();
+                                let by_f = seq_y[qp + off].to_ascii_uppercase();
+                                let by_r = complement_base(seq_y[qp + span - 1 - off])
+                                    .to_ascii_uppercase();
+                                if matches!(bx, b'A' | b'C' | b'G' | b'T')
+                                    && matches!(by_f, b'A' | b'C' | b'G' | b'T')
+                                {
+                                    valid_n += 1;
+                                    if bx == by_f {
+                                        fwd_m += 1;
+                                    }
+                                    if bx == by_r {
+                                        rc_m += 1;
+                                    }
+                                }
+                            }
+                            total += valid_n;
+                            matches += fwd_m.max(rc_m);
+                        }
+                        if total >= 2000 {
+                            break;
+                        }
+                    }
+                    if total >= 2000 {
+                        break;
+                    }
+                }
+            }
+            if total >= 2000 {
+                break;
+            }
+        }
+        if total >= 2000 {
+            break;
+        }
+    }
+    if total < 60 {
+        return HmmParams::default();
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let identity_prior = ((matches as f64 + 195.0) / (total as f64 + 300.0)).clamp(0.60, 0.72);
+    HmmParams {
+        identity_prior,
+        ..HmmParams::default()
+    }
+}
+
+type OrientedSegs = Vec<(String, Vec<u8>)>;
+type DirectedEdges = Vec<(usize, usize)>;
+
+#[allow(clippy::too_many_lines)]
 fn load_gfa_dag(path: &std::path::Path) -> Result<Vec<GraphNode>> {
     let segs = std::cell::RefCell::new(Vec::<(String, Vec<u8>)>::new());
     let name_to_raw = std::cell::RefCell::new(HashMap::<String, usize>::new());
@@ -373,7 +472,7 @@ fn load_gfa_dag(path: &std::path::Path) -> Result<Vec<GraphNode>> {
         .iter()
         .any(|(_, fo, _, to)| *fo == b'-' || *to == b'-');
 
-    let (oriented_segs, directed_edges): (Vec<(String, Vec<u8>)>, Vec<(usize, usize)>) = if has_rev
+    let (oriented_segs, directed_edges): (OrientedSegs, DirectedEdges) = if has_rev
     {
         let mut o_segs = Vec::with_capacity(segs.len() * 2);
         for (name, seq) in &segs {

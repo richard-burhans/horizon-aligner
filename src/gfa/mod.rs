@@ -14,6 +14,7 @@ use std::path::Path;
 pub struct GfaSegment {
     pub name: String,
     pub sequence: Vec<u8>,
+    pub tags: Option<String>,
 }
 
 /// Represents a GFA Link (L line)
@@ -52,14 +53,12 @@ pub fn parse_path_steps(seg_names: &str) -> Vec<(&str, bool)> {
         .split(',')
         .filter_map(|tok| {
             let tok = tok.trim();
-            if tok.len() < 2 {
-                return None;
-            }
-            let (name, orient) = tok.split_at(tok.len() - 1);
-            match orient {
-                "+" => Some((name, true)),
-                "-" => Some((name, false)),
-                _ => None,
+            if let Some(name) = tok.strip_suffix('+') {
+                (!name.is_empty()).then_some((name, true))
+            } else if let Some(name) = tok.strip_suffix('-') {
+                (!name.is_empty()).then_some((name, false))
+            } else {
+                None
             }
         })
         .collect()
@@ -148,7 +147,11 @@ where
     let mut line = String::new();
     while reader.read_line(&mut line)? > 0 {
         let trimmed = line.trim_end_matches(&['\r', '\n'][..]);
-        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with('H') {
+        if trimmed.is_empty()
+            || trimmed.starts_with('#')
+            || trimmed == "H"
+            || trimmed.starts_with("H\t")
+        {
             line.clear();
             continue;
         }
@@ -158,9 +161,16 @@ where
 
         match record_type {
             "S" => {
-                let name = parts.next().unwrap_or("").to_string();
-                let sequence = parts.next().unwrap_or("").as_bytes().to_vec();
-                on_segment(GfaSegment { name, sequence })?;
+                let mut s_parts = trimmed.splitn(4, '\t');
+                let _ = s_parts.next();
+                let name = s_parts.next().unwrap_or("").to_string();
+                let sequence = s_parts.next().unwrap_or("").as_bytes().to_vec();
+                let tags = s_parts.next().and_then(|t| (!t.is_empty()).then(|| t.to_string()));
+                on_segment(GfaSegment {
+                    name,
+                    sequence,
+                    tags,
+                })?;
             }
             "L" => {
                 let from = parts.next().unwrap_or("").to_string();
@@ -209,6 +219,7 @@ where
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use flate2::write::GzEncoder;

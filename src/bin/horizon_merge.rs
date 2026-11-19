@@ -44,3 +44,24 @@ fn main() -> Result<()> {
     );
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merge_pairwise_mafs_merges_two_species() {
+        let maf_a = "a score=10\ns hg38.chr1 0 10 + 100 ACGTACGTAC\ns panTro6.chr1 0 10 + 100 ACGTACGTAC\n\n";
+        let maf_b = "a score=10\ns hg38.chr1 0 10 + 100 ACGTACGTAC\ns mm39.chr1 0 10 + 100 ACGTACGTAC\n\n";
+        let inputs = vec![
+            ("panTro6".to_string(), maf_a.to_string()),
+            ("mm39".to_string(), maf_b.to_string()),
+        ];
+        let (maf_out, gfa_out, total_blocks, multi_blocks) =
+            merge_pairwise_mafs("hg38", &inputs, 100);
+        assert!(total_blocks >= 1);
+        assert!(multi_blocks >= 1);
+        assert!(maf_out.contains("hg38.chr1"));
+        assert!(gfa_out.contains("H\tVN:Z:"));
+    }
+}

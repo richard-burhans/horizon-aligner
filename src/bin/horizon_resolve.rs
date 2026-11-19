@@ -1,4 +1,4 @@
-//! Two-pass streaming GFA v1.0/v1.1 snarl/bubble e-graph resolver using MdlCostModel.
+//! Two-pass streaming GFA v1.0/v1.1 snarl/bubble e-graph resolver using `MdlCostModel`.
 
 use anyhow::{Context, Result, bail};
 use horizon_aligner::egraph::{
@@ -249,8 +249,8 @@ fn resolve_window(
     }
 }
 
-fn decompose_and_resolve<'a>(
-    steps: &[(&'a str, bool)],
+fn decompose_and_resolve(
+    steps: &[(&str, bool)],
     anchors: &HashSet<String>,
     seg_lens: &HashMap<String, usize>,
     max_bubble_steps: usize,
@@ -357,6 +357,7 @@ fn open_line_reader(path: &str) -> Result<Box<dyn BufRead>> {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn pass2_rewrite<W: Write>(
     gfa_path: &str,
     out: &mut W,
@@ -397,7 +398,18 @@ fn pass2_rewrite<W: Write>(
                 } else {
                     "*".to_string()
                 };
-                writeln!(out, "P\t{}\t{}\t{}", cols[1], seg_str, overlaps)?;
+                if cols.len() > 4 {
+                    writeln!(
+                        out,
+                        "P\t{}\t{}\t{}\t{}",
+                        cols[1],
+                        seg_str,
+                        overlaps,
+                        cols[4..].join("\t")
+                    )?;
+                } else {
+                    writeln!(out, "P\t{}\t{}\t{}", cols[1], seg_str, overlaps)?;
+                }
                 line.clear();
                 continue;
             }
@@ -416,27 +428,47 @@ fn pass2_rewrite<W: Write>(
                     &mut stats,
                 );
                 let mut walk_str = String::new();
+                let mut resolved_bp = 0usize;
+                let mut all_known = true;
                 for (s, fwd) in &resolved {
                     walk_str.push(if *fwd { '>' } else { '<' });
                     walk_str.push_str(s);
+                    let slen = seg_lens.get(s.as_str()).copied().unwrap_or(0);
+                    if slen == 0 {
+                        all_known = false;
+                    } else {
+                        resolved_bp += slen;
+                    }
                 }
+                let start_pos: usize = cols[4].parse().unwrap_or(0);
+                let end_str = if resolved.len() != steps.len() && all_known && resolved_bp > 0 {
+                    (start_pos + resolved_bp).to_string()
+                } else {
+                    cols[5].to_string()
+                };
+                let extra_tags: String = if cols.len() > 7 {
+                    format!("\t{}", cols[7..].join("\t"))
+                } else {
+                    String::new()
+                };
                 if cli.tag_walks && !tags.is_empty() {
                     writeln!(
                         out,
-                        "W\t{}\t{}\t{}\t{}\t{}\t{}\tEG:Z:{}",
+                        "W\t{}\t{}\t{}\t{}\t{}\t{}{}\tEG:Z:{}",
                         cols[1],
                         cols[2],
                         cols[3],
                         cols[4],
-                        cols[5],
+                        end_str,
                         walk_str,
+                        extra_tags,
                         tags.join(";")
                     )?;
                 } else {
                     writeln!(
                         out,
-                        "W\t{}\t{}\t{}\t{}\t{}\t{}",
-                        cols[1], cols[2], cols[3], cols[4], cols[5], walk_str
+                        "W\t{}\t{}\t{}\t{}\t{}\t{}{}",
+                        cols[1], cols[2], cols[3], cols[4], end_str, walk_str, extra_tags
                     )?;
                 }
                 line.clear();
@@ -458,7 +490,7 @@ fn main() -> Result<()> {
 
     let stats = if let Some(ref out_p) = cli.out_path {
         let mut writer = BufWriter::new(
-            File::create(out_p).with_context(|| format!("creating {}", out_p))?,
+            File::create(out_p).with_context(|| format!("creating {out_p}"))?,
         );
         pass2_rewrite(&cli.gfa_in, &mut writer, &seg_lens, &anchors, &cli)?
     } else {
@@ -466,6 +498,7 @@ fn main() -> Result<()> {
         pass2_rewrite(&cli.gfa_in, &mut sink, &seg_lens, &anchors, &cli)?
     };
 
+    #[allow(clippy::cast_precision_loss)]
     let hwm_mb = read_vm_hwm_kb().map_or(0.0, |kb| kb as f64 / 1024.0);
     println!(
         "segments={} anchors={} paths={} walks={} windows={} simplified={} dups_detected={} dups_collapsed={} invs_cancelled={} mdl_bits_saved={:.1} elapsed_s={:.3} peak_rss_mb={:.1}",
@@ -525,7 +558,7 @@ mod tests {
         assert!(stats.total_mdl_bits_saved > 0.0);
 
         let out_text = std::fs::read_to_string(&gfa_out)?;
-        assert!(out_text.contains(">a>b>c\tEG:Z:"));
+        assert!(out_text.contains("W\tHG002\t1\tchr6\t0\t60\t>a>b>c\tEG:Z:"));
         let _ = std::fs::remove_dir_all(&dir);
         Ok(())
     }

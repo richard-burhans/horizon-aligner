@@ -837,3 +837,33 @@ fn main() -> Result<()> {
     );
     Ok(())
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn complement_and_fwd_pos_handle_both_strands() {
+        assert_eq!(complement_base(b'A'), b'T');
+        assert_eq!(complement_base(b'g'), b'c');
+        let fwd_row = MafRow {
+            src: "hg38.chr1".to_string(),
+            start: 10,
+            strand: '+',
+            src_size: 100,
+            seq: "ACGTA".to_string(),
+        };
+        assert_eq!(fwd_pos(&fwd_row, 2), 12);
+
+        let rev_row = MafRow {
+            src: "hg38.chr1".to_string(),
+            start: 10,
+            strand: '-',
+            src_size: 100,
+            seq: "ACGTA".to_string(),
+        };
+        assert_eq!(fwd_pos(&rev_row, 0), 89);
+        assert_eq!(fwd_pos(&rev_row, 4), 85);
+    }
+}

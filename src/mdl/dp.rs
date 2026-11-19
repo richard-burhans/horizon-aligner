@@ -363,9 +363,9 @@ pub struct ContigAlignment {
     pub internal_bubbles: usize,
 }
 
-/// Extend an alignment outward from an anchor using banded MDL + BOCPD X-drop.
+/// Extend an alignment outward from an anchor using banded MDL + BOCPD X-drop
+/// with default Pair-HMM parameters.
 #[must_use]
-#[allow(clippy::too_many_lines, clippy::many_single_char_names)]
 pub fn mdl_xdrop_extend(
     seq_x: &[u8],
     seq_y: &[u8],
@@ -374,6 +374,36 @@ pub fn mdl_xdrop_extend(
     reverse: bool,
     max_ext: usize,
     band_w: usize,
+) -> Vec<(usize, usize)> {
+    mdl_xdrop_extend_with_params(
+        seq_x,
+        seq_y,
+        off_x,
+        off_y,
+        reverse,
+        max_ext,
+        band_w,
+        &HmmParams::default(),
+    )
+}
+
+/// Extend an alignment outward from an anchor using banded MDL + BOCPD X-drop
+/// with explicit normalized Pair-HMM parameters.
+#[must_use]
+#[allow(
+    clippy::too_many_lines,
+    clippy::many_single_char_names,
+    clippy::too_many_arguments
+)]
+pub fn mdl_xdrop_extend_with_params(
+    seq_x: &[u8],
+    seq_y: &[u8],
+    off_x: usize,
+    off_y: usize,
+    reverse: bool,
+    max_ext: usize,
+    band_w: usize,
+    params: &HmmParams,
 ) -> Vec<(usize, usize)> {
     let x_slice: Vec<u8> = if reverse {
         seq_x.iter().rev().take(max_ext).copied().collect()
@@ -395,6 +425,14 @@ pub fn mdl_xdrop_extend(
     let gc_y = bocpd_gc_profile(&y_slice, 1.0 / 120.0, 60);
     let pi_x: Vec<[f64; 4]> = gc_x.into_iter().map(base_probs).collect();
     let pi_y: Vec<[f64; 4]> = gc_y.into_iter().map(base_probs).collect();
+
+    let id_prior = params.identity_prior.clamp(0.40, 0.98);
+    let open_bits = params.gap_open_bits.clamp(-8.0, -1.5);
+    let extend_bits = params.gap_extend_bits.clamp(-4.0, -0.2);
+    let p_open = 2.0_f64.powf(open_bits);
+    let p_ext = 2.0_f64.powf(extend_bits);
+    let mm_bits = (1.0 - 2.0 * p_open).max(1e-6).log2();
+    let im_bits = (1.0 - p_ext).max(1e-6).log2();
 
     let x_drop_bits = 15.0;
     let min_peak_bits = 10.0;
@@ -442,9 +480,14 @@ pub fn mdl_xdrop_extend(
                     y_slice[j - 1],
                     pi_x[i - 1],
                     pi_y[j - 1],
-                    IDENTITY_PRIOR,
+                    id_prior,
                 );
-                let v = dp[ps] + sb;
+                let trans_bits = if bt[ps] == 2 || bt[ps] == 3 {
+                    im_bits
+                } else {
+                    mm_bits
+                };
+                let v = dp[ps] + trans_bits + sb;
                 if v > cand {
                     cand = v;
                     src = 1;
@@ -454,11 +497,7 @@ pub fn mdl_xdrop_extend(
                 && let Some(ps) = slot(i - 1, j)
                 && dp[ps] > NEG_INF * 0.5
             {
-                let pen = if bt[ps] == 2 {
-                    GAP_EXTEND_BITS
-                } else {
-                    GAP_OPEN_BITS
-                };
+                let pen = if bt[ps] == 2 { extend_bits } else { open_bits };
                 let v = dp[ps] + pen;
                 if v > cand {
                     cand = v;
@@ -469,11 +508,7 @@ pub fn mdl_xdrop_extend(
                 && let Some(ps) = slot(i, j - 1)
                 && dp[ps] > NEG_INF * 0.5
             {
-                let pen = if bt[ps] == 3 {
-                    GAP_EXTEND_BITS
-                } else {
-                    GAP_OPEN_BITS
-                };
+                let pen = if bt[ps] == 3 { extend_bits } else { open_bits };
                 let v = dp[ps] + pen;
                 if v > cand {
                     cand = v;
@@ -538,11 +573,11 @@ mod tests {
     #[test]
     fn pair_hmm_transitions_are_normalized() {
         let p_open = 2.0_f64.powf(GAP_OPEN_BITS);
-        let p_mm = 1.0 - 2.0 * p_open;
-        assert!((p_mm + 2.0 * p_open - 1.0).abs() < 1e-12);
+        let stay_match = 1.0 - 2.0 * p_open;
+        assert!((stay_match + 2.0 * p_open - 1.0).abs() < 1e-12);
 
         let p_ext = 2.0_f64.powf(GAP_EXTEND_BITS);
-        let p_im = 1.0 - p_ext;
-        assert!((p_im + p_ext - 1.0).abs() < 1e-12);
+        let leave_indel = 1.0 - p_ext;
+        assert!((leave_indel + p_ext - 1.0).abs() < 1e-12);
     }
 }

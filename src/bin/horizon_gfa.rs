@@ -48,7 +48,9 @@ fn cmd_stats(gfa_path: &str) -> Result<()> {
         gfa_path,
         |s| {
             s_count += 1;
-            s_bases += s.sequence.len() as u64;
+            if s.sequence != b"*" {
+                s_bases += s.sequence.len() as u64;
+            }
             Ok(())
         },
         |_| {
@@ -66,10 +68,10 @@ fn cmd_stats(gfa_path: &str) -> Result<()> {
     )?;
 
     let elapsed = t0.elapsed().as_secs_f64();
+    #[allow(clippy::cast_precision_loss)]
     let hwm_mb = read_vm_hwm_kb().map_or(0.0, |kb| kb as f64 / 1024.0);
     println!(
-        "gfa={} elapsed={:.2}s peak_rss_mb={:.1} segments={} segment_bp={} links={} paths={} walks={}",
-        gfa_path, elapsed, hwm_mb, s_count, s_bases, l_count, p_count, w_count
+        "gfa={gfa_path} elapsed={elapsed:.2}s peak_rss_mb={hwm_mb:.1} segments={s_count} segment_bp={s_bases} links={l_count} paths={p_count} walks={w_count}"
     );
     Ok(())
 }
@@ -82,7 +84,7 @@ fn cmd_list_walks(gfa_path: &str, filter: Option<&str>, limit: usize) -> Result<
         |_| Ok(()),
         |_| Ok(()),
         |p| {
-            if shown_p < limit && filter.map_or(true, |f| p.name.contains(f)) {
+            if shown_p < limit && filter.is_none_or(|f| p.name.contains(f)) {
                 println!("P\t{}\tsteps_bytes={}", p.name, p.segment_names.len());
                 shown_p += 1;
             }
@@ -90,7 +92,7 @@ fn cmd_list_walks(gfa_path: &str, filter: Option<&str>, limit: usize) -> Result<
         },
         |w| {
             if shown_w < limit
-                && filter.map_or(true, |f| w.sample.contains(f) || w.seq_id.contains(f))
+                && filter.is_none_or(|f| w.sample.contains(f) || w.seq_id.contains(f))
             {
                 println!(
                     "W\t{}\t{}\t{}\t{}\t{}",
@@ -110,11 +112,14 @@ struct ExtractSpec {
     out_fa: String,
 }
 
+type MatchedPath = (usize, String, Vec<(String, bool)>);
+
+#[allow(clippy::too_many_lines)]
 fn cmd_extract(gfa_path: &str, specs: &[ExtractSpec], max_bp: Option<usize>) -> Result<()> {
     let t0 = Instant::now();
     // Pass 1: find matching paths (P) or walks (W) and collect only the needed segment IDs.
-    let mut matched_p: Vec<(usize, String, Vec<(String, bool)>)> = Vec::new();
-    let mut matched_w: Vec<(usize, String, Vec<(String, bool)>)> = Vec::new();
+    let mut matched_p: Vec<MatchedPath> = Vec::new();
+    let mut matched_w: Vec<MatchedPath> = Vec::new();
 
     stream_gfa(
         gfa_path,
@@ -181,32 +186,40 @@ fn cmd_extract(gfa_path: &str, specs: &[ExtractSpec], max_bp: Option<usize>) -> 
     for (idx, spec) in specs.iter().enumerate() {
         let mut seq_out: Vec<u8> = Vec::new();
         let mut header_id = String::new();
-        if let Some((_, hdr, steps)) = matched_paths
+        let Some((_, hdr, steps)) = matched_paths
             .iter()
             .filter(|(w_idx, _, _)| *w_idx == idx)
             .max_by_key(|(_, _, steps)| steps.len())
-        {
-            header_id = hdr.clone();
-            for (seg, is_fwd) in steps {
-                let seg_seq = seg_map
-                    .get(seg)
-                    .with_context(|| format!("missing segment '{}' in GFA", seg))?;
-                if *is_fwd {
-                    seq_out.extend_from_slice(seg_seq);
-                } else {
-                    rev_comp_into(seg_seq, &mut seq_out);
-                }
-                if let Some(cap) = max_bp {
-                    if seq_out.len() >= cap {
-                        seq_out.truncate(cap);
-                        break;
-                    }
-                }
+        else {
+            bail!(
+                "no path or walk matched spec {}:{}",
+                spec.sample_prefix,
+                spec.seq_id
+            );
+        };
+        header_id.clone_from(hdr);
+        for (seg, is_fwd) in steps {
+            let seg_seq = seg_map
+                .get(seg)
+                .with_context(|| format!("missing segment '{seg}' in GFA"))?;
+            if seg_seq == b"*" {
+                bail!("segment '{seg}' has placeholder sequence '*' and cannot be extracted to FASTA");
+            }
+            if *is_fwd {
+                seq_out.extend_from_slice(seg_seq);
+            } else {
+                rev_comp_into(seg_seq, &mut seq_out);
+            }
+            if let Some(cap) = max_bp
+                && seq_out.len() >= cap
+            {
+                seq_out.truncate(cap);
+                break;
             }
         }
 
         let mut writer = BufWriter::new(File::create(&spec.out_fa)?);
-        writeln!(writer, ">{}", header_id)?;
+        writeln!(writer, ">{header_id}")?;
         for chunk in seq_out.chunks(80) {
             writer.write_all(chunk)?;
             writer.write_all(b"\n")?;
@@ -220,6 +233,7 @@ fn cmd_extract(gfa_path: &str, specs: &[ExtractSpec], max_bp: Option<usize>) -> 
         );
     }
 
+    #[allow(clippy::cast_precision_loss)]
     let hwm_mb = read_vm_hwm_kb().map_or(0.0, |kb| kb as f64 / 1024.0);
     println!(
         "extract_done elapsed={:.2}s peak_rss_mb={:.1} cached_segments={}",
@@ -268,7 +282,7 @@ fn main() -> Result<()> {
             }
             cmd_extract(gfa_path, &specs, max_bp)
         }
-        other => bail!("unknown subcommand: {}", other),
+        other => bail!("unknown subcommand: {other}"),
     }
 }
 

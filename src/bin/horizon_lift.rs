@@ -157,6 +157,7 @@ fn flip_strand(strand: char) -> char {
 }
 
 /// Project a single source interval `[src_s, src_e)` on `src_steps` onto `target_index`.
+#[allow(clippy::too_many_lines)]
 fn lift_feature(
     feat: &InputFeature,
     src_steps: &[StepSpan],
@@ -217,10 +218,8 @@ fn lift_feature(
                         usize::MAX
                     } else if occ.target_start >= prev_e {
                         occ.target_start - prev_e
-                    } else if prev_s >= occ.target_end {
-                        prev_s - occ.target_end
                     } else {
-                        0
+                        prev_s.saturating_sub(occ.target_end)
                     }
                 })
                 .unwrap_or(&occs[0])
@@ -303,6 +302,7 @@ struct LiftSummary {
     unmapped: usize,
 }
 
+#[allow(clippy::too_many_lines)]
 fn run_lift<W1: Write, W2: Write>(
     cfg: &LiftConfig<'_>,
     out: &mut W1,
@@ -545,6 +545,7 @@ fn run_lift<W1: Write, W2: Write>(
     Ok(summary)
 }
 
+#[allow(clippy::too_many_lines)]
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().skip(1).collect();
     let mut gfa_path: Option<String> = None;
@@ -642,6 +643,7 @@ fn main() -> Result<()> {
         uw.flush()?;
     }
 
+    #[allow(clippy::cast_precision_loss)]
     let hwm_mb = read_vm_hwm_kb().map_or(0.0, |kb| kb as f64 / 1024.0);
     eprintln!(
         "horizon_lift: features={} exact={} partial={} split={} unmapped={} elapsed={:.2}s peak_rss_mb={:.1}",

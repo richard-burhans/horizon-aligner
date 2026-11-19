@@ -2,7 +2,7 @@
 
 use super::{
     AnchorPairs, ContigIndex, LcbList, append_two_hit_diagonal_lcbs, base_to_idx,
-    cluster_strand_lcbs, codon_to_aa, intersect_seed_maps,
+    cluster_strand_lcbs, codon_to_aa,
 };
 use std::collections::HashMap;
 
@@ -326,8 +326,7 @@ pub(crate) fn append_hsp_gated_lastz12_lcbs(
 }
 
 pub(crate) fn find_w12_raw_lcbs(idx_x: &ContigIndex, idx_y: &ContigIndex) -> (LcbList, LcbList) {
-    let (hits_fwd, hits_rc) =
-        intersect_seed_maps(&idx_x.seeds_fwd, &idx_y.seeds_fwd, &idx_y.seeds_rc);
+    let (hits_fwd, hits_rc) = idx_x.seeds.intersect(&idx_y.seeds);
     let raw_fwd = cluster_strand_lcbs(&hits_fwd, 2500, 250, 7, 70, 220.0);
     let raw_rc = cluster_strand_lcbs(&hits_rc, 2500, 250, 7, 70, 220.0);
     (raw_fwd, raw_rc)
