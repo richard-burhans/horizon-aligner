@@ -5,7 +5,7 @@ use crate::bocpd::{
 };
 use crate::mdl::dp::HmmParams;
 use crate::seeding::{FlatSeedIndex, MASK_RY20, MASK_W10, sdust_mask};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// Adaptive banded per-node DP grid (`abPOA`, Gao et al. 2021).
 #[derive(Clone)]
@@ -578,6 +578,7 @@ pub fn align_seq_to_dag_mdl(
 /// connected/reachable DAG subgraph matching `seq_y`, then runs [`align_seq_to_dag_mdl`].
 /// Maps returned node indices back to the original `nodes` slice.
 #[must_use]
+#[allow(clippy::too_many_lines)]
 pub fn align_seq_to_dag_seeded(
     nodes: &[GraphNode],
     seq_y: &[u8],
@@ -589,8 +590,11 @@ pub fn align_seq_to_dag_seeded(
     }
 
     let y_sdust = sdust_mask(seq_y);
-    let mut seed_hits: HashSet<usize> = HashSet::new();
+    let mut seed_scores: HashMap<usize, usize> = HashMap::new();
     for (mask, ry) in [(MASK_W10, false), (MASK_RY20, true)] {
+        if ry && !seed_scores.is_empty() {
+            break;
+        }
         if let Ok(q_idx) =
             FlatSeedIndex::build_with_sdust(seq_y, mask, 8, false, ry, Some(&y_sdust))
             && !q_idx.keys.is_empty()
@@ -599,21 +603,35 @@ pub fn align_seq_to_dag_seeded(
                 if nd.seq.len() < mask.len() {
                     continue;
                 }
+                let min_hits = if nd.seq.len() > 4_000 { 3 } else { 1 };
                 if let Ok(n_idx) =
                     FlatSeedIndex::build_with_sdust(&nd.seq, mask, 8, false, ry, None)
-                    && q_idx.shared_unique_keys(&n_idx) > 0
                 {
-                    seed_hits.insert(nid);
+                    let shared = q_idx.shared_unique_keys(&n_idx);
+                    if shared >= min_hits {
+                        *seed_scores.entry(nid).or_insert(0) += shared;
+                    }
                 }
             }
         }
     }
 
-    if seed_hits.is_empty() {
-        return align_seq_to_dag_mdl(nodes, seq_y, params, min_block_bits);
+    if seed_scores.is_empty() {
+        let total_bp: usize = nodes.iter().map(|n| n.seq.len()).sum();
+        if total_bp <= 50_000 {
+            return align_seq_to_dag_mdl(nodes, seq_y, params, min_block_bits);
+        }
+        return GraphAlignment {
+            path_nodes: Vec::new(),
+            kept_pairs: Vec::new(),
+            bubbles: usize::from(seq_y.len() >= 6),
+            score_bits: 0.0,
+        };
     }
 
-    // Expand backward and forward reachability from seeded nodes to preserve full bubble paths.
+    // Expand backward and forward reachability from seeded nodes within a local
+    // sequence budget so large pangenome DAGs do not pull in whole chromosomes.
+    let budget_bp = (seq_y.len() / 2).max(128);
     let mut succs: Vec<Vec<usize>> = vec![Vec::new(); nodes.len()];
     for (u, nd) in nodes.iter().enumerate() {
         for &p in &nd.preds {
@@ -623,60 +641,140 @@ pub fn align_seq_to_dag_seeded(
         }
     }
 
-    let mut anc: Vec<bool> = vec![false; nodes.len()];
-    let mut desc: Vec<bool> = vec![false; nodes.len()];
-    for &s in &seed_hits {
-        anc[s] = true;
-        desc[s] = true;
+    let max_seed_score = seed_scores.values().copied().max().unwrap_or(0);
+    let anchor_floor = if nodes.len() > 64 && max_seed_score >= 4 {
+        (max_seed_score / 4).max(2)
+    } else {
+        1
+    };
+    let mut dist_back: Vec<usize> = vec![usize::MAX; nodes.len()];
+    let mut dist_fwd: Vec<usize> = vec![usize::MAX; nodes.len()];
+    for (&s, &sc) in &seed_scores {
+        if sc >= anchor_floor {
+            dist_back[s] = 0;
+            dist_fwd[s] = 0;
+        }
     }
     for u in (0..nodes.len()).rev() {
-        if anc[u] {
+        if dist_back[u] < budget_bp {
             for &p in &nodes[u].preds {
                 if p < u {
-                    anc[p] = true;
+                    let cand = dist_back[u].saturating_add(nodes[p].seq.len());
+                    if cand <= budget_bp && cand < dist_back[p] {
+                        dist_back[p] = cand;
+                    }
                 }
             }
         }
     }
     for u in 0..nodes.len() {
-        if desc[u] {
+        if dist_fwd[u] < budget_bp {
             for &s in &succs[u] {
-                desc[s] = true;
+                let cand = dist_fwd[u].saturating_add(nodes[s].seq.len());
+                if cand <= budget_bp && cand < dist_fwd[s] {
+                    dist_fwd[s] = cand;
+                }
             }
         }
     }
-    let active: Vec<bool> = (0..nodes.len()).map(|u| anc[u] || desc[u]).collect();
+    let anchor_count = dist_back.iter().filter(|&&d| d == 0).count();
+    let use_bridge_only = nodes.len() > 64 && anchor_count >= 2;
+    let active_nodes: Vec<usize> = (0..nodes.len())
+        .filter(|&u| {
+            if use_bridge_only {
+                dist_back[u] == 0 || (dist_back[u] <= budget_bp && dist_fwd[u] <= budget_bp)
+            } else {
+                dist_back[u] <= budget_bp || dist_fwd[u] <= budget_bp
+            }
+        })
+        .collect();
 
-    let mut old_to_new: HashMap<usize, usize> = HashMap::new();
-    let mut new_to_old: Vec<usize> = Vec::new();
-    let mut sub_nodes: Vec<GraphNode> = Vec::new();
-    for (old_id, nd) in nodes.iter().enumerate() {
-        if !active[old_id] {
+    // Partition active_nodes into weakly connected components so an unrelated
+    // decoy hit never distorts `total_max` banding for the true component.
+    let mut active_pos: HashMap<usize, usize> = HashMap::with_capacity(active_nodes.len());
+    for (idx, &u) in active_nodes.iter().enumerate() {
+        active_pos.insert(u, idx);
+    }
+    let mut undir: Vec<Vec<usize>> = vec![Vec::new(); active_nodes.len()];
+    for (idx, &u) in active_nodes.iter().enumerate() {
+        for &p in &nodes[u].preds {
+            if let Some(&p_idx) = active_pos.get(&p) {
+                undir[idx].push(p_idx);
+                undir[p_idx].push(idx);
+            }
+        }
+    }
+    let mut visited = vec![false; active_nodes.len()];
+    let mut components: Vec<(usize, usize, Vec<usize>)> = Vec::new();
+    for start in 0..active_nodes.len() {
+        if visited[start] {
             continue;
         }
-        let new_id = sub_nodes.len();
-        old_to_new.insert(old_id, new_id);
-        new_to_old.push(old_id);
-        let mapped_preds = nd
-            .preds
-            .iter()
-            .filter_map(|p| old_to_new.get(p).copied())
-            .collect();
-        sub_nodes.push(GraphNode {
-            name: nd.name.clone(),
-            seq: nd.seq.clone(),
-            preds: mapped_preds,
-        });
+        visited[start] = true;
+        let mut stack = vec![start];
+        let mut comp = Vec::new();
+        let mut comp_score = 0usize;
+        let mut comp_bp = 0usize;
+        while let Some(cur) = stack.pop() {
+            let orig = active_nodes[cur];
+            comp.push(orig);
+            comp_score += seed_scores.get(&orig).copied().unwrap_or(0);
+            comp_bp += nodes[orig].seq.len();
+            for &nb in &undir[cur] {
+                if !visited[nb] {
+                    visited[nb] = true;
+                    stack.push(nb);
+                }
+            }
+        }
+        comp.sort_unstable();
+        if comp_bp <= 200_000 {
+            components.push((comp_score, comp_bp, comp));
+        }
     }
+    components.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
 
-    let mut aln = align_seq_to_dag_mdl(&sub_nodes, seq_y, params, min_block_bits);
-    for nid in &mut aln.path_nodes {
-        *nid = new_to_old[*nid];
+    let mut best_aln = GraphAlignment {
+        path_nodes: Vec::new(),
+        kept_pairs: Vec::new(),
+        bubbles: usize::from(seq_y.len() >= 6),
+        score_bits: 0.0,
+    };
+    for (_, _, comp) in components.into_iter().take(2) {
+        let mut old_to_new: HashMap<usize, usize> = HashMap::with_capacity(comp.len());
+        let mut new_to_old: Vec<usize> = Vec::with_capacity(comp.len());
+        let mut sub_nodes: Vec<GraphNode> = Vec::with_capacity(comp.len());
+        for old_id in comp {
+            let nd = &nodes[old_id];
+            let new_id = sub_nodes.len();
+            old_to_new.insert(old_id, new_id);
+            new_to_old.push(old_id);
+            let mapped_preds = nd
+                .preds
+                .iter()
+                .filter_map(|p| old_to_new.get(p).copied())
+                .collect();
+            sub_nodes.push(GraphNode {
+                name: nd.name.clone(),
+                seq: nd.seq.clone(),
+                preds: mapped_preds,
+            });
+        }
+        let mut aln = align_seq_to_dag_mdl(&sub_nodes, seq_y, params, min_block_bits);
+        for nid in &mut aln.path_nodes {
+            *nid = new_to_old[*nid];
+        }
+        for (nid, _, _) in &mut aln.kept_pairs {
+            *nid = new_to_old[*nid];
+        }
+        if aln.kept_pairs.len() > best_aln.kept_pairs.len()
+            || (aln.kept_pairs.len() == best_aln.kept_pairs.len()
+                && aln.score_bits > best_aln.score_bits)
+        {
+            best_aln = aln;
+        }
     }
-    for (nid, _, _) in &mut aln.kept_pairs {
-        *nid = new_to_old[*nid];
-    }
-    aln
+    best_aln
 }
 
 #[cfg(test)]
@@ -774,5 +872,21 @@ mod tests {
         assert_eq!(aln.path_nodes, vec![0, 1]);
         assert!(aln.kept_pairs.iter().any(|&(n, _, _)| n == 0));
         assert!(aln.kept_pairs.iter().any(|&(n, _, _)| n == 1));
+    }
+
+    #[test]
+    fn seeded_dag_abstains_without_oom_on_large_unseeded_graph() {
+        let nodes: Vec<GraphNode> = (0..12)
+            .map(|idx| GraphNode {
+                name: format!("big_{idx}"),
+                seq: vec![b'A'; 5_000],
+                preds: if idx == 0 { vec![] } else { vec![idx - 1] },
+            })
+            .collect();
+        let query = vec![b'N'; 400];
+        let aln = align_seq_to_dag_seeded(&nodes, &query, &HmmParams::default(), 10.0);
+        assert_eq!(aln.path_nodes, [] as [usize; 0]);
+        assert_eq!(aln.kept_pairs, [] as [(usize, usize, usize); 0]);
+        assert_eq!(aln.bubbles, 1);
     }
 }
