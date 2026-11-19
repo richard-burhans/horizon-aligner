@@ -15,9 +15,10 @@ use crate::seeding::{
     prepare_contig_index,
 };
 use rayon::prelude::*;
-use std::collections::HashSet;
 
+mod dag;
 mod dp;
+pub use dag::*;
 pub use dp::*;
 
 /// Karlin-Altschul / MDL random-search threshold coefficient (`~0.5 * log2(N*M)` + overhead).
@@ -452,7 +453,7 @@ pub fn align_contig_pair_with_config(
     let lcbs_rc = merge_colinear_lcbs(&combined_rc, max_local_rescue_bp);
     let t_seed_end = t_start.elapsed();
 
-    let mut pair_set: HashSet<(usize, usize)> = HashSet::new();
+    let mut pairs_vec: Vec<(usize, usize)> = Vec::new();
     let mut dp_jobs: Vec<(bool, usize, usize, usize, usize)> = Vec::new();
     let mut xdrop_jobs: Vec<(bool, usize, usize, usize, usize, bool)> = Vec::new();
     let mut macro_bubbles = 0usize;
@@ -613,7 +614,7 @@ pub fn align_contig_pair_with_config(
                     } else {
                         ay + off
                     };
-                    pair_set.insert((ax + off, py));
+                    pairs_vec.push((ax + off, py));
                 }
             }
 
@@ -691,7 +692,7 @@ pub fn align_contig_pair_with_config(
             } else {
                 y0 + dy
             };
-            pair_set.insert((x0 + dx, py));
+            pairs_vec.push((x0 + dx, py));
         }
     }
 
@@ -717,7 +718,7 @@ pub fn align_contig_pair_with_config(
     for (is_rc, pairs) in xdrop_results {
         for (px, py) in pairs {
             let y_orig = if is_rc { pv_len - 1 - py } else { py };
-            pair_set.insert((px, y_orig));
+            pairs_vec.push((px, y_orig));
         }
     }
 
@@ -741,8 +742,9 @@ pub fn align_contig_pair_with_config(
         );
     }
 
-    let mut aligned_pairs: Vec<(usize, usize)> = pair_set.into_iter().collect();
-    aligned_pairs.sort_unstable();
+    pairs_vec.sort_unstable();
+    pairs_vec.dedup();
+    let aligned_pairs = pairs_vec;
 
     Ok(ContigAlignment {
         aligned_pairs,
@@ -765,6 +767,7 @@ fn estimate_hmm_params(
     let mut matches = 0usize;
     let mut total_bases = 0usize;
     let mut indel_events = 0usize;
+    let mut total_indel_len = 0usize;
     let mut total_span = 0usize;
 
     for (y_work, lcbs) in [(seq_y, lcbs_fwd), (seq_y_rc, lcbs_rc)] {
@@ -795,6 +798,7 @@ fn estimate_hmm_params(
                     total_span += dx.max(dy);
                     if dx != dy {
                         indel_events += 1;
+                        total_indel_len += dx.abs_diff(dy);
                     }
                 }
             }
@@ -820,10 +824,20 @@ fn estimate_hmm_params(
     } else {
         HmmParams::default().gap_open_bits
     };
+    #[allow(clippy::cast_precision_loss)]
+    let gap_extend_bits = if indel_events >= 3 && total_indel_len > 0 {
+        let mean_len = (total_indel_len as f64 + 2.5) / (indel_events as f64 + 1.0);
+        ((mean_len - 1.0) / mean_len)
+            .max(0.01)
+            .log2()
+            .clamp(-1.8, -0.5)
+    } else {
+        HmmParams::default().gap_extend_bits
+    };
 
     HmmParams {
         identity_prior,
         gap_open_bits,
-        gap_extend_bits: HmmParams::default().gap_extend_bits,
+        gap_extend_bits,
     }
 }

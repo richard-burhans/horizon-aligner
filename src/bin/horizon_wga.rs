@@ -4,9 +4,9 @@ use anyhow::{Context, Result, bail};
 use horizon_aligner::gfa::stream_gfa;
 use horizon_aligner::{
     AlignConfig, ContigIndex, GraphNode, HmmParams, align_contig_pair_with_config,
-    align_seq_to_dag_mdl, format_gfa_blocks, format_gfa_paralog_tags, format_gfa_summary,
+    align_seq_to_dag_seeded, format_gfa_blocks, format_gfa_paralog_tags, format_gfa_summary,
     format_maf_blocks, prepare_contig_index_opts, read_fasta_contigs,
-    resolve_alignment_duplications, select_top_k_pairs, shared_seed_count,
+    resolve_alignment_duplications, revcomp, select_top_k_pairs, shared_seed_count,
 };
 use rayon::prelude::*;
 use std::collections::{HashMap, VecDeque};
@@ -192,7 +192,7 @@ fn main() -> Result<()> {
         let mut total_pairs = 0usize;
         let mut total_bubbles = 0usize;
         for (qname, qseq) in &queries {
-            let aln = align_seq_to_dag_mdl(&dag_nodes, qseq, &HmmParams::default(), 10.0);
+            let aln = align_seq_to_dag_seeded(&dag_nodes, qseq, &HmmParams::default(), 10.0);
             total_pairs += aln.kept_pairs.len();
             total_bubbles += aln.bubbles;
             let path_str = aln
@@ -344,7 +344,7 @@ fn main() -> Result<()> {
 fn load_gfa_dag(path: &std::path::Path) -> Result<Vec<GraphNode>> {
     let segs = std::cell::RefCell::new(Vec::<(String, Vec<u8>)>::new());
     let name_to_raw = std::cell::RefCell::new(HashMap::<String, usize>::new());
-    let raw_edges = std::cell::RefCell::new(Vec::<(String, String)>::new());
+    let raw_edges = std::cell::RefCell::new(Vec::<(String, u8, String, u8)>::new());
 
     stream_gfa(
         path,
@@ -357,9 +357,9 @@ fn load_gfa_dag(path: &std::path::Path) -> Result<Vec<GraphNode>> {
             Ok(())
         },
         |l| {
-            if l.from_orient == b'+' && l.to_orient == b'+' {
-                raw_edges.borrow_mut().push((l.from, l.to));
-            }
+            raw_edges
+                .borrow_mut()
+                .push((l.from, l.from_orient, l.to, l.to_orient));
             Ok(())
         },
         |_| Ok(()),
@@ -369,14 +369,61 @@ fn load_gfa_dag(path: &std::path::Path) -> Result<Vec<GraphNode>> {
     let segs = segs.into_inner();
     let name_to_raw = name_to_raw.into_inner();
     let raw_edges = raw_edges.into_inner();
-    let n = segs.len();
+    let has_rev = raw_edges
+        .iter()
+        .any(|(_, fo, _, to)| *fo == b'-' || *to == b'-');
+
+    let (oriented_segs, directed_edges): (Vec<(String, Vec<u8>)>, Vec<(usize, usize)>) = if has_rev
+    {
+        let mut o_segs = Vec::with_capacity(segs.len() * 2);
+        for (name, seq) in &segs {
+            o_segs.push((format!("{name}+"), seq.clone()));
+            o_segs.push((format!("{name}-"), revcomp(seq)));
+        }
+        let orient_idx = |raw_i: usize, orient: u8| -> usize {
+            if orient == b'-' {
+                raw_i * 2 + 1
+            } else {
+                raw_i * 2
+            }
+        };
+        let flip = |o: u8| -> u8 { if o == b'-' { b'+' } else { b'-' } };
+        let mut d_edges = Vec::with_capacity(raw_edges.len() * 2);
+        for (u_name, uo, v_name, vo) in &raw_edges {
+            if let (Some(&u_raw), Some(&v_raw)) =
+                (name_to_raw.get(u_name), name_to_raw.get(v_name))
+            {
+                let u = orient_idx(u_raw, *uo);
+                let v = orient_idx(v_raw, *vo);
+                if u != v {
+                    d_edges.push((u, v));
+                }
+                let rv = orient_idx(v_raw, flip(*vo));
+                let ru = orient_idx(u_raw, flip(*uo));
+                if rv != ru {
+                    d_edges.push((rv, ru));
+                }
+            }
+        }
+        (o_segs, d_edges)
+    } else {
+        let mut d_edges = Vec::with_capacity(raw_edges.len());
+        for (u_name, _, v_name, _) in &raw_edges {
+            if let (Some(&u), Some(&v)) = (name_to_raw.get(u_name), name_to_raw.get(v_name))
+                && u != v
+            {
+                d_edges.push((u, v));
+            }
+        }
+        (segs, d_edges)
+    };
+
+    let n = oriented_segs.len();
     let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
     let mut indeg: Vec<usize> = vec![0; n];
 
-    for (u_name, v_name) in raw_edges {
-        if let (Some(&u), Some(&v)) = (name_to_raw.get(&u_name), name_to_raw.get(&v_name))
-            && u != v
-        {
+    for (u, v) in directed_edges {
+        if !adj[u].contains(&v) {
             adj[u].push(v);
             indeg[v] += 1;
         }
@@ -411,8 +458,8 @@ fn load_gfa_dag(path: &std::path::Path) -> Result<Vec<GraphNode>> {
     let mut nodes: Vec<GraphNode> = order
         .iter()
         .map(|&raw_i| GraphNode {
-            name: segs[raw_i].0.clone(),
-            seq: segs[raw_i].1.clone(),
+            name: oriented_segs[raw_i].0.clone(),
+            seq: oriented_segs[raw_i].1.clone(),
             preds: Vec::new(),
         })
         .collect();
@@ -427,4 +474,42 @@ fn load_gfa_dag(path: &std::path::Path) -> Result<Vec<GraphNode>> {
         }
     }
     Ok(nodes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn load_gfa_dag_handles_bidirected_minus_links() -> Result<()> {
+        let dir = std::env::temp_dir().join("horizon_wga_dag_test");
+        std::fs::create_dir_all(&dir)?;
+        let gfa = dir.join("inv.gfa");
+        // Seg a -> Seg b(-) -> Seg c(+)
+        std::fs::write(
+            &gfa,
+            "H\tVN:Z:1.0\n\
+             S\ta\tACTGACTGACTGACTGACTG\n\
+             S\tb\tCCCCCCCCCCCCCCCCAAAA\n\
+             S\tc\tGATTACAGATTACAGATTAC\n\
+             L\ta\t+\tb\t-\t0M\n\
+             L\tb\t-\tc\t+\t0M\n",
+        )?;
+        let nodes = load_gfa_dag(&gfa)?;
+        assert_eq!(nodes.len(), 6);
+        let b_rc = revcomp(b"CCCCCCCCCCCCCCCCAAAA");
+        let mut query = b"ACTGACTGACTGACTGACTG".to_vec();
+        query.extend_from_slice(&b_rc);
+        query.extend_from_slice(b"GATTACAGATTACAGATTAC");
+        let aln = align_seq_to_dag_seeded(&nodes, &query, &HmmParams::default(), 10.0);
+        let path_names: Vec<&str> = aln
+            .path_nodes
+            .iter()
+            .map(|&i| nodes[i].name.as_str())
+            .collect();
+        assert_eq!(path_names, vec!["a+", "b-", "c+"]);
+        assert_eq!(aln.kept_pairs.len(), query.len());
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
 }

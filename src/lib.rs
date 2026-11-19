@@ -19,7 +19,7 @@ pub use formats::{
 pub use mdl::{
     AlignConfig, ContigAlignment, GapResult, GraphAlignment, GraphNode, HmmParams,
     align_contig_pair, align_contig_pair_indexed, align_contig_pair_indexed_with_min_lcb,
-    align_contig_pair_with_config, align_seq_to_dag_mdl, banded_mdl_gap,
+    align_contig_pair_with_config, align_seq_to_dag_mdl, align_seq_to_dag_seeded, banded_mdl_gap,
     banded_mdl_gap_with_params, mdl_xdrop_extend,
 };
 pub use merge::merge_pairwise_mafs;
