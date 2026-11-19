@@ -391,3 +391,4 @@ mod tests {
         );
     }
 }
+pub mod gfa;
