@@ -1,31 +1,31 @@
 # Horizon Pangenome Suite: Strategic Plan and Risk Mitigation
 
+> **Status Note (2026-11-19):** This document defines the target architecture and roadmap for expanding `horizon-aligner` into a composable pangenome suite. Currently implemented binaries in `src/bin/` are file-path CLIs for pairwise/progressive WGA and evaluation (`horizon_wga`, `horizon_merge`, `horizon_guide`, `horizon_eval`, `bench_chr1`). The pangenome tools (`horizon_clean`, `horizon_resolve`, `horizon_lift`, `horizon_wga --graph`) and `stdin`/`stdout` pipe streaming are **planned**, not yet implemented.
+
 ## 1. The Vision: Composition over Monolith
-The history of bioinformatics alignment is a history of composition: `lastz` (pairwise) feeding into `multiz` (MSA), or `cactus` (graph) feeding into `hal` (storage). The vision for `horizon-aligner` is to unify these fragmented tools under a single, theoretically grounded framework based on Minimum Description Length (MDL) and E-graphs. Horizon represents the unified composition of these concepts.
+The history of bioinformatics alignment is a history of composition: `lastz` (pairwise) feeding into `multiz` (MSA), or `cactus` (graph) feeding into `hal` (storage). The vision for `horizon-aligner` is to unify these capabilities under a single framework based on Minimum Description Length (MDL) and E-graphs.
 
-We are not building a monolithic "run-all" executable. We are building a suite of specialized tools (`horizon_clean`, `horizon_wga`, `horizon_resolve`, `horizon_lift`) that compose perfectly via Unix pipes.
+Rather than building a monolithic "run-all" executable, the target architecture is a suite of specialized tools (`horizon_clean`, `horizon_wga`, `horizon_resolve`, `horizon_lift`) that compose cleanly—following the Unix-pipe precedent of `gfatools` and `odgi`—wherever single-pass or indexed streaming is feasible.
 
-## 2. What We Are Doing Right
-* **MDL over Heuristics:** We are replacing arbitrary affine gap penalties and scoring matrices with Information-Theoretic bit-savings (MDL). This inherently prevents the "hairball" over-alignment problem.
-* **E-graphs for Structural Variants:** Using congruence-closure to resolve complex, nested structural paralogs (like the HLA region). This natively models evolutionary trajectories without producing unnavigable cyclical graphs.
-* **Native Rust Streaming (Bypass `vg`):** `vg` and `odgi` crash on 12GB pangenomes due to RAM exhaustion. Our custom zero-copy GFA streaming parser (`src/gfa/mod.rs`) solves the I/O bottleneck entirely.
+## 2. Current Foundation and Known Gaps
+* **MDL Bit-Savings (`src/bocpd.rs`, `src/mdl/`):** We replace classical substitution matrices with BOCPD joint-pair bit-savings (`joint_pair_bits`). However, the current implementation still retains fixed gap-bit penalties (`GAP_OPEN_BITS = -4.5`, `GAP_EXTEND_BITS = -0.8`), `IDENTITY_PRIOR = 0.65`, unnormalized DP transition weights (`src/mdl/dp.rs`), and heuristic chaining thresholds (`max_gap_bp`, `hsp_threshold`, `min_block_bits`). Furthermore, MDL abstention suppresses false homology on *divergent* sequences; it does not by itself prevent high-identity paralogous or repetitive "hairballs."
+* **E-Graphs for Structural Variants (`src/egraph.rs`):** Congruence-closure rewriting currently operates on 1D linear signed-block expressions (`seq`/`inv`/`dup` in 12-block chunks, `max_nodes = 800`) using fixed unitless parsimony weights (`1.0`/`1.2`/`1.3`). It does not yet model evolutionary trajectories, eliminate GFA cycles, or have HLA/centromere benchmarks.
+* **Buffered GFA Streaming Parser (`src/gfa/mod.rs`):** `stream_gfa` provides a buffered line-streaming GFA v1.0/v1.1 reader (supporting `.gfa` and `.gfa.gz`). It is **not** zero-copy (it currently allocates owned `String`/`Vec<u8>` fields per record), has zero callers or tests in `src/` yet, and has not been benchmarked on 12GB HPRC graphs. While packed graph representations (`libbdsg`, `GBZ`, `odgi`) handle many large graphs in production, avoiding full-graph RAM materialization remains valuable for streaming filter/extraction passes.
 
 ## 3. Strategic Adjustments & Risk Mitigations
 
-### A. Avoid the "Walled Garden" Format (Learn from `HAL`)
-**Risk:** `Cactus` introduced the `.hal` format, which required heavy C-dependencies (`libhdf5`), fractured the ecosystem, and made downstream parsing difficult in other languages.
-**Mitigation:** We will **never invent a proprietary binary format**. Our tools will communicate purely by streaming standard GFA (v1.0/v1.1) and standard MAF/VCF over `stdin`/`stdout`. Any necessary indexing must be a lightweight, optional sidecar file (like `.fai` or `.gzi`), never a locked central database.
+### A. Avoid a Proprietary "Walled Garden" Format
+**Risk:** Binary-only formats with heavy external C dependencies (such as HDF5 `.hal` in `Cactus`) complicate downstream parsing and ecosystem interoperability. (For backwards-compatibility, `horizon-aligner` currently includes a pure-Rust `.hal` reader/writer in `src/hal/` via `horizon_wga --hal-info`, which will remain optional.)
+**Mitigation:** We will **not invent a proprietary binary format** for the pangenome suite. Target tools will exchange standard GFA (v1.0/v1.1) and MAF (plus VCF where variant output is added), using only valid GFA optional tags/comments (e.g., `HB:i:`, `XS:i:`, `YS:i:`, `ST:Z:`, `# EG:Z:`). Any required random-access indexing (for `S`-line sequences or `W`/`P` coordinates) will use lightweight, optional sidecar files (analogous to `.fai`/`.gzi`), not a locked database.
 
-### B. Embrace the Unix Philosophy
-**Risk:** The temptation to build a monolithic CLI that does everything internally.
-**Mitigation:** Ensure absolute composability via pipes. The ecosystem should look like:
-`cat hprc.gfa | horizon_clean --mdl-threshold 5 | horizon_wga --query novel_genome.fa | horizon_resolve > final.gfa`
-Every tool must read GFA/MAF from `stdin` and write to `stdout`.
+### B. Emulate Unix Composition Where Topology Allows
+**Risk:** Building a monolithic CLI that couples all stages internally.
+**Mitigation:** Support `stdin`/`stdout` GFA/MAF streaming on linear filter/transform tools (`horizon_clean`, `horizon_resolve`, `horizon_lift`), while acknowledging that multi-input or random-access stages (`horizon_wga --graph --query`, or unsorted GFA `S`/`L` resolution) require file/sidecar arguments or a two-pass index rather than pure single-pass `stdin` piping.
 
 ### C. Localize the E-Graphs (Prevent Combinatorial Explosion)
-**Risk:** E-graphs suffer from combinatorial explosion. Loading an entire chromosome into an e-graph to run saturation rules will never finish computing.
-**Mitigation:** Strict **bubble extraction**. We will stream the pangenome linearly and only invoke the E-graph engine when we hit a complex, tangled sub-graph ("hairball"). The E-graph resolves the optimal path for that bubble, and we stitch the resolved path back into the linear stream.
+**Risk:** E-graph saturation under associative `seq` rules grows combinatorially (hitting `max_nodes = 800` at small block counts) and cannot scale to whole chromosomes.
+**Mitigation:** Strict **bubble extraction** via a topological decomposition pass (analogous to `vg` snarls / `smoothxg`) rather than single-pass unsorted GFA streaming. Once tangled subgraphs ("hairballs") are isolated into bounded bubbles, the E-graph resolves each bubble locally and writes the resolved path back into the graph.
 
-### D. Target the Graph Market First
-**Risk:** Competing against `lastz` or `minimap2` for simple pairwise alignment is an uphill battle because they are "good enough" for standard tasks.
-**Mitigation:** The massive, urgent pain point right now is **Pangenome Graphs**. The HPRC produces massive graphs that researchers cannot use because standard tooling crashes or produces tangled paths. We will focus our benchmarking and release strategy entirely on `horizon_clean`, `horizon_resolve`, and `horizon_lift` first to capture the pangenome community immediately. Pairwise/MSA will follow naturally.
+### D. Target Graph Tooling Gaps First
+**Risk:** Competing head-on against `lastz` or `minimap2` on routine pairwise alignment offers limited differentiation.
+**Mitigation:** Focus our next implementation and benchmarking milestones on pangenome graph tooling (`horizon_clean`, `horizon_resolve`, `horizon_lift`, and HPRC `GRCh38` vs. `CHM13` evaluation, which is currently unrun), where MDL abstention and bounded structural resolution address concrete pain points in complex loci.

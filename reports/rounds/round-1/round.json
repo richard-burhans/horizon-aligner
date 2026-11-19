@@ -1,0 +1,730 @@
+{
+  "round": 1,
+  "draft": "docs/STRATEGIC_PLAN.md",
+  "subject": "Strategic Plan & Pangenome Suite Roadmap (STRATEGIC_PLAN.md & PANGENOME_SUITE.md)",
+  "date": "2026-11-19",
+  "claims": [
+    {
+      "id": "C1",
+      "kind": "capability",
+      "summary": "Horizon unifies lastz/multiz/cactus/hal/vg/odgi/liftoff via composition of four pipe-composable tools (horizon_clean, horizon_wga, horizon_resolve, horizon_lift).",
+      "source": {
+        "file": "docs/STRATEGIC_PLAN.md",
+        "quote": "We are not building a monolithic \"run-all\" executable. We are building a suite of specialized tools (`horizon_clean`, `horizon_wga`, `horizon_resolve`, `horizon_lift`) that compose perfectly via Unix pipes."
+      }
+    },
+    {
+      "id": "C2",
+      "kind": "inference",
+      "summary": "Replacing arbitrary affine gap penalties and scoring matrices with MDL bit-savings inherently prevents the hairball over-alignment problem.",
+      "source": {
+        "file": "docs/STRATEGIC_PLAN.md",
+        "quote": "We are replacing arbitrary affine gap penalties and scoring matrices with Information-Theoretic bit-savings (MDL). This inherently prevents the \"hairball\" over-alignment problem."
+      }
+    },
+    {
+      "id": "C3",
+      "kind": "inference",
+      "summary": "Using congruence-closure E-graphs resolves complex, nested structural paralogs (like HLA) without producing unnavigable cyclical graphs.",
+      "source": {
+        "file": "docs/STRATEGIC_PLAN.md",
+        "quote": "Using congruence-closure to resolve complex, nested structural paralogs (like the HLA region). This natively models evolutionary trajectories without producing unnavigable cyclical graphs."
+      }
+    },
+    {
+      "id": "C4",
+      "kind": "empirical",
+      "summary": "vg and odgi crash on 12GB pangenomes due to RAM exhaustion, and src/gfa/mod.rs is a zero-copy GFA streaming parser that solves the I/O bottleneck entirely.",
+      "source": {
+        "file": "docs/STRATEGIC_PLAN.md",
+        "quote": "`vg` and `odgi` crash on 12GB pangenomes due to RAM exhaustion. Our custom zero-copy GFA streaming parser (`src/gfa/mod.rs`) solves the I/O bottleneck entirely."
+      }
+    },
+    {
+      "id": "C5",
+      "kind": "prior-art",
+      "summary": "Cactus's .hal format fractured the ecosystem via libhdf5; Horizon will never invent a proprietary binary format and will stream standard GFA v1.0/v1.1 and MAF/VCF over stdin/stdout.",
+      "source": {
+        "file": "docs/STRATEGIC_PLAN.md",
+        "quote": "We will **never invent a proprietary binary format**. Our tools will communicate purely by streaming standard GFA (v1.0/v1.1) and standard MAF/VCF over `stdin`/`stdout`."
+      }
+    },
+    {
+      "id": "C6",
+      "kind": "capability",
+      "summary": "Every Horizon tool reads GFA/MAF from stdin and writes to stdout in a single streaming pipeline (e.g. cat hprc.gfa | horizon_clean | horizon_wga | horizon_resolve).",
+      "source": {
+        "file": "docs/STRATEGIC_PLAN.md",
+        "quote": "Every tool must read GFA/MAF from `stdin` and write to `stdout`."
+      }
+    },
+    {
+      "id": "C7",
+      "kind": "inference",
+      "summary": "E-graphs suffer from combinatorial explosion at chromosome scale, so strict linear-stream bubble extraction + E-graph stitching is required and sufficient.",
+      "source": {
+        "file": "docs/STRATEGIC_PLAN.md",
+        "quote": "We will stream the pangenome linearly and only invoke the E-graph engine when we hit a complex, tangled sub-graph (\"hairball\"). The E-graph resolves the optimal path for that bubble, and we stitch the resolved path back into the linear stream."
+      }
+    },
+    {
+      "id": "C8",
+      "kind": "prior-art",
+      "summary": "HPRC produces massive graphs researchers cannot use because standard tooling crashes or tangles; focusing first on horizon_clean, horizon_resolve, and horizon_lift captures the pangenome community.",
+      "source": {
+        "file": "docs/STRATEGIC_PLAN.md",
+        "quote": "The HPRC produces massive graphs that researchers cannot use because standard tooling crashes or produces tangled paths. We will focus our benchmarking and release strategy entirely on `horizon_clean`, `horizon_resolve`, and `horizon_lift` first to capture the pangenome community immediately."
+      }
+    },
+    {
+      "id": "C9",
+      "kind": "inference",
+      "summary": "horizon_clean evaluates every GFA Link (L line) using BOCPD/MDL scoring, severing edges without sufficient bit-savings and emitting Horizon Bubbles to clean over-aligned pangenomes.",
+      "source": {
+        "file": "docs/PANGENOME_SUITE.md",
+        "quote": "Stream an external `.gfa` file and evaluate every Link (`L` line) using the Horizon BOCPD/MDL scoring engine."
+      }
+    },
+    {
+      "id": "C10",
+      "kind": "inference",
+      "summary": "horizon_wga --graph builds a graph-aware spaced-seed index (MASK_RY20 and AA masks) from S lines and performs banded MDL DP across graph bifurcations for distant relatives.",
+      "source": {
+        "file": "docs/PANGENOME_SUITE.md",
+        "quote": "Thread the query sequence through the graph, performing banded MDL dynamic programming across graph bifurcations."
+      }
+    },
+    {
+      "id": "C11",
+      "kind": "capability",
+      "summary": "horizon_lift traverses GFA W and P lines with coord::Interval zero-based half-open arithmetic to provide boundary-safe liftover replacing chain/net workflows.",
+      "source": {
+        "file": "docs/PANGENOME_SUITE.md",
+        "quote": "Traverse the GFA Walk (`W`) lines and Path (`P`) lines using Horizon's strict `coord::Interval` zero-based half-open arithmetic."
+      }
+    }
+  ],
+  "lenses": [
+    "correctness",
+    "sampling",
+    "statistics",
+    "provenance",
+    "inference",
+    "prior-art",
+    "reproduction"
+  ],
+  "attacked": [
+    {
+      "path": "docs/STRATEGIC_PLAN.md",
+      "snapshot": "ATTACKED-STRATEGIC_PLAN.md",
+      "read": "working tree",
+      "pinned": true,
+      "sha256": "bc16cf239284817e3a15c5bd2b1b88ab8dabf688263c7a9c3534814a84ea1564"
+    },
+    {
+      "path": "docs/PANGENOME_SUITE.md",
+      "snapshot": "ATTACKED-PANGENOME_SUITE.md",
+      "read": "working tree",
+      "pinned": true,
+      "sha256": "017faa84ae5e9af924d987b1fe54f2a4109ed4ebd9d07aab5057f9d503749509"
+    }
+  ],
+  "code": {
+    "horizon-aligner": "1ebc16527c3fc29ec31057180b19970a367a26b5"
+  },
+  "drift_reviewed": [
+    {
+      "path": "docs/STRATEGIC_PLAN.md",
+      "sha256": "04b48005d32cad21eba0002784dc198d320e97ad8ed56faab9d77f74c8fc4d94",
+      "by": "runner",
+      "date": "2026-11-19",
+      "quotes": [
+        "> **Status Note (2026-11-19):** This document defines the target architecture and roadmap for expanding `horizon-aligner` into a composable pangenome suite. Currently implemented binaries in `src/bin/` are file-path CLIs for pairwise/progressive WGA and evaluation (`horizon_wga`, `horizon_merge`, `horizon_guide`, `horizon_eval`, `bench_chr1`). The pangenome tools (`horizon_clean`, `horizon_resolve`, `horizon_lift`, `horizon_wga --graph`) and `stdin`/`stdout` pipe streaming are **planned**, not yet implemented.",
+        "",
+        "The history of bioinformatics alignment is a history of composition: `lastz` (pairwise) feeding into `multiz` (MSA), or `cactus` (graph) feeding into `hal` (storage). The vision for `horizon-aligner` is to unify these capabilities under a single framework based on Minimum Description Length (MDL) and E-graphs.",
+        "Rather than building a monolithic \"run-all\" executable, the target architecture is a suite of specialized tools (`horizon_clean`, `horizon_wga`, `horizon_resolve`, `horizon_lift`) that compose cleanly\u2014following the Unix-pipe precedent of `gfatools` and `odgi`\u2014wherever single-pass or indexed streaming is feasible.",
+        "## 2. Current Foundation and Known Gaps",
+        "* **MDL Bit-Savings (`src/bocpd.rs`, `src/mdl/`):** We replace classical substitution matrices with BOCPD joint-pair bit-savings (`joint_pair_bits`). However, the current implementation still retains fixed gap-bit penalties (`GAP_OPEN_BITS = -4.5`, `GAP_EXTEND_BITS = -0.8`), `IDENTITY_PRIOR = 0.65`, unnormalized DP transition weights (`src/mdl/dp.rs`), and heuristic chaining thresholds (`max_gap_bp`, `hsp_threshold`, `min_block_bits`). Furthermore, MDL abstention suppresses false homology on *divergent* sequences; it does not by itself prevent high-identity paralogous or repetitive \"hairballs.\"",
+        "* **E-Graphs for Structural Variants (`src/egraph.rs`):** Congruence-closure rewriting currently operates on 1D linear signed-block expressions (`seq`/`inv`/`dup` in 12-block chunks, `max_nodes = 800`) using fixed unitless parsimony weights (`1.0`/`1.2`/`1.3`). It does not yet model evolutionary trajectories, eliminate GFA cycles, or have HLA/centromere benchmarks.",
+        "* **Buffered GFA Streaming Parser (`src/gfa/mod.rs`):** `stream_gfa` provides a buffered line-streaming GFA v1.0/v1.1 reader (supporting `.gfa` and `.gfa.gz`). It is **not** zero-copy (it currently allocates owned `String`/`Vec<u8>` fields per record), has zero callers or tests in `src/` yet, and has not been benchmarked on 12GB HPRC graphs. While packed graph representations (`libbdsg`, `GBZ`, `odgi`) handle many large graphs in production, avoiding full-graph RAM materialization remains valuable for streaming filter/extraction passes.",
+        "### A. Avoid a Proprietary \"Walled Garden\" Format",
+        "**Risk:** Binary-only formats with heavy external C dependencies (such as HDF5 `.hal` in `Cactus`) complicate downstream parsing and ecosystem interoperability. (For backwards-compatibility, `horizon-aligner` currently includes a pure-Rust `.hal` reader/writer in `src/hal/` via `horizon_wga --hal-info`, which will remain optional.)",
+        "**Mitigation:** We will **not invent a proprietary binary format** for the pangenome suite. Target tools will exchange standard GFA (v1.0/v1.1) and MAF (plus VCF where variant output is added), using only valid GFA optional tags/comments (e.g., `HB:i:`, `XS:i:`, `YS:i:`, `ST:Z:`, `# EG:Z:`). Any required random-access indexing (for `S`-line sequences or `W`/`P` coordinates) will use lightweight, optional sidecar files (analogous to `.fai`/`.gzi`), not a locked database.",
+        "### B. Emulate Unix Composition Where Topology Allows",
+        "**Risk:** Building a monolithic CLI that couples all stages internally.",
+        "**Mitigation:** Support `stdin`/`stdout` GFA/MAF streaming on linear filter/transform tools (`horizon_clean`, `horizon_resolve`, `horizon_lift`), while acknowledging that multi-input or random-access stages (`horizon_wga --graph --query`, or unsorted GFA `S`/`L` resolution) require file/sidecar arguments or a two-pass index rather than pure single-pass `stdin` piping.",
+        "**Risk:** E-graph saturation under associative `seq` rules grows combinatorially (hitting `max_nodes = 800` at small block counts) and cannot scale to whole chromosomes.",
+        "**Mitigation:** Strict **bubble extraction** via a topological decomposition pass (analogous to `vg` snarls / `smoothxg`) rather than single-pass unsorted GFA streaming. Once tangled subgraphs (\"hairballs\") are isolated into bounded bubbles, the E-graph resolves each bubble locally and writes the resolved path back into the graph.",
+        "### D. Target Graph Tooling Gaps First",
+        "**Risk:** Competing head-on against `lastz` or `minimap2` on routine pairwise alignment offers limited differentiation.",
+        "**Mitigation:** Focus our next implementation and benchmarking milestones on pangenome graph tooling (`horizon_clean`, `horizon_resolve`, `horizon_lift`, and HPRC `GRCh38` vs. `CHM13` evaluation, which is currently unrun), where MDL abstention and bounded structural resolution address concrete pain points in complex loci."
+      ],
+      "note": "Applied adjudicated repairs distinguishing implemented WGA binaries from planned pangenome tools, disclosing GAP_OPEN_BITS/GAP_EXTEND_BITS/src/hal, removing zero-copy/vg-crash overclaims, and requiring topological decomposition for bubbles."
+    },
+    {
+      "path": "docs/PANGENOME_SUITE.md",
+      "sha256": "3932a17202383c61d72cbd557382a62579f80d93f4af441eff2254a07c63197d",
+      "by": "runner",
+      "date": "2026-11-19",
+      "quotes": [
+        "# Horizon Pangenome Suite: Proposed Roadmap",
+        "> **Status Note (2026-11-19):** None of the four pangenome binaries/flags below (`horizon_clean`, `horizon_wga --graph`, `horizon_resolve`, `horizon_lift`) are implemented yet in `src/bin/`. `src/gfa/mod.rs` (`stream_gfa`) is currently an uncalled, untested GFA v1.0/v1.1 reader, and `src/coord.rs` is not yet compiled into `src/lib.rs`. This document outlines the proposed engineering roadmap.",
+        "The target vision for the `horizon` suite extends beyond pairwise whole-genome alignment (WGA) by building on our buffered GFA v1.0/v1.1 streaming reader (`src/gfa/mod.rs`) to provide a unified toolkit grounded in Minimum Description Length (MDL) and E-graphs.",
+        "## 1. Pangenome De-tangling and Polishing (`horizon_clean` \u2014 Proposed)",
+        "**The Problem:** Current graph builders (like Minigraph-Cactus) rely on affine gap penalties, which can over-align repetitive or highly divergent regions, creating spurious edges and tangled \"hairballs.\"",
+        "**The Proposed Solution:**",
+        "* Stream an external `.gfa` file using a two-pass or `S`-line-indexed reader (since `L` lines carry no DNA sequences and `S`/`L` lines can appear in arbitrary order).",
+        "* Evaluate candidate junction flanks across `L` lines using the Horizon BOCPD/MDL scoring engine.",
+        "* If a junction does not yield sufficient bit-savings, explicitly sever the edge, emit a **Horizon Bubble** (`*`-sequence `HB:i:1` marker), and update affected `W`/`P` walks to preserve path validity.",
+        "* **Target Impact:** Relaxes over-aligned pangenomes without arbitrary graph pruning heuristics.",
+        "## 2. Sequence-to-Graph Alignment (`horizon_wga --graph` \u2014 Proposed)",
+        "**The Problem:** Aligning novel, divergent genomes to an existing pangenome (e.g., HPRC) is challenging across deep evolutionary splits.",
+        "**The Proposed Solution:**",
+        "* Ingest the sequence (`S`) lines of a GFA into a graph-aware spaced-seed index, utilizing transition-tolerant (`MASK_RY20`, 25-bp) and translated Amino Acid (`AA5`, requiring >=18-bp / 6-codon spans) masks across node boundaries.",
+        "* Extend `BandGrid` (`src/mdl/dp.rs`, currently strictly 2D linear-diagonal) to banded partial-order / DAG MDL dynamic programming across graph bifurcations (building on prior art such as `GraphAligner` and `minigraph`).",
+        "* **Target Impact:** Enables mapping distant relatives into established pangenomes while abstaining at low-confidence divergence thresholds (noting that on our `cactus241way` 1MB nuclear test, abstention reduces recall from 45.3% to 9.9% with 494 Horizon Bubbles).",
+        "## 3. Global Structural Paralog Resolution (`horizon_resolve` \u2014 Proposed)",
+        "**The Problem:** Complex structural variants (nested inversions, tandem duplications) produce cyclical or tangled graph topologies that complicate downstream variant calling and visualization.",
+        "**The Proposed Solution:**",
+        "* Decompose complex GFA subgraphs (\"hairballs\") into localized bubbles and map them into a congruence-closed **E-graph** (`src/egraph.rs`).",
+        "* Replace the current fixed unitless weights (`1.0`/`1.2`/`1.3`) with an MDL-calibrated structural cost model and extract minimum-cost paths.",
+        "* **Target Impact:** Disentangles complex loci (such as HLA or centromeric regions, once benchmarked) while preserving structural variant history.",
+        "## 4. Graph-Aware Exact Liftover (`horizon_lift` \u2014 Proposed)",
+        "**The Problem:** Lifting over genomic annotations between haplotypes in a pangenome is prone to coordinate-translation bugs and fragmentation.",
+        "**The Proposed Solution:**",
+        "* Wire `src/coord.rs` (`coord::Interval`, zero-based half-open arithmetic) into `src/lib.rs`, build an `S`-line segment-length index, and traverse GFA Walk (`W`) and Path (`P`) lines.",
+        "* Project functional annotations from a reference path (e.g., `GRCh38`) to alternate haplotypes via high-confidence structural paths, explicitly flagging annotations dropped or fragmented across non-syntenic breaks.",
+        "* **Target Impact:** Provides a boundary-safe liftover tool directly on GFA walks/paths."
+      ],
+      "note": "Marked all 4 tools as Proposed Roadmap, disclosed S-line indexing for L-lines and W/P walks, BandGrid DAG generalization, 18-bp AA5 span, and wiring src/coord.rs."
+    }
+  ],
+  "sealed": {
+    "attack-L1-correctness.md": "db1e0a921ab518b598470d0e9f5b241de1228be2e497a4e37e9cbb4ea6ad1fd7",
+    "attack-L2-sampling.md": "cdcc127c9fdbd31d75a04f617ebdb3a9d6f483ad67c0ef61fefab20a0be1cca4",
+    "attack-L3-statistics.md": "43eb59fcf98ab0993a8e3e7d5348841959a35dae3aae4c5ad25d79b51cfbf510",
+    "attack-L4-provenance.md": "d8c4fb1194dcd7f71579eaeb6902ee377256a317f65fe60cab44d72565ac1e91",
+    "attack-L5-inference.md": "0535cbac162e0ec19e5e6d7d2d89a2dc4515d4fd7859ac8acc2316f9e548d234",
+    "attack-L6-prior-art.md": "6ca3f716b537781f67fb917de02f62b2e85d5865c5a86903ce57506400fc815b",
+    "attack-L7-reproduction.md": "2a52c2bd0d7b60a705a495af182542bcb31298a284b71f60b86b93891f2e8820"
+  },
+  "aborted": [],
+  "unbriefed": [],
+  "lens_drops": {},
+  "briefs_required": true,
+  "runner_is_author": true,
+  "claim_list_author": "runner",
+  "human_claim": "",
+  "carried": [],
+  "dropped": [],
+  "corrections": [
+    {
+      "finding": "L1-F1 / L4-F1 / L7-F1",
+      "claim": "C1",
+      "kind": "doc-status-clarification",
+      "status": "applied",
+      "file": "docs/STRATEGIC_PLAN.md",
+      "new": "horizon_clean, horizon_resolve, horizon_lift, horizon_wga --graph, and stdin/stdout pipe streaming are planned, not yet implemented",
+      "note": "Distinguished implemented file-path WGA binaries from planned pangenome suite binaries."
+    },
+    {
+      "finding": "L3-F1 / L1-F2 / L7-F2",
+      "claim": "C2",
+      "kind": "doc-precision",
+      "status": "applied",
+      "file": "docs/STRATEGIC_PLAN.md",
+      "new": "GAP_OPEN_BITS = -4.5, GAP_EXTEND_BITS = -0.8",
+      "note": "Disclosed remaining fixed gap-bit penalties, IDENTITY_PRIOR = 0.65, unnormalized DP transitions, and that MDL abstention targets divergent sequences rather than high-identity paralog hairballs."
+    },
+    {
+      "finding": "L3-F2 / L1-F3 / L7-F3",
+      "claim": "C3",
+      "kind": "doc-precision",
+      "status": "applied",
+      "file": "docs/STRATEGIC_PLAN.md",
+      "new": "1D linear signed-block expressions",
+      "note": "Clarified src/egraph.rs scope (1D 12-block chunks, max_nodes = 800, fixed weights 1.0/1.2/1.3, no HLA/centromere benchmarks yet)."
+    },
+    {
+      "finding": "L1-F4 / L3-F3 / L4-F4 / L7-F4",
+      "claim": "C4",
+      "kind": "doc-precision",
+      "status": "applied",
+      "file": "docs/STRATEGIC_PLAN.md",
+      "new": "buffered line-streaming GFA v1.0/v1.1 reader",
+      "note": "Removed 'zero-copy' and 'solves the I/O bottleneck entirely'; disclosed owned String/Vec allocations, 0 callers/tests, and 0 12GB HPRC benchmarks; removed unverified vg/odgi crash generalization."
+    },
+    {
+      "finding": "L4-F5 / L6-F5",
+      "claim": "C5",
+      "kind": "doc-disclosure",
+      "status": "applied",
+      "file": "docs/STRATEGIC_PLAN.md",
+      "new": "src/hal/",
+      "note": "Disclosed existing optional pure-Rust .hal HDF5 I/O (src/hal/) and Horizon GFA optional tags (HB:i:, XS:i:, YS:i:, ST:Z:, # EG:Z:)."
+    },
+    {
+      "finding": "L5-F1 / L5-F6 / L6-F6",
+      "claim": "C6",
+      "kind": "doc-architecture-fix",
+      "status": "applied",
+      "file": "docs/STRATEGIC_PLAN.md",
+      "new": "two-pass index rather than pure single-pass stdin piping",
+      "note": "Scoped stdin/stdout streaming to linear filter/transform tools and acknowledged multi-input/random-access constraints."
+    },
+    {
+      "finding": "L5-F7 / L6-F7",
+      "claim": "C7",
+      "kind": "doc-architecture-fix",
+      "status": "applied",
+      "file": "docs/STRATEGIC_PLAN.md",
+      "new": "topological decomposition pass (analogous to vg snarls / smoothxg)",
+      "note": "Replaced single-pass linear bubble extraction with explicit topological decomposition."
+    },
+    {
+      "finding": "L3-F7 / Completeness-Gap4",
+      "claim": "BENCHMARK_RESULTS",
+      "kind": "doc-precision",
+      "status": "applied",
+      "file": "docs/BENCHMARK_RESULTS.md",
+      "new": "Recall drops 4.5x",
+      "note": "Replaced 'parameter-free' with default MDL priors/thresholds disclosure and documented the 45.3% -> 9.9% cactus241way chr22 1MB recall drop."
+    },
+    {
+      "finding": "L5-F9 / L5-F10 / L5-F11 / Completeness-Gap1-Gap5",
+      "claim": "C9-C11",
+      "kind": "doc-roadmap-fix",
+      "status": "applied",
+      "file": "docs/PANGENOME_SUITE.md",
+      "new": "Proposed Roadmap",
+      "note": "Labeled all 4 suite tools as proposed, disclosed S-line indexing for L-line scoring & W/P walk updates, BandGrid DAG generalization, 18-bp AA5 span, and wiring src/coord.rs."
+    }
+  ],
+  "findings": [
+    {
+      "lens": "correctness",
+      "id": "F1",
+      "flaw": "C1: horizon_clean/horizon_resolve/horizon_lift do not exist and existing binaries do not compose via Unix pipes"
+    },
+    {
+      "lens": "correctness",
+      "id": "F2",
+      "flaw": "C2: src/bocpd.rs and src/mdl/dp.rs hardcode affine gap penalties (-4.5, -0.8) and fixed priors"
+    },
+    {
+      "lens": "correctness",
+      "id": "F3",
+      "flaw": "C3: src/egraph.rs uses fixed linear synteny weights with no evolutionary model or HLA/paralog evaluation"
+    },
+    {
+      "lens": "correctness",
+      "id": "F4",
+      "flaw": "C4: src/gfa/mod.rs is not zero-copy (allocates String/Vec), is unused/untested, and has no 12GB benchmark"
+    },
+    {
+      "lens": "correctness",
+      "id": "F5",
+      "flaw": "C5: No stdin/stdout or VCF support exists while src/hal/ implements HDF5 .hal I/O"
+    },
+    {
+      "lens": "correctness",
+      "id": "F6",
+      "flaw": "C6: No binary reads GFA/MAF from stdin or writes to stdout"
+    },
+    {
+      "lens": "correctness",
+      "id": "F7",
+      "flaw": "C7: Linear GFA bubble extraction and path stitching are unimplemented"
+    },
+    {
+      "lens": "correctness",
+      "id": "F8",
+      "flaw": "C8: Release strategy targets unimplemented tools (horizon_clean/resolve/lift) with no HPRC benchmarks"
+    },
+    {
+      "lens": "correctness",
+      "id": "F9",
+      "flaw": "C9: horizon_clean does not exist and GFA L lines lack sequences for BOCPD/MDL scoring"
+    },
+    {
+      "lens": "correctness",
+      "id": "F10",
+      "flaw": "C10: horizon_wga --graph does not exist and BandGrid DP is strictly 2D linear-diagonal"
+    },
+    {
+      "lens": "correctness",
+      "id": "F11",
+      "flaw": "C11: horizon_lift does not exist and src/coord.rs is uncompiled dead code"
+    },
+    {
+      "lens": "sampling",
+      "id": "F1",
+      "flaw": "C8: Release strategy targets unimplemented tools (horizon_clean/resolve/lift) with no HPRC benchmarks"
+    },
+    {
+      "lens": "sampling",
+      "id": "F2",
+      "flaw": "C4: src/gfa/mod.rs is not zero-copy (allocates String/Vec), is unused/untested, and has no 12GB benchmark"
+    },
+    {
+      "lens": "sampling",
+      "id": "F3",
+      "flaw": "C2 NARROWED: Benchmark sampling pre-filters to homologous MAF blocks on tiny slices and omits graph/hairball evaluations"
+    },
+    {
+      "lens": "sampling",
+      "id": "F4",
+      "flaw": "C3 NARROWED: Named HLA and centromere paralog loci are never sampled in benchmark datasets or tests"
+    },
+    {
+      "lens": "sampling",
+      "id": "F5",
+      "flaw": "Claim-list steering: Runner's claim list omits distant-relative and chr22 1MB benchmark-collapse sampling flaws"
+    },
+    {
+      "lens": "statistics",
+      "id": "F1",
+      "flaw": "C2 REFUTED: Hardcoded affine gap penalties, fixed priors, and an unnormalized HMM violate MDL"
+    },
+    {
+      "lens": "statistics",
+      "id": "F2",
+      "flaw": "C3: src/egraph.rs uses fixed linear synteny weights with no evolutionary model or HLA/paralog evaluation"
+    },
+    {
+      "lens": "statistics",
+      "id": "F3",
+      "flaw": "C4 REFUTED: Zero empirical evidence for the 12GB RAM exhaustion threshold or streaming throughput"
+    },
+    {
+      "lens": "statistics",
+      "id": "F4",
+      "flaw": "C7 NARROWED: seq associativity induces Catalan combinatorial explosion truncated at maxnodes = 800"
+    },
+    {
+      "lens": "statistics",
+      "id": "F5",
+      "flaw": "C9: horizon_clean does not exist and GFA L lines lack sequences for BOCPD/MDL scoring"
+    },
+    {
+      "lens": "statistics",
+      "id": "F6",
+      "flaw": "C10: horizon_wga --graph does not exist and BandGrid DP is strictly 2D linear-diagonal"
+    },
+    {
+      "lens": "statistics",
+      "id": "F7",
+      "flaw": "Note on runner-authored claim list: BENCHMARKRESULTS.md \"parameter-free\" claim and IDENTITYPRIOR"
+    },
+    {
+      "lens": "provenance",
+      "id": "F1",
+      "flaw": "C1: horizon_clean/horizon_resolve/horizon_lift do not exist and existing binaries do not compose via Unix pipes"
+    },
+    {
+      "lens": "provenance",
+      "id": "F2",
+      "flaw": "C2: MDL replaces DP scoring matrices, not all heuristic thresholds, and has zero pangenome hairball provenance"
+    },
+    {
+      "lens": "provenance",
+      "id": "F3",
+      "flaw": "C3: src/egraph.rs uses fixed linear synteny weights with no evolutionary model or HLA/paralog evaluation"
+    },
+    {
+      "lens": "provenance",
+      "id": "F4",
+      "flaw": "C4: src/gfa/mod.rs is not zero-copy (allocates String/Vec), is unused/untested, and has no 12GB benchmark"
+    },
+    {
+      "lens": "provenance",
+      "id": "F5",
+      "flaw": "C5: No stdin/stdout or VCF support exists while src/hal/ implements HDF5 .hal I/O"
+    },
+    {
+      "lens": "provenance",
+      "id": "F6",
+      "flaw": "C6: No binary reads GFA/MAF from stdin or writes to stdout"
+    },
+    {
+      "lens": "provenance",
+      "id": "F7",
+      "flaw": "C7: Linear GFA bubble extraction and path stitching are unimplemented"
+    },
+    {
+      "lens": "provenance",
+      "id": "F8",
+      "flaw": "C8: Release strategy targets unimplemented tools (horizon_clean/resolve/lift) with no HPRC benchmarks"
+    },
+    {
+      "lens": "provenance",
+      "id": "F9",
+      "flaw": "C9: horizon_clean does not exist and GFA L lines lack sequences for BOCPD/MDL scoring"
+    },
+    {
+      "lens": "provenance",
+      "id": "F10",
+      "flaw": "C10: horizon_wga --graph does not exist and BandGrid DP is strictly 2D linear-diagonal"
+    },
+    {
+      "lens": "provenance",
+      "id": "F11",
+      "flaw": "C11: horizon_lift does not exist and src/coord.rs is uncompiled dead code"
+    },
+    {
+      "lens": "inference",
+      "id": "F1",
+      "flaw": "C1: Pipe composition is incompatible with graph indexing, out-of-order GFA records, and dual-input alignment"
+    },
+    {
+      "lens": "inference",
+      "id": "F2",
+      "flaw": "C2: MDL bit-savings does not prevent paralogous or repetitive \"hairball\" over-alignment"
+    },
+    {
+      "lens": "inference",
+      "id": "F3",
+      "flaw": "C3: Synteny e-graph rewrite rules do not model evolutionary trajectories or eliminate graph cycles"
+    },
+    {
+      "lens": "inference",
+      "id": "F4",
+      "flaw": "C4: src/gfa/mod.rs is neither zero-copy nor a solution to graph RAM exhaustion"
+    },
+    {
+      "lens": "inference",
+      "id": "F5",
+      "flaw": "C5: Purely streaming standard GFA over stdin/stdout contradicts random-access and sidecar requirements"
+    },
+    {
+      "lens": "inference",
+      "id": "F6",
+      "flaw": "C6: stdin/stdout GFA/MAF requirement is violated by every existing binary and impossible for dual-input alignment"
+    },
+    {
+      "lens": "inference",
+      "id": "F7",
+      "flaw": "C7: Linear streaming cannot detect hairballs or stitch resolved paths back into an already-emitted stream"
+    },
+    {
+      "lens": "inference",
+      "id": "F8",
+      "flaw": "C8: Release strategy targets three non-existent tools while the codebase implements pairwise/progressive WGA"
+    },
+    {
+      "lens": "inference",
+      "id": "F9",
+      "flaw": "C9: horizon_clean does not exist and GFA L lines lack sequences for BOCPD/MDL scoring"
+    },
+    {
+      "lens": "inference",
+      "id": "F10",
+      "flaw": "C10: horizon_wga --graph does not exist and BandGrid DP is strictly 2D linear-diagonal"
+    },
+    {
+      "lens": "inference",
+      "id": "F11",
+      "flaw": "C11: W/P line traversal with coord::Interval cannot work without segment lengths and mismatches W/P semantics"
+    },
+    {
+      "lens": "prior-art",
+      "id": "F1",
+      "flaw": "C1: Unix-pipe composition of specialized pangenome tools is established prior art in odgi and vg, and the named tool"
+    },
+    {
+      "lens": "prior-art",
+      "id": "F2",
+      "flaw": "C2: MDL alignment is from Allison et al. (1992) and does not prevent high-identity paralogous \"hairballs\""
+    },
+    {
+      "lens": "prior-art",
+      "id": "F3",
+      "flaw": "C3: src/egraph.rs uses fixed linear synteny weights with no evolutionary model or HLA/paralog evaluation"
+    },
+    {
+      "lens": "prior-art",
+      "id": "F4",
+      "flaw": "C4: vg/odgi do not crash on 12GB pangenomes, and src/gfa/mod.rs is neither zero-copy nor a graph-I/O solution"
+    },
+    {
+      "lens": "prior-art",
+      "id": "F5",
+      "flaw": "C5: No stdin/stdout or VCF support exists while src/hal/ implements HDF5 .hal I/O"
+    },
+    {
+      "lens": "prior-art",
+      "id": "F6",
+      "flaw": "C6: Universal stdin/stdout streaming is violated by src/gfa/mod.rs and src/hal/"
+    },
+    {
+      "lens": "prior-art",
+      "id": "F7",
+      "flaw": "C7: Single-pass linear GFA streaming cannot extract arbitrary bubbles, and local bubble decomposition is prior art"
+    },
+    {
+      "lens": "prior-art",
+      "id": "F8",
+      "flaw": "C8: HPRC graphs are widely usable with existing tooling, and horizonclean/resolve/lift are unimplemented"
+    },
+    {
+      "lens": "prior-art",
+      "id": "F9",
+      "flaw": "C9: horizon_clean does not exist and GFA L lines lack sequences for BOCPD/MDL scoring"
+    },
+    {
+      "lens": "prior-art",
+      "id": "F10",
+      "flaw": "C10: Banded DP across graph bifurcations is prior art in GraphAligner and minigraph"
+    },
+    {
+      "lens": "prior-art",
+      "id": "F11",
+      "flaw": "C11: 0-based half-open W-line coordinates are standard GFA v1.1, and graph liftover is prior art"
+    },
+    {
+      "lens": "reproduction",
+      "id": "F1",
+      "flaw": "C1: horizon_clean/horizon_resolve/horizon_lift do not exist and existing binaries do not compose via Unix pipes"
+    },
+    {
+      "lens": "reproduction",
+      "id": "F2",
+      "flaw": "C2: src/bocpd.rs and src/mdl/dp.rs hardcode affine gap penalties (-4.5, -0.8) and fixed priors"
+    },
+    {
+      "lens": "reproduction",
+      "id": "F3",
+      "flaw": "C3: E-graph congruence closure is only tested on a 5-block synthetic tuple and pairwise LCB bins, not HLA or GFA graphs"
+    },
+    {
+      "lens": "reproduction",
+      "id": "F4",
+      "flaw": "C4: src/gfa/mod.rs is not zero-copy (allocates String/Vec), is unused/untested, and has no 12GB benchmark"
+    },
+    {
+      "lens": "reproduction",
+      "id": "F5",
+      "flaw": "C5: No stdin/stdout or VCF support exists while src/hal/ implements HDF5 .hal I/O"
+    },
+    {
+      "lens": "reproduction",
+      "id": "F6",
+      "flaw": "C6: No binary reads GFA/MAF from stdin or writes to stdout"
+    },
+    {
+      "lens": "reproduction",
+      "id": "F7",
+      "flaw": "C7: Linear GFA bubble extraction and path stitching are unimplemented"
+    },
+    {
+      "lens": "reproduction",
+      "id": "F8",
+      "flaw": "C8: Release strategy targets unimplemented tools (horizon_clean/resolve/lift) with no HPRC benchmarks"
+    },
+    {
+      "lens": "reproduction",
+      "id": "F9",
+      "flaw": "C9: horizon_clean does not exist and GFA L lines lack sequences for BOCPD/MDL scoring"
+    },
+    {
+      "lens": "reproduction",
+      "id": "F10",
+      "flaw": "C10: horizon_wga --graph does not exist and BandGrid DP is strictly 2D linear-diagonal"
+    },
+    {
+      "lens": "reproduction",
+      "id": "F11",
+      "flaw": "C11: horizon_lift does not exist and src/coord.rs is uncompiled dead code"
+    }
+  ],
+  "open": [
+    {
+      "id": "R1-IMPL",
+      "summary": "Implement and benchmark horizon_clean, horizon_resolve, horizon_lift, and horizon_wga --graph on HPRC v1.0/v1.1 (GRCh38 vs CHM13) and HLA/centromere loci."
+    },
+    {
+      "id": "R1-GFA",
+      "summary": "Fix empty L-line orientation panic in src/gfa/mod.rs:94,96, add unit tests, and wire src/coord.rs into src/lib.rs."
+    },
+    {
+      "id": "R1-HMM",
+      "summary": "Normalize HMM transition weights in src/mdl/dp.rs:105-167 (currently summing >1.0 from M and Ix/Iy) and derive/calibrate gap-bit penalties."
+    }
+  ],
+  "unchallenged": [],
+  "discharges": {},
+  "decisions": [],
+  "sealed_blobs": {
+    "attack-L1-correctness.md": {
+      "blob": "8c0692455fa41051afd5fab2072f73c679f101be",
+      "ref": "refs/round/seal/1/attack-L1-correctness.md"
+    },
+    "attack-L2-sampling.md": {
+      "blob": "0d321e0dda85e57aa80b0c668ccb114beaf189ca",
+      "ref": "refs/round/seal/1/attack-L2-sampling.md"
+    },
+    "attack-L3-statistics.md": {
+      "blob": "a60136da090a011c173f4ea6a3f72be8350dd929",
+      "ref": "refs/round/seal/1/attack-L3-statistics.md"
+    },
+    "attack-L4-provenance.md": {
+      "blob": "c16947914fd7c0f0e5b66931d839c770ddacec28",
+      "ref": "refs/round/seal/1/attack-L4-provenance.md"
+    },
+    "attack-L5-inference.md": {
+      "blob": "eb08dd8c7b22992662b2cf873f0392512fc16289",
+      "ref": "refs/round/seal/1/attack-L5-inference.md"
+    },
+    "attack-L6-prior-art.md": {
+      "blob": "7b471773646c51659f5a9b015bcb9b961fd2c7c2",
+      "ref": "refs/round/seal/1/attack-L6-prior-art.md"
+    },
+    "attack-L7-reproduction.md": {
+      "blob": "eb069adea23a675b4ff1e9d89617c92f04bfa933",
+      "ref": "refs/round/seal/1/attack-L7-reproduction.md"
+    }
+  },
+  "diversity": {
+    "attacks": 7,
+    "lenses": [
+      "correctness",
+      "sampling",
+      "statistics",
+      "provenance",
+      "inference",
+      "prior-art",
+      "reproduction"
+    ],
+    "mean_pairwise_similarity": 0.265,
+    "max_pairwise_similarity": 0.435,
+    "most_similar_pair": [
+      "attack-L1-correctness.md",
+      "attack-L4-provenance.md"
+    ],
+    "claims_answered": 11,
+    "claims_corroborated": 11,
+    "claims_single_voter": 0,
+    "claims_unanimous": 2,
+    "verdict_agreement": 0.182,
+    "findings_mode": "synthesized",
+    "findings_filed": 67,
+    "findings_per_attacker": {
+      "attack-L1-correctness.md": 11,
+      "attack-L2-sampling.md": 5,
+      "attack-L3-statistics.md": 7,
+      "attack-L4-provenance.md": 11,
+      "attack-L5-inference.md": 11,
+      "attack-L6-prior-art.md": 11,
+      "attack-L7-reproduction.md": 11
+    },
+    "distinct_flaws": 37,
+    "flaws_named_by_more_than_one_attacker": 11,
+    "duplicate_rate": 0.297
+  },
+  "outcome": "REFUTED_PRESENT_CLAIMS_REPAIRED_TO_ROADMAP",
+  "landed": "All 7 lenses ran (67 findings, 37 distinct flaws, 11 corroborated). Refuted present-tense claims that horizon_clean/horizon_resolve/horizon_lift/horizon_wga --graph exist, that binaries stream stdin/stdout GFA/MAF/VCF, that src/gfa/mod.rs is zero-copy or tested, that src/coord.rs is compiled, that MDL removes all gap penalties/priors (GAP_OPEN_BITS=-4.5, GAP_EXTEND_BITS=-0.8, IDENTITY_PRIOR=0.65, unnormalized DP transitions in src/mdl/dp.rs), and that BandGrid 2D DP or single-pass linear GFA streaming can score L lines or extract out-of-order bubbles.",
+  "overturned": "L3 F4's Catalan C_7=429>800 arithmetic and k>=8 bound overturned (hash-consed seq yields C(k+1,3)+k, hitting 800 at k=17); L6 F1's pipe repair on existing binaries overturned; L1/L2/L4 narrowed existence attacks on future-tense roadmap statements; L5 adjudication's claim that gfa is undeclared in src/lib.rs overturned (pub mod gfa at src/lib.rs:394).",
+  "class": "architecture-roadmap-and-codebase-provenance",
+  "survived": "Buffered line-streaming GFA v1.0/v1.1 reader exists in src/gfa/mod.rs; joint_pair_bits replaces classical substitution matrices in src/bocpd.rs; bounded 1D e-graph deduplication exists in src/egraph.rs.",
+  "closed": "2026-11-19"
+}

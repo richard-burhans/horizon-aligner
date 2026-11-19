@@ -2,7 +2,7 @@
 
 This document tracks the precision and recall of `horizon-aligner` across a suite of deep-divergence datasets.
 
-All results were generated out-of-the-box using the parameter-free, Information-Theoretic Minimum Description Length (MDL) threshold defaults.
+All results were generated out-of-the-box using the default Minimum Description Length (MDL) thresholds and priors in `src/bocpd.rs` and `src/mdl/mod.rs` (note that fixed gap-bit penalties `GAP_OPEN_BITS = -4.5`, `GAP_EXTEND_BITS = -0.8`, and `IDENTITY_PRIOR = 0.65` remain hardcoded, and MAF-extracted FASTAs sample homologous blocks).
 
 ## Executive Summary: Performance Highlights
 
@@ -37,4 +37,6 @@ These sets were completely locked away during algorithm development to prevent o
 | `cactus241way` (chr22 1MB) | Human (`hg38`) | Dog (`Canis_lupus`) | Distant Mammal | **9.9%** | 494 | ~0.68s |
 | B10K 363-way | Chicken (`galGal6`) | Zebra Finch (`taeGut2`) | Deep Avian | *(Pending Data)* | - | - |
 | HPRC (v1.1) | `GRCh38` | `CHM13` | Human Pangenome | *(Graph Eval)* | - | - |
+
+> **Note on `cactus241way` (chr22 1MB):** Recall drops 4.5x from `45.3%` (`chr22_random`, 38 kb) to `9.9%` (`chr22 1MB`, 494 Horizon Bubbles) due to aggressive MDL abstention across divergent nuclear regions.
 
