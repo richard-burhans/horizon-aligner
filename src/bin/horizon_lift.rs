@@ -160,7 +160,6 @@ fn flip_strand(strand: char) -> char {
 fn lift_feature(
     feat: &InputFeature,
     src_steps: &[StepSpan],
-    src_total_len: usize,
     seg_lens: &HashMap<String, usize>,
     target_index: &HashMap<String, Vec<TargetOcc>>,
     bridge_bp: usize,
@@ -168,7 +167,6 @@ fn lift_feature(
     if feat.start >= feat.end || src_steps.is_empty() {
         return Vec::new();
     }
-    let _src_iv = Interval::new(feat.start, feat.end, feat.strand, src_total_len);
 
     // Binary search for first StepSpan with path_end > feat.start
     let first_idx = src_steps.partition_point(|s| s.path_end <= feat.start);
@@ -476,7 +474,7 @@ fn run_lift<W1: Write, W2: Write>(
     };
 
     for feat in cfg.features {
-        let Some((src_steps, src_len)) = source_tables.get(&feat.chrom) else {
+        let Some((src_steps, _src_len)) = source_tables.get(&feat.chrom) else {
             summary.unmapped += 1;
             if let Some(u) = unmapped_out.as_deref_mut() {
                 writeln!(
@@ -488,7 +486,7 @@ fn run_lift<W1: Write, W2: Write>(
             continue;
         };
 
-        let pieces = lift_feature(feat, src_steps, *src_len, &seg_lens, &target_index, cfg.bridge_bp);
+        let pieces = lift_feature(feat, src_steps, &seg_lens, &target_index, cfg.bridge_bp);
         let mapped_bp: usize = pieces.iter().map(|p| p.src_end - p.src_start).sum();
         let total_bp = feat.end.saturating_sub(feat.start).max(1);
         #[allow(clippy::cast_precision_loss)]
@@ -678,7 +676,7 @@ S\ts4\tTTTTTTTTTT
 P\tGRCh38.chr22\ts1+,s2+,s3+,s4+\t0M,0M,0M
 W\tCHM13\t0\tchr22\t100\t130\t>s1<s2>s4
 ";
-        std::fs::write(&gfa_path, gfa).unwrap();
+        std::fs::write(&gfa_path, gfa).expect("write test GFA");
 
         let features = vec![
             // 1. Exact in s1: [2, 8) -> CHM13 [102, 108) '+'
@@ -720,7 +718,7 @@ W\tCHM13\t0\tchr22\t100\t130\t>s1<s2>s4
         ];
 
         let cfg = LiftConfig {
-            gfa_path: gfa_path.to_str().unwrap(),
+            gfa_path: gfa_path.to_str().expect("valid utf8 temp path"),
             from_sample: "GRCh38",
             to_sample: "CHM13",
             features: &features,
@@ -729,20 +727,20 @@ W\tCHM13\t0\tchr22\t100\t130\t>s1<s2>s4
         };
         let mut out = Vec::new();
         let mut unmapped = Vec::new();
-        let summary = run_lift(&cfg, &mut out, Some(&mut unmapped)).unwrap();
+        let summary = run_lift(&cfg, &mut out, Some(&mut unmapped)).expect("run_lift succeeds");
         let _ = std::fs::remove_file(&gfa_path);
 
         assert_eq!(summary.lifted_exact, 2);
         assert_eq!(summary.lifted_split, 1);
         assert_eq!(summary.unmapped, 1);
 
-        let out_str = String::from_utf8(out).unwrap();
+        let out_str = String::from_utf8(out).expect("valid utf8 output");
         let lines: Vec<&str> = out_str.lines().collect();
         assert!(lines[0].starts_with("CHM13.chr22\t102\t108\tf_fwd\t100\t+"));
         assert!(lines[1].starts_with("CHM13.chr22\t113\t118\tf_inv\t100\t-"));
         assert!(lines.iter().any(|l| l.contains("f_split") && l.contains("SPLIT_1/3")));
 
-        let unm_str = String::from_utf8(unmapped).unwrap();
+        let unm_str = String::from_utf8(unmapped).expect("valid utf8 unmapped");
         assert!(unm_str.contains("f_unmapped"));
     }
 }

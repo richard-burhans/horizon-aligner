@@ -20,6 +20,9 @@ use std::collections::HashSet;
 mod dp;
 pub use dp::*;
 
+/// Karlin-Altschul / MDL random-search threshold coefficient (`~0.5 * log2(N*M)` + overhead).
+const KARLIN_MDL_COEFF: f64 = 0.55;
+
 /// Configurable parameters for [`align_contig_pair_with_config`].
 #[derive(Debug, Clone)]
 pub struct AlignConfig {
@@ -154,8 +157,6 @@ pub fn align_contig_pair_with_config(
         .log2()
         .max(10.0);
     // Continuous Karlin-Altschul / MDL scaling with log2(N * M), avoiding fixed size cutoffs.
-    /// Karlin-Altschul / MDL random-search threshold coefficient (`~0.5 * log2(N*M)` + overhead).
-    const KARLIN_MDL_COEFF: f64 = 0.55;
     #[allow(clippy::cast_possible_truncation)]
     let hsp_bonus = ((search_space_bits - 20.0).max(0.0) * 3.8).round() as i32;
     #[allow(clippy::cast_possible_truncation)]
@@ -179,6 +180,7 @@ pub fn align_contig_pair_with_config(
     #[allow(clippy::cast_precision_loss)]
 
     // MDL-derived default for HSP thresholds
+    #[allow(clippy::cast_possible_truncation)]
     let base_hsp_thresh = cfg.hsp_threshold.unwrap_or_else(|| {
         (100.0 + (effective_min_bits * 1.5)).round() as i32
     });
@@ -186,6 +188,7 @@ pub fn align_contig_pair_with_config(
     // MDL-derived default fallback coverage threshold
     // If the expected bit savings of the primary coverage is less than the effective min bits
     // across the sequence, trigger fallback.
+    #[allow(clippy::cast_precision_loss)]
     let min_fallback_cov = cfg.min_fallback_cov.unwrap_or_else(|| {
         let expected_bits_per_base = 2.0; // 2 bits per nucleotide match
         let bit_ratio = effective_min_bits / (seq_x.len().max(1) as f64 * expected_bits_per_base);
@@ -193,6 +196,7 @@ pub fn align_contig_pair_with_config(
         (bit_ratio * 10.0).clamp(0.05, 0.95)
     });
     
+    #[allow(clippy::cast_precision_loss)]
     let primary_cov = (covered_bp as f64) / (seq_x.len().max(1) as f64);
 
     let filter_uncovered = |hits: &mut Vec<(usize, usize)>| {

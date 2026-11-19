@@ -10,6 +10,7 @@ use horizon_aligner::{
 };
 use rayon::prelude::*;
 use std::collections::{HashMap, VecDeque};
+use std::fmt::Write as _;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
@@ -33,6 +34,7 @@ struct CliArgs {
     hsp_threshold: Option<i32>,
 }
 
+#[allow(clippy::too_many_lines)]
 fn parse_args() -> Result<CliArgs> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut pos = Vec::new();
@@ -193,11 +195,13 @@ fn main() -> Result<()> {
             let aln = align_seq_to_dag_mdl(&dag_nodes, qseq, &HmmParams::default(), 10.0);
             total_pairs += aln.kept_pairs.len();
             total_bubbles += aln.bubbles;
-            let path_str: String = aln
+            let path_str = aln
                 .path_nodes
                 .iter()
-                .map(|&idx| format!(">{}", dag_nodes[idx].name))
-                .collect();
+                .fold(String::new(), |mut acc, &idx| {
+                    let _ = write!(acc, ">{}", dag_nodes[idx].name);
+                    acc
+                });
             println!(
                 "{}\t{}\t{}\tkept_bp={}\tscore_bits={:.1}\tbubbles={}",
                 qname,

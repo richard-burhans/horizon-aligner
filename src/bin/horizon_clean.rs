@@ -93,21 +93,12 @@ fn bernoulli_ll_bits(k: f64, n: f64) -> f64 {
     k * p.log2() + (n - k) * (1.0 - p).log2()
 }
 
-/// Score a GFA link junction using BOCPD GC discontinuity + MDL two-regime changepoint gain (bits).
+/// Score a GFA link junction using MDL two-regime changepoint gain (bits) gated by BOCPD GC shift.
 /// Positive bits indicate a statistically significant compositional break at the junction.
 fn score_junction_cp_bits(flank_u: &[u8], flank_v: &[u8]) -> f64 {
     if flank_u.len() < 12 || flank_v.len() < 12 {
         return 0.0;
     }
-    let mut concat = Vec::with_capacity(flank_u.len() + flank_v.len());
-    concat.extend_from_slice(flank_u);
-    concat.extend_from_slice(flank_v);
-    let gc_prof = bocpd_gc_profile(&concat, 1.0 / 120.0, 80);
-    let split = flank_u.len();
-    let left_gc = gc_prof[split - 1];
-    let right_gc = gc_prof[(split + 15).min(gc_prof.len() - 1)];
-    let _bocpd_jump = (right_gc - left_gc).abs();
-
     let (ku, nu) = gc_counts(flank_u);
     let (kv, nv) = gc_counts(flank_v);
     let n_tot = nu + nv;
@@ -117,7 +108,24 @@ fn score_junction_cp_bits(flank_u: &[u8], flank_v: &[u8]) -> f64 {
     let ll_null = bernoulli_ll_bits(ku + kv, n_tot);
     let ll_alt = bernoulli_ll_bits(ku, nu) + bernoulli_ll_bits(kv, nv);
     let mdl_penalty = 1.5 * n_tot.log2();
-    (ll_alt - ll_null) - mdl_penalty
+    let cp_bits = (ll_alt - ll_null) - mdl_penalty;
+    if cp_bits <= 0.0 {
+        return cp_bits;
+    }
+
+    let mut concat = Vec::with_capacity(flank_u.len() + flank_v.len());
+    concat.extend_from_slice(flank_u);
+    concat.extend_from_slice(flank_v);
+    let gc_prof = bocpd_gc_profile(&concat, 1.0 / 120.0, 80);
+    let split = flank_u.len();
+    let left_gc = gc_prof[split - 1];
+    let right_gc = gc_prof[(split + 15).min(gc_prof.len() - 1)];
+    let bocpd_jump = (right_gc - left_gc).abs();
+    if bocpd_jump < 0.10 {
+        0.0
+    } else {
+        cp_bits
+    }
 }
 
 struct CleanConfig {

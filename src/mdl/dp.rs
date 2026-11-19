@@ -555,6 +555,9 @@ pub struct GraphAlignment {
     pub score_bits: f64,
 }
 
+/// `(node_pos_opt, query_pos_opt, sub_bits, post_prob)` column record for DAG traceback.
+type DagCol = (Option<(usize, usize)>, Option<usize>, f64, f64);
+
 /// Align `seq_y` against a topologically ordered sequence DAG `nodes` using
 /// normalized Pair-HMM MDL + BOCPD DP with Forward-Backward posterior gating.
 #[must_use]
@@ -843,7 +846,7 @@ pub fn align_seq_to_dag_mdl(
     }
 
     // Viterbi traceback across DAG junctions
-    let mut raw_cols: Vec<(Option<(usize, usize)>, Option<usize>, f64, f64)> = Vec::new();
+    let mut raw_cols: Vec<DagCol> = Vec::new();
     let mut path_nodes = vec![best_end_node];
     let mut u = best_end_node;
     let mut i = nodes[u].seq.len();
@@ -909,7 +912,7 @@ pub fn align_seq_to_dag_mdl(
             let up = (i - 1) * cols + j;
             let vm = m_dp[u][up] + go_bits;
             let vix = ix_dp[u][up] + ge_bits;
-            state = if vm >= vix { 0 } else { 1 };
+            state = usize::from(vm < vix);
             i -= 1;
         } else if j > 0 {
             raw_cols.push((None, Some(j - 1), ge_bits, 0.0));

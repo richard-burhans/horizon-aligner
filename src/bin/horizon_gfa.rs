@@ -1,7 +1,7 @@
 //! Streaming GFA v1.0/v1.1 utility (`stats`, `list-walks`, `extract`) using `horizon_aligner::gfa`.
 
-use anyhow::{bail, Context, Result};
-use horizon_aligner::gfa::stream_gfa;
+use anyhow::{Context, Result, bail};
+use horizon_aligner::gfa::{parse_path_steps, parse_walk_steps, stream_gfa};
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs::File;
@@ -23,50 +23,6 @@ fn rev_comp_into(seq: &[u8], out: &mut Vec<u8>) {
             other => other,
         });
     }
-}
-
-/// Parse a GFA v1.0 path `segment_names` field such as `14+,15-` into `(segment_name, is_forward)` steps.
-fn parse_path_steps(seg_names: &str) -> Vec<(&str, bool)> {
-    seg_names
-        .split(',')
-        .filter_map(|tok| {
-            let tok = tok.trim();
-            if tok.len() < 2 {
-                return None;
-            }
-            let (name, orient) = tok.split_at(tok.len() - 1);
-            match orient {
-                "+" => Some((name, true)),
-                "-" => Some((name, false)),
-                _ => None,
-            }
-        })
-        .collect()
-}
-
-/// Parse a GFA v1.1 walk string such as `>12<34>56` into `(segment_name, is_forward)` steps.
-fn parse_walk_steps(walk: &str) -> Vec<(&str, bool)> {
-    let bytes = walk.as_bytes();
-    let mut steps = Vec::new();
-    let mut i = 0usize;
-    while i < bytes.len() {
-        let dir = bytes[i];
-        if dir != b'>' && dir != b'<' {
-            i += 1;
-            continue;
-        }
-        let is_fwd = dir == b'>';
-        let start = i + 1;
-        let mut end = start;
-        while end < bytes.len() && bytes[end] != b'>' && bytes[end] != b'<' {
-            end += 1;
-        }
-        if end > start {
-            steps.push((&walk[start..end], is_fwd));
-        }
-        i = end;
-    }
-    steps
 }
 
 fn read_vm_hwm_kb() -> Option<usize> {

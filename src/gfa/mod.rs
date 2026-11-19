@@ -92,6 +92,9 @@ pub fn parse_walk_steps(walk: &str) -> Vec<(&str, bool)> {
 }
 
 /// Stream a GFA from a file path (`.gfa` or `.gfa.gz`) or `"-"` for `stdin`.
+///
+/// # Errors
+/// Returns an error if the file cannot be opened/decompressed or if any callback fails.
 pub fn stream_gfa<P, FS, FL, FP, FW>(
     path: P,
     on_segment: FS,
@@ -125,6 +128,9 @@ where
 }
 
 /// Stream GFA records from any buffered reader.
+///
+/// # Errors
+/// Returns an error if reading fails or if any callback returns an error.
 pub fn stream_gfa_reader<R, FS, FL, FP, FW>(
     mut reader: R,
     mut on_segment: FS,
