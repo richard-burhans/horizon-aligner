@@ -707,10 +707,10 @@ def make_fig5_pangenome_suite() -> None:
         ("horizon_gfa stats\n(12 GB HPRC, 81.4M segs)", 196.93, 96.9, OI_PURPLE, (10, -2), "left"),
         ("horizon_gfa extract\n(GRCh38+CHM13 chr22)", 193.89, 474.2, OI_PURPLE, (10, -14), "left"),
         ("horizon_gfa extract\n(GRCh38+CHM13 chr6)", 317.00, 1526.7, OI_PURPLE, (10, 4), "left"),
-        ("horizon_lift --to-chrom chr22\n(500 chr22 windows)", 177.55, 708.8, OI_GREEN, (-10, 12), "right"),
+        ("horizon_lift --to-chrom chr22\n(500 chr22 windows)", 177.55, 708.8, OI_GREEN, (-12, -16), "right"),
         ("horizon_wga --resolve-dups\n(chr22 50.8 × 35.6 Mbp)", 69.10, 3971.6, OI_BLUE, (10, 12), "left"),
-        ("horizon_wga --resolve-dups\n(chr6 8cd5db0 170.8 × 110.7 Mbp)", 267.86, 12533.0, OI_BLUE, (10, -10), "left"),
-        ("horizon_wga --resolve-dups\n(chr6 20 Mbp q-arm)", 12.84, 2409.7, OI_SKY, (8, -18), "left"),
+        ("horizon_wga --resolve-dups\n(chr6 8cd5db0 170.8 × 110.7 Mbp)", 267.86, 12533.0, OI_BLUE, (-12, 0), "right"),
+        ("horizon_wga --resolve-dups\n(chr6 20 Mbp q-arm)", 12.84, 2409.7, OI_SKY, (12, -6), "left"),
     ]
     for label, wt, rss, col, (dx, dy), ha in suite_runs:
         ax2.scatter(wt, rss, color=col, s=64, edgecolor="white", linewidth=0.9, zorder=4)
