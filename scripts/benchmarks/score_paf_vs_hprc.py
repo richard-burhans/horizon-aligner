@@ -1,14 +1,22 @@
 #!/usr/bin/env python3
-"""Score minimap2 PAF (with CIGAR) against HPRC GRCh38.chr6 <-> CHM13.chr6 1-to-1 segments."""
+"""Score PAF (with CIGAR) against HPRC GRCh38.chr6 <-> CHM13.chr6 1-to-1 segments."""
+import argparse
 import json
 import re
 import time
 import numpy as np
 
+_ap = argparse.ArgumentParser()
+_ap.add_argument("--paf", default="/tmp/chr6_minimap2_asm5.paf")
+_ap.add_argument("--out-npz", default="/tmp/chr6_minimap2_data.npz")
+_ap.add_argument("--out-json", default="/tmp/chr6_minimap2_summary.json")
+_ap.add_argument("--all-records", action="store_true", help="Score all PAF records (not only tp:A:P)")
+_args = _ap.parse_args()
+
 TRUTH_TSV = "/tmp/hprc_chr6_truth_segments.tsv"
-PAF_PATH = "/tmp/chr6_minimap2_asm5.paf"
-OUT_NPZ = "/tmp/chr6_minimap2_data.npz"
-OUT_JSON = "/tmp/chr6_minimap2_summary.json"
+PAF_PATH = _args.paf
+OUT_NPZ = _args.out_npz
+OUT_JSON = _args.out_json
 
 X_LEN = 170_805_979
 Y_LEN = 110_724_939
@@ -57,22 +65,30 @@ with open(PAF_PATH) as f:
         parts = line.rstrip("\n").split("\t")
         if len(parts) < 12:
             continue
-        # Only score primary alignments? Let's check tp:A:P vs all
-        is_primary = any(tag == "tp:A:P" for tag in parts[12:])
-        if not is_primary:
-            continue
+        if not _args.all_records:
+            is_primary = any(tag == "tp:A:P" for tag in parts[12:])
+            if not is_primary:
+                continue
         n_records += 1
-        qstart = int(parts[2])
-        qend = int(parts[3])
+        qname, qlen = parts[0], int(parts[1])
+        qstart, qend = int(parts[2]), int(parts[3])
         strand = parts[4]
-        tstart = int(parts[7])
+        tname, tlen = parts[5], int(parts[6])
+        tstart, tend = int(parts[7]), int(parts[8])
         cg = next((tag[5:] for tag in parts[12:] if tag.startswith("cg:Z:")), None)
         if cg is None:
             continue
 
-        x_cur = tstart
-        y_cur = qstart if strand == "+" else qend - 1
-        y_step = 1 if strand == "+" else -1
+        swap_xy = ("GRCh38" in qname and "CHM13" in tname) or (qlen == X_LEN and tlen == Y_LEN)
+        if not swap_xy:
+            x_cur = tstart
+            y_cur = qstart if strand == "+" else qend - 1
+            y_step = 1 if strand == "+" else -1
+        else:
+            # Query is X (GRCh38, always + in CIGAR), Target is Y (CHM13, flipped if strand == '-')
+            x_cur = qstart
+            y_cur = tstart if strand == "+" else tend - 1
+            y_step = 1 if strand == "+" else -1
 
         xs_list = []
         ys_list = []
@@ -87,9 +103,15 @@ with open(PAF_PATH) as f:
                 x_cur += n
                 y_cur += y_step * n
             elif op in ("I", "S"):
-                y_cur += y_step * n
+                if not swap_xy:
+                    y_cur += y_step * n
+                else:
+                    x_cur += n
             elif op in ("D", "N"):
-                x_cur += n
+                if not swap_xy:
+                    x_cur += n
+                else:
+                    y_cur += y_step * n
 
         if not xs_list:
             continue
