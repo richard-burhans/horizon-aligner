@@ -62,10 +62,13 @@ hor_blocks_sample = []  # (xs, xe, ys, ye, strand) for blocks >= 500 bp
 
 total_aligned_pairs = 0
 pairs_on_hprc_x = 0
+pairs_on_multi_x = 0
+pairs_outside_hprc = 0
 exact_pairs = 0
 within_10bp = 0
 within_100bp = 0
 within_1kb = 0
+off_diag_1to1_pairs = 0
 n_blocks = 0
 
 def parse_maf_blocks(path):
@@ -136,7 +139,8 @@ for s1, s2 in parse_maf_blocks(MAF_PATH):
     ty = hprc_y_for_x[xs]
     mask = ty >= 0
     if np.any(mask):
-        pairs_on_hprc_x += int(np.count_nonzero(mask))
+        n_on_1to1 = int(np.count_nonzero(mask))
+        pairs_on_hprc_x += n_on_1to1
         diff = np.abs(ys[mask] - ty[mask])
         m0 = diff == 0
         m10 = diff <= 10
@@ -145,11 +149,20 @@ for s1, s2 in parse_maf_blocks(MAF_PATH):
         exact_pairs += int(np.count_nonzero(m0))
         within_10bp += int(np.count_nonzero(m10))
         within_100bp += int(np.count_nonzero(m100))
-        within_1kb += int(np.count_nonzero(m1k))
+        n_1k = int(np.count_nonzero(m1k))
+        within_1kb += n_1k
+        off_diag_1to1_pairs += (n_on_1to1 - n_1k)
         xm = xs[mask]
         hor_match_exact_x[xm[m0]] = True
         hor_match_100bp_x[xm[m100]] = True
         hor_match_1kb_x[xm[m1k]] = True
+    not_1to1 = ~mask
+    if np.any(not_1to1):
+        xs_non = xs[not_1to1]
+        is_multi = hprc_multi_x[xs_non]
+        n_multi_hits = int(np.count_nonzero(is_multi))
+        pairs_on_multi_x += n_multi_hits
+        pairs_outside_hprc += (len(xs_non) - n_multi_hits)
 
 print(f"MAF processed in {time.time()-t1:.1f}s: blocks={n_blocks:,}, pairs={total_aligned_pairs:,}", flush=True)
 
@@ -198,6 +211,9 @@ summary = {
     "horizon_and_hprc_x_bp": hor_and_hprc_x_bp,
     "horizon_and_hprc_y_bp": hor_and_hprc_y_bp,
     "pairs_on_hprc_1to1_x": pairs_on_hprc_x,
+    "pairs_on_hprc_multi_x": pairs_on_multi_x,
+    "pairs_outside_hprc_x": pairs_outside_hprc,
+    "off_diag_1to1_pairs_gt_1kb": off_diag_1to1_pairs,
     "exact_coord_pairs": exact_pairs,
     "within_10bp_pairs": within_10bp,
     "within_100bp_pairs": within_100bp,
