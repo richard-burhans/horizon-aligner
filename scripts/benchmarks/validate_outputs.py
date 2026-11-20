@@ -2,6 +2,9 @@
 """Validate MAF-FASTA coordinate/sequence invariants and GFA walk/link invariants."""
 import argparse
 import gzip
+import subprocess
+import tempfile
+from collections import Counter
 from pathlib import Path
 
 COMP = str.maketrans("ACGTNacgtn", "TGCANtgcan")
@@ -128,11 +131,100 @@ def validate_gfa(gfa_path: Path, max_errors: int = 20) -> tuple[int, int, int]:
     return len(segs), len(walks), errors
 
 
+def validate_lift_roundtrip(gfa_path: Path, from_sp: str, to_sp: str, lift_bin: Path, max_intervals: int = 200) -> tuple[int, int]:
+    seg_lens: dict[str, int] = {}
+    walks: list[tuple[str, str, int, list[tuple[str, str]]]] = []
+    with open(gfa_path) as f:
+        for line in f:
+            parts = line.rstrip("\n").split("\t")
+            if parts[0] == "S" and len(parts) >= 3:
+                ln = len(parts[2]) if parts[2] != "*" else 0
+                for tag in parts[3:]:
+                    if tag.startswith("LN:i:"):
+                        ln = int(tag[5:])
+                seg_lens[parts[1]] = ln
+            elif parts[0] == "W" and len(parts) >= 7:
+                sp, chrom, start = parts[1], parts[3], int(parts[4])
+                if sp not in (from_sp, to_sp):
+                    continue
+                walk_str = parts[6]
+                steps: list[tuple[str, str]] = []
+                i = 0
+                while i < len(walk_str):
+                    if walk_str[i] in "><":
+                        orient = "+" if walk_str[i] == ">" else "-"
+                        j = i + 1
+                        while j < len(walk_str) and walk_str[j] not in "><":
+                            j += 1
+                        steps.append((walk_str[i + 1:j], orient))
+                        i = j
+                    else:
+                        i += 1
+                walks.append((sp, chrom, start, steps))
+
+    from_counts = Counter(seg for sp, _, _, steps in walks if sp == from_sp for seg, _ in steps)
+    to_counts = Counter(seg for sp, _, _, steps in walks if sp == to_sp for seg, _ in steps)
+    shared_1to1 = {seg for seg, c in from_counts.items() if c == 1 and to_counts.get(seg, 0) == 1 and seg_lens.get(seg, 0) > 0}
+
+    bed_rows: list[tuple[str, int, int, str]] = []
+    for sp, chrom, start, steps in walks:
+        if sp != from_sp:
+            continue
+        pos = start
+        for seg, _ in steps:
+            ln = seg_lens.get(seg, 0)
+            if seg in shared_1to1 and len(bed_rows) < max_intervals:
+                bed_rows.append((chrom, pos, pos + ln, seg))
+            pos += ln
+
+    if not bed_rows:
+        return 0, 0
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_dir = Path(tmp)
+        in_bed = tmp_dir / "in.bed"
+        mid_bed = tmp_dir / "mid.bed"
+        back_bed = tmp_dir / "back.bed"
+        in_bed.write_text("".join(f"{c}\t{s}\t{e}\t{n}\n" for c, s, e, n in bed_rows))
+        subprocess.run(
+            [str(lift_bin), "--gfa", str(gfa_path), "--from", from_sp, "--to", to_sp, "--bed", str(in_bed), "--out", str(mid_bed), "--min-frac", "1.0"],
+            check=True, capture_output=True, text=True,
+        )
+        subprocess.run(
+            [str(lift_bin), "--gfa", str(gfa_path), "--from", to_sp, "--to", from_sp, "--bed", str(mid_bed), "--out", str(back_bed), "--min-frac", "1.0"],
+            check=True, capture_output=True, text=True,
+        )
+        orig_by_name = {n: (c, s, e) for c, s, e, n in bed_rows}
+        back_by_name = {}
+        for line in back_bed.read_text().splitlines():
+            if not line.strip() or line.startswith("#"):
+                continue
+            cols = line.split("\t")
+            back_by_name[cols[3]] = (cols[0], int(cols[1]), int(cols[2]))
+        errors = 0
+        for name, (exp_c, exp_s, exp_e) in orig_by_name.items():
+            got = back_by_name.get(name)
+            if got is None:
+                errors += 1
+                if errors <= 20:
+                    print(f"[LIFT ERROR] {name}: missing in roundtrip")
+                continue
+            got_c, got_s, got_e = got
+            got_c_norm = got_c[len(from_sp) + 1:] if got_c.startswith(f"{from_sp}.") else got_c
+            if (got_c_norm, got_s, got_e) != (exp_c, exp_s, exp_e):
+                errors += 1
+                if errors <= 20:
+                    print(f"[LIFT ERROR] {name}: expected {(exp_c, exp_s, exp_e)}, got {got}")
+        return len(bed_rows), errors
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Validate MAF-FASTA and GFA invariants")
+    parser = argparse.ArgumentParser(description="Validate MAF-FASTA, GFA, and liftover invariants")
     parser.add_argument("--maf", type=Path, help="MAF file to validate")
     parser.add_argument("--fastas", type=Path, nargs="*", default=[], help="FASTA files for MAF slice verification")
     parser.add_argument("--gfa", type=Path, help="GFA file to validate")
+    parser.add_argument("--lift-roundtrip", nargs=2, metavar=("FROM", "TO"), help="Verify x->y->x horizon_lift idempotency on --gfa")
+    parser.add_argument("--lift-bin", type=Path, default=Path(__file__).resolve().parents[2] / "target" / "release" / "horizon_lift")
     args = parser.parse_args()
 
     total_errors = 0
@@ -147,6 +239,10 @@ def main():
         n_segs, n_walks, errs = validate_gfa(args.gfa)
         print(f"GFA validated ({args.gfa}): segs={n_segs:,} walks={n_walks} errors={errs}")
         total_errors += errs
+        if args.lift_roundtrip:
+            n_tested, l_errs = validate_lift_roundtrip(args.gfa, args.lift_roundtrip[0], args.lift_roundtrip[1], args.lift_bin)
+            print(f"Lift roundtrip ({args.lift_roundtrip[0]} <-> {args.lift_roundtrip[1]}): intervals={n_tested} errors={l_errs}")
+            total_errors += l_errs
     if total_errors > 0:
         raise SystemExit(1)
 

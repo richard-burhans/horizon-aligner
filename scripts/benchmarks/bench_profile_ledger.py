@@ -88,6 +88,7 @@ def run_profiled(bin_path: Path, fa_x: Path, fa_y: Path, max_contigs: int = 1) -
 def main() -> None:
     parser = argparse.ArgumentParser(description="B3: [profile] stage-timing & RSS regression ledger")
     parser.add_argument("--record", action="store_true", help="Append results to profile_ledger.jsonl")
+    parser.add_argument("--include-full-chr6", action="store_true", help="Also run full GRCh38.chr6 x CHM13.chr6")
     parser.add_argument("--ledger", type=Path, default=DEFAULT_LEDGER)
     args = parser.parse_args()
 
@@ -101,6 +102,8 @@ def main() -> None:
     cases = [
         ("chr6_peri_5m", Path("/tmp/grch38_chr6_peri_5m.fa"), Path("/tmp/chm13_chr6_peri_5m.fa"), 1),
     ]
+    if args.include_full_chr6:
+        cases.append(("chr6_full", Path("/tmp/hprc_grch38_chr6.fa"), Path("/tmp/hprc_chm13_chr6.fa"), 1))
     rows = []
     for name, fx, fy, mc in cases:
         if not (fx.exists() and fy.exists()):
