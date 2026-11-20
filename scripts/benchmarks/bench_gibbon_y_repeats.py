@@ -107,7 +107,7 @@ def main() -> None:
         tmp_dir = Path(tmp)
         fastas, truth = extract_gibbon_fastas(args.maf, tmp_dir, args.max_blocks)
         ref_fa, tgt_fa = fastas[SPECIES[0]], fastas[SPECIES[1]]
-        for label, extra in [("default", []), ("rbest+resolve", ["--rbest", "--resolve-dups"])]:
+        for label, extra in [("default", []), ("one-to-one", ["--one-to-one"]), ("rbest+resolve", ["--rbest", "--resolve-dups"])]:
             maf_out = tmp_dir / f"gibbon_{label}.maf"
             gfa_out = tmp_dir / f"gibbon_{label}.gfa"
             res = subprocess.run(

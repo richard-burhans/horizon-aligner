@@ -5,9 +5,9 @@ use horizon_aligner::gfa::{GfaRecord, stream_gfa_records};
 use horizon_aligner::{
     AlignConfig, ContigIndex, DagSeedIndex, GraphNode, HmmParams, align_contig_pair_runs,
     align_seq_to_dag_seeded_indexed, format_gfa_blocks_runs, format_gfa_paralog_tags,
-    format_gfa_summary_runs, format_maf_blocks_runs, prepare_contig_index_opts,
-    read_fasta_contigs, resolve_alignment_duplications_runs, revcomp, select_top_k_pairs,
-    shared_seed_count,
+    format_gfa_summary_runs, format_maf_blocks_runs, net_one_to_one_runs,
+    prepare_contig_index_opts, read_fasta_contigs, resolve_alignment_duplications_runs, revcomp,
+    select_top_k_pairs, shared_seed_count,
 };
 use rayon::prelude::*;
 use std::collections::{HashMap, VecDeque};
@@ -17,6 +17,7 @@ use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::time::Instant;
 
+#[allow(clippy::struct_excessive_bools)]
 struct CliArgs {
     fa_x: PathBuf,
     fa_y: PathBuf,
@@ -24,6 +25,7 @@ struct CliArgs {
     maf_out: Option<PathBuf>,
     gfa_out: Option<PathBuf>,
     resolve_dups: bool,
+    one_to_one: bool,
     min_shared_seeds: usize,
     min_top_lcb: usize,
     top_k: usize,
@@ -42,6 +44,7 @@ fn parse_args() -> Result<Option<CliArgs>> {
     let mut maf_out = None;
     let mut gfa_out = None;
     let mut resolve_dups = false;
+    let mut one_to_one = false;
     let mut min_shared_seeds = 8usize;
     let mut min_top_lcb = 0usize;
     let mut top_k = 0usize;
@@ -99,6 +102,10 @@ fn parse_args() -> Result<Option<CliArgs>> {
             }
             "--resolve-dups" => {
                 resolve_dups = true;
+                i += 1;
+            }
+            "--one-to-one" => {
+                one_to_one = true;
                 i += 1;
             }
             "--rbest" => {
@@ -206,6 +213,7 @@ fn parse_args() -> Result<Option<CliArgs>> {
         maf_out,
         gfa_out,
         resolve_dups,
+        one_to_one,
         min_shared_seeds,
         min_top_lcb,
         top_k,
@@ -358,7 +366,15 @@ fn main() -> Result<()> {
     let aligned_results: Vec<Result<_>> = candidate_pairs
         .into_par_iter()
         .map(|(x_i, y_i)| {
-            let aln = align_contig_pair_runs(&idx_x[x_i].1, &idx_y[y_i].1, &cfg)?;
+            let mut aln = align_contig_pair_runs(&idx_x[x_i].1, &idx_y[y_i].1, &cfg)?;
+            if cli.one_to_one && !aln.aligned_runs.is_empty() {
+                aln.aligned_runs = net_one_to_one_runs(
+                    &aln.aligned_runs,
+                    contigs_x[x_i].1.len(),
+                    contigs_y[y_i].1.len(),
+                );
+                aln.total_pairs = aln.aligned_runs.iter().map(|r| r.len).sum();
+            }
             Ok((x_i, y_i, aln))
         })
         .collect();

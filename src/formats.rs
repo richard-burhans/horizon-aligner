@@ -313,11 +313,96 @@ pub fn resolve_alignment_duplications_runs(aln: &RunAlignment, bin_bp: usize) ->
     dups.into_iter().collect()
 }
 
+/// Net overlapping [`AlignedRun`]s within a contig pair to strict 1-to-1 coverage
+/// by prioritizing the longest colinear run-groups first and clipping overlapping bases.
+#[must_use]
+pub fn net_one_to_one_runs(runs: &[AlignedRun], len_x: usize, len_y: usize) -> Vec<AlignedRun> {
+    if runs.is_empty() || len_x == 0 || len_y == 0 {
+        return Vec::new();
+    }
+    let mut blocks: Vec<(usize, Vec<AlignedRun>)> = partition_colinear_run_groups(runs)
+        .into_iter()
+        .map(|(grp, _)| {
+            let total_bp: usize = grp.iter().map(|r| r.len).sum();
+            (total_bp, grp)
+        })
+        .collect();
+    blocks.sort_unstable_by_key(|(bp, grp)| (std::cmp::Reverse(*bp), grp[0].x_start));
+
+    let mut used_x = vec![0_u64; len_x.div_ceil(64)];
+    let mut used_y = vec![0_u64; len_y.div_ceil(64)];
+    let mut kept: Vec<AlignedRun> = Vec::with_capacity(runs.len());
+
+    for (_, grp) in blocks {
+        for r in grp {
+            let mut cur_start: Option<(usize, usize, usize)> = None;
+            for k in 0..r.len {
+                let x = r.x_start + k;
+                let y = if r.is_rc {
+                    r.y_start.saturating_sub(k)
+                } else {
+                    r.y_start + k
+                };
+                let free = x < len_x
+                    && y < len_y
+                    && ((used_x[x >> 6] >> (x & 63)) & 1) == 0
+                    && ((used_y[y >> 6] >> (y & 63)) & 1) == 0;
+                if free {
+                    used_x[x >> 6] |= 1_u64 << (x & 63);
+                    used_y[y >> 6] |= 1_u64 << (y & 63);
+                    match &mut cur_start {
+                        Some((_, _, sub_len)) => *sub_len += 1,
+                        None => cur_start = Some((x, y, 1)),
+                    }
+                } else if let Some((sx, sy, sub_len)) = cur_start.take()
+                    && sub_len >= 6
+                {
+                    kept.push(AlignedRun {
+                        x_start: sx,
+                        y_start: sy,
+                        len: sub_len,
+                        is_rc: r.is_rc,
+                    });
+                }
+            }
+            if let Some((sx, sy, sub_len)) = cur_start.take()
+                && sub_len >= 6
+            {
+                kept.push(AlignedRun {
+                    x_start: sx,
+                    y_start: sy,
+                    len: sub_len,
+                    is_rc: r.is_rc,
+                });
+            }
+        }
+    }
+    kept.sort_unstable_by_key(|r| (r.x_start, r.y_start, r.is_rc));
+    kept
+}
+
 /// Partition sorted [`AlignedRun`]s into colinear block groups of at least 12 bases.
 fn partition_colinear_run_groups(runs: &[AlignedRun]) -> Vec<(Vec<AlignedRun>, bool)> {
     let mut blocks: Vec<(Vec<AlignedRun>, bool)> = Vec::new();
     let mut active: Vec<Vec<AlignedRun>> = Vec::new();
+    let retire_chain = |ch: Vec<AlignedRun>, out: &mut Vec<(Vec<AlignedRun>, bool)>| {
+        let total_bp: usize = ch.iter().map(|x| x.len).sum();
+        if total_bp >= 12 {
+            let is_rev = ch[0].is_rc;
+            out.push((ch, is_rev));
+        }
+    };
     for &r in runs {
+        let mut idx = 0usize;
+        while idx < active.len() {
+            let last = active[idx][active[idx].len() - 1];
+            if last.x_start + last.len + 40 < r.x_start {
+                let ch = active.swap_remove(idx);
+                retire_chain(ch, &mut blocks);
+            } else {
+                idx += 1;
+            }
+        }
         let mut placed = false;
         for ch in &mut active {
             let prev = ch[ch.len() - 1];
@@ -342,15 +427,20 @@ fn partition_colinear_run_groups(runs: &[AlignedRun]) -> Vec<(Vec<AlignedRun>, b
             }
         }
         if !placed {
+            if active.len() >= 32
+                && let Some((oldest_idx, _)) = active.iter().enumerate().min_by_key(|(_, ch)| {
+                    let last = ch[ch.len() - 1];
+                    last.x_start + last.len
+                })
+            {
+                let ch = active.swap_remove(oldest_idx);
+                retire_chain(ch, &mut blocks);
+            }
             active.push(vec![r]);
         }
     }
     for ch in active {
-        let total_bp: usize = ch.iter().map(|r| r.len).sum();
-        if total_bp >= 12 {
-            let is_rev = ch[0].is_rc;
-            blocks.push((ch, is_rev));
-        }
+        retire_chain(ch, &mut blocks);
     }
     blocks.sort_by_key(|(grp, _)| grp[0].x_start);
     blocks
@@ -759,5 +849,27 @@ mod tests {
         assert!(blocks[1].1);
         assert_eq!(blocks[0].0.len(), 15);
         assert_eq!(blocks[1].0.len(), 15);
+    }
+
+    #[test]
+    fn net_one_to_one_runs_keeps_longest_and_clips_overlaps() {
+        let runs = vec![
+            super::AlignedRun {
+                x_start: 10,
+                y_start: 20,
+                len: 30,
+                is_rc: false,
+            },
+            super::AlignedRun {
+                x_start: 25,
+                y_start: 80,
+                len: 20,
+                is_rc: false,
+            },
+        ];
+        let netted = super::net_one_to_one_runs(&runs, 100, 120);
+        assert_eq!(netted.len(), 1);
+        assert_eq!(netted[0].x_start, 10);
+        assert_eq!(netted[0].len, 30);
     }
 }

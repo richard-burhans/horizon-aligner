@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
 """Compare Horizon GRCh38.chr6 vs CHM13.chr6 (q-arm) alignment against HPRC Minigraph-Cactus graph."""
+import argparse
 import json
 import numpy as np
 import time
 
+_ap = argparse.ArgumentParser()
+_ap.add_argument("--maf", default="/tmp/chr6_fixed.maf")
+_ap.add_argument("--out-npz", default="/tmp/chr6_comparison_data.npz")
+_ap.add_argument("--out-json", default="/tmp/chr6_comparison_summary.json")
+_args = _ap.parse_args()
+
 TRUTH_TSV = "/tmp/hprc_chr6_truth_segments.tsv"
-MAF_PATH = "/tmp/chr6_fixed.maf"
-OUT_NPZ = "/tmp/chr6_comparison_data.npz"
-OUT_JSON = "/tmp/chr6_comparison_summary.json"
+MAF_PATH = _args.maf
+OUT_NPZ = _args.out_npz
+OUT_JSON = _args.out_json
 
 X_LEN = 170_805_979
 Y_LEN = 110_724_939
