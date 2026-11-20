@@ -203,6 +203,28 @@ pub fn align_contig_pair_with_config(
     idx_y: &ContigIndex,
     cfg: &AlignConfig,
 ) -> Result<ContigAlignment, AlignError> {
+    let run_aln = align_contig_pair_runs(idx_x, idx_y, cfg)?;
+    Ok(ContigAlignment {
+        aligned_pairs: runs_to_pairs(&run_aln.aligned_runs),
+        lcbs_fwd: run_aln.lcbs_fwd,
+        lcbs_rc: run_aln.lcbs_rc,
+        macro_bubbles: run_aln.macro_bubbles,
+        internal_bubbles: run_aln.internal_bubbles,
+    })
+}
+
+/// Align two pre-indexed contigs using an explicit [`AlignConfig`], returning compact
+/// run-encoded intervals without materializing per-base `(usize, usize)` pairs.
+///
+/// # Errors
+///
+/// Returns [`AlignError::InvalidMask`] if internal masks fail validation.
+#[allow(clippy::too_many_lines)]
+pub fn align_contig_pair_runs(
+    idx_x: &ContigIndex,
+    idx_y: &ContigIndex,
+    cfg: &AlignConfig,
+) -> Result<RunAlignment, AlignError> {
     let span = MASK_PRIMARY_11_15.len();
     let seq_x = &idx_x.seq;
     let seq_y = &idx_y.seq;
@@ -221,8 +243,9 @@ pub fn align_contig_pair_with_config(
         .max()
         .unwrap_or(0);
     if cfg.min_top_lcb_anchors > 0 && top_lcb_anchors < cfg.min_top_lcb_anchors {
-        return Ok(ContigAlignment {
-            aligned_pairs: Vec::new(),
+        return Ok(RunAlignment {
+            aligned_runs: Vec::new(),
+            total_pairs: 0,
             lcbs_fwd: 0,
             lcbs_rc: 0,
             macro_bubbles: 0,
@@ -302,11 +325,12 @@ pub fn align_contig_pair_with_config(
         );
     }
 
-    ext.pairs_vec.sort_unstable();
-    ext.pairs_vec.dedup();
+    merge_colinear_runs(&mut ext.runs);
+    let total_pairs: usize = ext.runs.iter().map(|r| r.len).sum();
 
-    Ok(ContigAlignment {
-        aligned_pairs: ext.pairs_vec,
+    Ok(RunAlignment {
+        aligned_runs: ext.runs,
+        total_pairs,
         lcbs_fwd: lcbs_fwd.len(),
         lcbs_rc: lcbs_rc.len(),
         macro_bubbles: ext.macro_bubbles,
@@ -319,7 +343,7 @@ pub(super) const MAX_LOCAL_RESCUE_BP: usize = 40_000;
 const XDROP_BAND_W: usize = 40;
 
 struct ExtensionOutput {
-    pairs_vec: Vec<(usize, usize)>,
+    runs: Vec<AlignedRun>,
     macro_bubbles: usize,
     internal_bubbles: usize,
     t_dp: std::time::Duration,
@@ -343,7 +367,7 @@ fn schedule_and_run_extension(
     lcb_gate_bits: f64,
     cfg: &AlignConfig,
 ) -> Result<ExtensionOutput, AlignError> {
-    let mut pairs_vec: Vec<(usize, usize)> = Vec::new();
+    let mut runs_vec: Vec<AlignedRun> = Vec::new();
     let mut dp_jobs: Vec<(bool, usize, usize, usize, usize)> = Vec::new();
     let mut xdrop_jobs: Vec<(bool, usize, usize, usize, usize, bool)> = Vec::new();
     let mut macro_bubbles = 0usize;
@@ -366,7 +390,7 @@ fn schedule_and_run_extension(
             max_local_rescue_bp,
             cfg.max_ext,
             lcb_gate_bits,
-            &mut pairs_vec,
+            &mut runs_vec,
             &mut dp_jobs,
             &mut xdrop_jobs,
         )?;
@@ -405,11 +429,11 @@ fn schedule_and_run_extension(
         cfg,
         &dp_jobs,
         &xdrop_jobs,
-        &mut pairs_vec,
+        &mut runs_vec,
     );
     let t_dp = t_dp_start.elapsed();
     Ok(ExtensionOutput {
-        pairs_vec,
+        runs: runs_vec,
         macro_bubbles,
         internal_bubbles,
         t_dp,
@@ -428,8 +452,9 @@ fn execute_dp_and_xdrop(
     cfg: &AlignConfig,
     dp_jobs: &[(bool, usize, usize, usize, usize)],
     xdrop_jobs: &[(bool, usize, usize, usize, usize, bool)],
-    pairs_vec: &mut Vec<(usize, usize)>,
+    runs_vec: &mut Vec<AlignedRun>,
 ) -> usize {
+    type XDropResult = (bool, bool, Vec<(usize, usize)>);
     let pv_len = seq_y.len();
     let dp_results: Vec<(bool, usize, usize, GapResult)> = dp_jobs
         .par_iter()
@@ -452,19 +477,22 @@ fn execute_dp_and_xdrop(
         .collect();
 
     let mut internal_bubbles = 0usize;
+    let mut scratch_pairs: Vec<(usize, usize)> = Vec::new();
     for (is_rc, x0, y0, res) in dp_results {
         internal_bubbles += res.bubbles;
+        scratch_pairs.clear();
         for (dx, dy) in res.kept_pairs {
             let py = if is_rc {
                 pv_len - 1 - (y0 + dy)
             } else {
                 y0 + dy
             };
-            pairs_vec.push((x0 + dx, py));
+            scratch_pairs.push((x0 + dx, py));
         }
+        push_pairs_as_runs(&scratch_pairs, is_rc, runs_vec);
     }
 
-    let xdrop_results: Vec<(bool, Vec<(usize, usize)>)> = xdrop_jobs
+    let xdrop_results: Vec<XDropResult> = xdrop_jobs
         .par_iter()
         .map_init(
             xdrop::XDropScratch::default,
@@ -481,21 +509,26 @@ fn execute_dp_and_xdrop(
                     hmm_params,
                     scratch,
                 );
-                (is_rc, pairs)
+                (is_rc, rev, pairs)
             },
         )
         .collect();
 
-    for (is_rc, pairs) in xdrop_results {
+    for (is_rc, rev, mut pairs) in xdrop_results {
+        if rev {
+            pairs.reverse();
+        }
+        scratch_pairs.clear();
         for (px, py) in pairs {
             let y_orig = if is_rc { pv_len - 1 - py } else { py };
-            pairs_vec.push((px, y_orig));
+            scratch_pairs.push((px, y_orig));
         }
+        push_pairs_as_runs(&scratch_pairs, is_rc, runs_vec);
     }
     internal_bubbles
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn schedule_strand_lcb_jobs(
     is_rc: bool,
     seq_x: &[u8],
@@ -508,7 +541,7 @@ fn schedule_strand_lcb_jobs(
     max_local_rescue_bp: usize,
     max_ext: usize,
     effective_min_bits: f64,
-    pairs_vec: &mut Vec<(usize, usize)>,
+    runs_vec: &mut Vec<AlignedRun>,
     dp_jobs: &mut Vec<(bool, usize, usize, usize, usize)>,
     xdrop_jobs: &mut Vec<(bool, usize, usize, usize, usize, bool)>,
 ) -> Result<usize, AlignError> {
@@ -553,7 +586,9 @@ fn schedule_strand_lcb_jobs(
             all_anchors.push(w[1]);
         }
 
+        let mut anchor_pairs = Vec::with_capacity(default_span);
         for &(ax, ay) in &all_anchors {
+            anchor_pairs.clear();
             for off in 0..span_for((ax, ay)) {
                 if ax + off >= seq_x.len() || ay + off >= pv_len {
                     break;
@@ -564,9 +599,10 @@ fn schedule_strand_lcb_jobs(
                     } else {
                         ay + off
                     };
-                    pairs_vec.push((ax + off, py));
+                    anchor_pairs.push((ax + off, py));
                 }
             }
+            push_pairs_as_runs(&anchor_pairs, is_rc, runs_vec);
         }
 
         let (fx0, fy0) = all_anchors[0];

@@ -3,10 +3,11 @@
 use anyhow::{Context, Result, bail};
 use horizon_aligner::gfa::{GfaRecord, stream_gfa_records};
 use horizon_aligner::{
-    AlignConfig, ContigIndex, DagSeedIndex, GraphNode, HmmParams, align_contig_pair_with_config,
-    align_seq_to_dag_seeded_indexed, format_gfa_blocks, format_gfa_paralog_tags,
-    format_gfa_summary, format_maf_blocks, prepare_contig_index_opts, read_fasta_contigs,
-    resolve_alignment_duplications, revcomp, select_top_k_pairs, shared_seed_count,
+    AlignConfig, ContigIndex, DagSeedIndex, GraphNode, HmmParams, align_contig_pair_runs,
+    align_seq_to_dag_seeded_indexed, format_gfa_blocks_runs, format_gfa_paralog_tags,
+    format_gfa_summary_runs, format_maf_blocks_runs, prepare_contig_index_opts,
+    read_fasta_contigs, resolve_alignment_duplications_runs, revcomp, select_top_k_pairs,
+    shared_seed_count,
 };
 use rayon::prelude::*;
 use std::collections::{HashMap, VecDeque};
@@ -357,7 +358,7 @@ fn main() -> Result<()> {
     let aligned_results: Vec<Result<_>> = candidate_pairs
         .into_par_iter()
         .map(|(x_i, y_i)| {
-            let aln = align_contig_pair_with_config(&idx_x[x_i].1, &idx_y[y_i].1, &cfg)?;
+            let aln = align_contig_pair_runs(&idx_x[x_i].1, &idx_y[y_i].1, &cfg)?;
             Ok((x_i, y_i, aln))
         })
         .collect();
@@ -375,23 +376,36 @@ fn main() -> Result<()> {
         let (x_i, y_i, aln) = item?;
         let nx = idx_x[x_i].0.as_str();
         let ny = idx_y[y_i].0.as_str();
-        if aln.aligned_pairs.is_empty() {
+        if aln.aligned_runs.is_empty() {
             pruned_pairs += 1;
             continue;
         }
-        total_pairs += aln.aligned_pairs.len();
+        total_pairs += aln.total_pairs;
         let x_bits = &mut target_cov_by_contig[x_i];
         let y_bits = &mut query_cov_by_contig[y_i];
-        for &(px, py) in &aln.aligned_pairs {
-            if let Some(w) = x_bits.get_mut(px >> 6) {
-                *w |= 1_u64 << (px & 63);
+        for r in &aln.aligned_runs {
+            for px in r.x_start..(r.x_start + r.len) {
+                if let Some(w) = x_bits.get_mut(px >> 6) {
+                    *w |= 1_u64 << (px & 63);
+                }
             }
-            if let Some(w) = y_bits.get_mut(py >> 6) {
-                *w |= 1_u64 << (py & 63);
+            if r.is_rc {
+                let y_lo = r.y_start + 1 - r.len;
+                for py in y_lo..=r.y_start {
+                    if let Some(w) = y_bits.get_mut(py >> 6) {
+                        *w |= 1_u64 << (py & 63);
+                    }
+                }
+            } else {
+                for py in r.y_start..(r.y_start + r.len) {
+                    if let Some(w) = y_bits.get_mut(py >> 6) {
+                        *w |= 1_u64 << (py & 63);
+                    }
+                }
             }
         }
         total_bubbles += aln.macro_bubbles + aln.internal_bubbles;
-        let gfa_sum = format_gfa_summary(nx, ny, &aln);
+        let gfa_sum = format_gfa_summary_runs(nx, ny, &aln);
         if summary_out.is_empty() {
             summary_out.push_str(&gfa_sum);
         } else {
@@ -401,19 +415,19 @@ fn main() -> Result<()> {
         if let Some(w) = maf_writer.as_mut() {
             let sx = &contigs_x[x_i].1;
             let sy = &contigs_y[y_i].1;
-            let text = format_maf_blocks(nx, sx.len(), ny, sy.len(), sx, sy, &aln);
+            let text = format_maf_blocks_runs(nx, sx.len(), ny, sy.len(), sx, sy, &aln);
             let body = text
                 .strip_prefix("##maf version=1 scoring=horizon_mdl\n")
                 .unwrap_or(&text);
             w.write_all(body.as_bytes())?;
         }
         if let Some(w) = gfa_writer.as_mut() {
-            let text = format_gfa_blocks(nx, ny, &aln);
+            let text = format_gfa_blocks_runs(nx, ny, &aln);
             let body = text.strip_prefix("H\tVN:Z:1.1\n").unwrap_or(&text);
             w.write_all(body.as_bytes())?;
         }
         if cli.resolve_dups {
-            let dups = resolve_alignment_duplications(&aln, 1000);
+            let dups = resolve_alignment_duplications_runs(&aln, 1000);
             let tag_line = format_gfa_paralog_tags(nx, ny, &dups);
             if !tag_line.is_empty() {
                 summary_out.push_str(&tag_line);

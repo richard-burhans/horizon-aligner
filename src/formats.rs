@@ -1,7 +1,7 @@
 //! GFA v1.1, MAF v1, FASTA I/O, and e-graph paralog resolution helpers.
 
 use crate::egraph;
-use crate::mdl::ContigAlignment;
+use crate::mdl::{AlignedRun, ContigAlignment, RunAlignment};
 use crate::seeding::complement_base;
 use std::fmt::Write as _;
 
@@ -240,6 +240,215 @@ fn partition_colinear_blocks(pairs: &[(usize, usize)]) -> Vec<(Vec<(usize, usize
     }
     blocks.sort_unstable_by_key(|(b, _)| (b[0].0, b[0].1));
     blocks
+}
+
+/// Emit a compact GFA v1.1 summary segment for a [`RunAlignment`].
+#[must_use]
+pub fn format_gfa_summary_runs(name_x: &str, name_y: &str, aln: &RunAlignment) -> String {
+    let mut out = String::from("H\tVN:Z:1.1\n");
+    let total_bubbles = aln.macro_bubbles + aln.internal_bubbles;
+    let _ = writeln!(
+        out,
+        "S\t{name_x}__{name_y}\t*\tLN:i:{}\tLF:i:{}\tLR:i:{}\tHB:i:{total_bubbles}",
+        aln.total_pairs, aln.lcbs_fwd, aln.lcbs_rc
+    );
+    out
+}
+
+/// Emit detailed GFA v1.1 block segments, Horizon-Bubble nodes, and links for a [`RunAlignment`].
+#[must_use]
+pub fn format_gfa_blocks_runs(name_x: &str, name_y: &str, aln: &RunAlignment) -> String {
+    let mut out = String::from("H\tVN:Z:1.1\n");
+    if aln.aligned_runs.is_empty() {
+        return out;
+    }
+    let blocks = partition_colinear_run_groups(&aln.aligned_runs);
+    let runs: Vec<(usize, usize, usize, usize, char)> = blocks
+        .into_iter()
+        .map(|(grp, is_rev)| {
+            let strand = if is_rev { '-' } else { '+' };
+            let first = grp[0];
+            let last = grp[grp.len() - 1];
+            let total_bp: usize = grp.iter().map(|r| r.len).sum();
+            let x_end = last.x_start + last.len;
+            (first.x_start, first.y_start, total_bp, x_end, strand)
+        })
+        .collect();
+    for (idx, &(bx, by, blen, _x_end, bst)) in runs.iter().enumerate() {
+        let seg_id = format!("{name_x}__{name_y}__blk_{idx}");
+        let _ = writeln!(
+            out,
+            "S\t{seg_id}\t*\tLN:i:{blen}\tXS:i:{bx}\tYS:i:{by}\tST:Z:{bst}"
+        );
+        if idx > 0 {
+            let prev_seg = format!("{name_x}__{name_y}__blk_{}", idx - 1);
+            let prev_bst = runs[idx - 1].4;
+            let gap_x = bx.saturating_sub(runs[idx - 1].3);
+            if gap_x >= 6 {
+                let bub_id = format!("{name_x}__{name_y}__bub_{idx}");
+                let _ = writeln!(out, "S\t{bub_id}\t*\tLN:i:{gap_x}\tHB:i:1");
+                let _ = writeln!(out, "L\t{prev_seg}\t{prev_bst}\t{bub_id}\t+\t0M");
+                let _ = writeln!(out, "L\t{bub_id}\t+\t{seg_id}\t{bst}\t0M");
+            } else {
+                let _ = writeln!(out, "L\t{prev_seg}\t{prev_bst}\t{seg_id}\t{bst}\t0M");
+            }
+        }
+    }
+    out
+}
+
+/// Bucket colinear alignment run-groups into `bin_bp` reference windows and return
+/// deduplicated block labels collapsed by the e-graph duplication/inversion rules.
+#[must_use]
+pub fn resolve_alignment_duplications_runs(aln: &RunAlignment, bin_bp: usize) -> Vec<String> {
+    let bins: Vec<(String, i8)> = partition_colinear_run_groups(&aln.aligned_runs)
+        .into_iter()
+        .map(|(grp, is_rev)| {
+            let b_idx = grp[0].x_start / bin_bp.max(1);
+            (format!("B{b_idx}"), if is_rev { -1 } else { 1 })
+        })
+        .collect();
+    let mut dups = std::collections::BTreeSet::new();
+    collect_windowed_duplications(&bins, &mut dups);
+    dups.into_iter().collect()
+}
+
+/// Partition sorted [`AlignedRun`]s into colinear block groups of at least 12 bases.
+fn partition_colinear_run_groups(runs: &[AlignedRun]) -> Vec<(Vec<AlignedRun>, bool)> {
+    let mut blocks: Vec<(Vec<AlignedRun>, bool)> = Vec::new();
+    let mut active: Vec<Vec<AlignedRun>> = Vec::new();
+    for &r in runs {
+        let mut placed = false;
+        for ch in &mut active {
+            let prev = ch[ch.len() - 1];
+            if prev.is_rc != r.is_rc {
+                continue;
+            }
+            let prev_x_end = prev.x_start + prev.len;
+            if r.x_start < prev_x_end || r.x_start - prev_x_end > 40 {
+                continue;
+            }
+            let ok_y = if r.is_rc {
+                let prev_y_lim = prev.y_start + 1 - prev.len;
+                r.y_start < prev_y_lim && (prev_y_lim - 1 - r.y_start) <= 40
+            } else {
+                let prev_y_lim = prev.y_start + prev.len;
+                r.y_start >= prev_y_lim && (r.y_start - prev_y_lim) <= 40
+            };
+            if ok_y {
+                ch.push(r);
+                placed = true;
+                break;
+            }
+        }
+        if !placed {
+            active.push(vec![r]);
+        }
+    }
+    for ch in active {
+        let total_bp: usize = ch.iter().map(|r| r.len).sum();
+        if total_bp >= 12 {
+            let is_rev = ch[0].is_rc;
+            blocks.push((ch, is_rev));
+        }
+    }
+    blocks.sort_by_key(|(grp, _)| grp[0].x_start);
+    blocks
+}
+
+/// Group run-encoded alignments into colinear MAF blocks and emit standard MAF v1 text.
+#[must_use]
+#[allow(clippy::too_many_arguments)]
+pub fn format_maf_blocks_runs(
+    name_x: &str,
+    len_x: usize,
+    name_y: &str,
+    len_y: usize,
+    seq_x: &[u8],
+    seq_y: &[u8],
+    aln: &RunAlignment,
+) -> String {
+    let mut out = String::from("##maf version=1 scoring=horizon_mdl\n");
+    if aln.aligned_runs.is_empty() {
+        return out;
+    }
+    for (grp, is_rev) in partition_colinear_run_groups(&aln.aligned_runs) {
+        let valid = grp.iter().all(|r| {
+            r.len > 0
+                && r.x_start + r.len <= seq_x.len()
+                && if r.is_rc {
+                    r.y_start < seq_y.len() && r.y_start + 1 >= r.len
+                } else {
+                    r.y_start + r.len <= seq_y.len()
+                }
+        });
+        if !valid {
+            continue;
+        }
+        let x0 = grp[0].x_start;
+        let last = grp[grp.len() - 1];
+        let x_end = last.x_start + last.len;
+        let score_bp: usize = grp.iter().map(|r| r.len).sum();
+        let mut ax = String::with_capacity(x_end - x0 + 16);
+        let mut ay = String::with_capacity(x_end - x0 + 16);
+
+        let mut prev_x_end = x0;
+        let mut prev_y_next = grp[0].y_start;
+        for (ri, r) in grp.iter().enumerate() {
+            if ri > 0 {
+                for &bx in &seq_x[prev_x_end..r.x_start] {
+                    ax.push(bx.to_ascii_uppercase() as char);
+                    ay.push('-');
+                }
+                if is_rev {
+                    for &by in seq_y[(r.y_start + 1)..prev_y_next].iter().rev() {
+                        ax.push('-');
+                        ay.push(complement_base(by.to_ascii_uppercase()) as char);
+                    }
+                } else {
+                    for &by in &seq_y[prev_y_next..r.y_start] {
+                        ax.push('-');
+                        ay.push(by.to_ascii_uppercase() as char);
+                    }
+                }
+            }
+            for &bx in &seq_x[r.x_start..(r.x_start + r.len)] {
+                ax.push(bx.to_ascii_uppercase() as char);
+            }
+            if is_rev {
+                let y_lo = r.y_start + 1 - r.len;
+                for &by in seq_y[y_lo..=r.y_start].iter().rev() {
+                    ay.push(complement_base(by.to_ascii_uppercase()) as char);
+                }
+                prev_y_next = y_lo;
+            } else {
+                let y_hi = r.y_start + r.len;
+                for &by in &seq_y[r.y_start..y_hi] {
+                    ay.push(by.to_ascii_uppercase() as char);
+                }
+                prev_y_next = y_hi;
+            }
+            prev_x_end = r.x_start + r.len;
+        }
+
+        let (y_start, y_span, y_strand) = if is_rev {
+            let y_lo = last.y_start + 1 - last.len;
+            let y_hi = grp[0].y_start + 1;
+            (len_y.saturating_sub(y_hi), y_hi - y_lo, '-')
+        } else {
+            let y_lo = grp[0].y_start;
+            let y_hi = last.y_start + last.len;
+            (y_lo, y_hi - y_lo, '+')
+        };
+
+        let _ = writeln!(out, "a score={score_bp}.0");
+        let _ = writeln!(out, "s {name_x} {x0} {} + {len_x} {ax}", x_end - x0);
+        let _ = writeln!(
+            out,
+            "s {name_y} {y_start} {y_span} {y_strand} {len_y} {ay}\n"
+        );
+    }
+    out
 }
 
 /// Group aligned `(x, y)` pairs into colinear MAF blocks and emit standard MAF v1 text.

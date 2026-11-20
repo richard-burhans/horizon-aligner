@@ -12,13 +12,16 @@ pub mod seeding;
 
 pub use bocpd::bocpd_gc_profile;
 pub use formats::{
-    MafRow, format_gfa_blocks, format_gfa_paralog_tags, format_gfa_summary, format_maf_blocks,
+    MafRow, format_gfa_blocks, format_gfa_blocks_runs, format_gfa_paralog_tags,
+    format_gfa_summary, format_gfa_summary_runs, format_maf_blocks, format_maf_blocks_runs,
     matches_sample_prefix, parse_maf_s_line, parse_two_row_maf_blocks, read_fasta_contigs,
-    read_vm_hwm_kb, resolve_alignment_duplications, resolve_lcb_duplications, strip_sample_prefix,
+    read_vm_hwm_kb, resolve_alignment_duplications, resolve_alignment_duplications_runs,
+    resolve_lcb_duplications, strip_sample_prefix,
 };
 pub use mdl::{
-    AlignConfig, ContigAlignment, DagSeedIndex, GapResult, GraphAlignment, GraphNode, HmmParams,
-    align_contig_pair, align_contig_pair_indexed, align_contig_pair_indexed_with_min_lcb,
+    AlignConfig, AlignedRun, ContigAlignment, DagSeedIndex, GapResult, GraphAlignment, GraphNode,
+    HmmParams, RunAlignment, align_contig_pair, align_contig_pair_indexed,
+    align_contig_pair_indexed_with_min_lcb, align_contig_pair_runs,
     align_contig_pair_with_config, align_seq_to_dag_mdl, align_seq_to_dag_seeded,
     align_seq_to_dag_seeded_indexed, banded_mdl_gap, banded_mdl_gap_with_params, mdl_xdrop_extend,
     mdl_xdrop_extend_with_params,
