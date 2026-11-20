@@ -293,7 +293,17 @@ fn hal_hdf5_write_and_seek_roundtrip() {
     let root_names = read_hdf5_v0_root_names_seek(&mut cursor, sb)
         .expect("root names")
         .expect("some names");
-    assert_eq!(root_names, vec!["hg38".to_owned(), "mm10".to_owned()]);
+    assert_eq!(
+        root_names,
+        vec![
+            "Genomes".to_owned(),
+            "Meta".to_owned(),
+            "Phylogeny".to_owned(),
+            "Verison".to_owned(),
+            "hg38".to_owned(),
+            "mm10".to_owned(),
+        ]
+    );
 
     let root_entries = read_hdf5_v0_group_entries_seek(&mut cursor, root_addr)
         .expect("root entries")
@@ -336,7 +346,7 @@ fn hal_hdf5_write_and_seek_roundtrip() {
         .expect("bot bytes");
     assert_eq!(
         decode_hal_bottom_array(&bot_raw, 1),
-        vec![(0, 12, -1, vec![(0, false)])]
+        vec![(0, 12, -1, vec![(0, false)]), (12, 0, -1, vec![(-1, false)])]
     );
 }
 
@@ -351,7 +361,7 @@ fn hal_hdf5_write_group_exceeding_256_entries_roundtrips() {
     let sb = read_hdf5_superblock(&bytes).expect("superblock");
     let root_addr = usize::try_from(sb.root_group_addr.expect("root addr")).expect("usize");
     let entries = read_hdf5_v0_group_entries(&bytes, root_addr).expect("root entries");
-    assert_eq!(entries.len(), 301);
+    assert_eq!(entries.len(), 305);
     assert!(entries.iter().any(|e| e.name == "ref0"));
     assert!(entries.iter().any(|e| e.name == "q_0000"));
     assert!(entries.iter().any(|e| e.name == "q_0299"));
@@ -727,4 +737,69 @@ fn multi_contig_hal_hdf5_write_and_seek_roundtrip() {
         .expect("bytes")
         .expect("bytes");
     assert_eq!(decode_hal_seq_names(&sn_raw, sn_stride), vec!["chr1", "chr2"]);
+}
+
+#[test]
+fn hal_hdf5_export_normalizes_gaps_overlaps_and_paralogy_cycles() {
+    // Odd-length ref (15bp) with two overlapping query blocks ([0..10) and [4..12))
+    // plus unaligned tail [12..15), and a paralogous block on q1.
+    let ref_dna = b"ACGTACGTACGTACG";
+    let q1_dna = b"ACGTACGTACNNACGTACGTAC";
+    let q2_dna = b"ACGTACGT";
+    let hal = HalAlignment::from_star_blocks(
+        "hg38",
+        ref_dna,
+        &[
+            ("q1".to_owned(), q1_dna.to_vec()),
+            ("q2".to_owned(), q2_dna.to_vec()),
+        ],
+        &[
+            (0, 0, 0, 10, false),
+            (0, 0, 12, 10, false),
+            (1, 4, 0, 8, false),
+        ],
+    );
+    let bytes = hal.to_hdf5_bytes();
+    assert_eq!(&bytes[96..100], b"GCOL");
+
+    let sb = read_hdf5_superblock(&bytes).expect("superblock");
+    let root_addr = sb.root_group_addr.expect("root addr");
+    let mut cursor = std::io::Cursor::new(&bytes);
+    let root_entries = read_hdf5_v0_group_entries_seek(&mut cursor, root_addr)
+        .expect("root entries")
+        .expect("some entries");
+    for req in ["Meta", "Phylogeny", "Genomes", "Verison", "hg38", "q1", "q2"] {
+        assert!(
+            root_entries.iter().any(|e| e.name == req),
+            "missing root entry {req}"
+        );
+    }
+
+    let q1 = root_entries.iter().find(|e| e.name == "q1").expect("q1");
+    let q1_ds = read_hdf5_v0_group_entries_seek(&mut cursor, q1.object_header_addr)
+        .expect("q1 ds")
+        .expect("some ds");
+    assert!(q1_ds.iter().any(|e| e.name == "Meta"));
+    assert!(q1_ds.iter().any(|e| e.name == "Rup"));
+
+    let top_obj = q1_ds
+        .iter()
+        .find(|e| e.name == "TOP_ARRAY")
+        .expect("TOP_ARRAY");
+    let top_raw = read_hdf5_v0_dataset_bytes_seek(&mut cursor, top_obj.object_header_addr)
+        .expect("top read")
+        .expect("top bytes");
+    let tops = decode_hal_top_array(&top_raw);
+    // Last entry is sentinel with start == q1_dna.len()
+    assert_eq!(tops.last().expect("sentinel").0, 22);
+    // First two segments ([0..4), [4..10)) and their paralogs ([12..16), [16..22)) form 2-cycles
+    let linked: Vec<_> = tops[..tops.len() - 1]
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.3 >= 0)
+        .collect();
+    assert_eq!(linked.len(), 4);
+    for &(idx, t) in &linked {
+        assert!(t.2 >= 0, "paralogous segment {idx} must have next_paralog");
+    }
 }
