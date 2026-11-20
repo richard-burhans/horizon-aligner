@@ -105,7 +105,7 @@ target/release/horizon_guide --progressive --rbest --hal out.hal tree.nwk genome
   - Full-graph `horizon_gfa stats` (`81.4M` segments, `3.29 Gbp`, `113.0M` links): **196.93 s**, **96.9 MB** peak RSS.
   - `horizon_lift --bridge-bp 10` (`500` `GRCh38.chr22` 1-kb windows → `CHM13.chr22`): **177.55 s**, **708.8 MB** peak RSS (`472` exact, `5` partial, `15` split, `8` unmapped).
   - `horizon_wga --resolve-dups` (`GRCh38.chr22` vs `CHM13.chr22`): **69.10 s**, **3,971.6 MB** peak RSS (`95.6%` of `CHM13.chr22` q-arm).
-  - `horizon_wga --resolve-dups` (`GRCh38.chr6` `170.8 Mbp` vs `CHM13.chr6` `110.7 Mbp`): **258.88s–267.86s** (`282.2M` pairs, `98.9%` of `CHM13.chr6` q-arm), **99.82%** exact base-coordinate precision against `1,628,018` `1-to-1` HPRC graph segments (`76.44%` exact recall).
+  - `horizon_wga --resolve-dups` (`GRCh38.chr6` `170.8 Mbp` vs `CHM13.chr6` `110.7 Mbp`): **258.88s–304.53s** (`282.2M` pairs, `98.9%` of `CHM13.chr6` q-arm), **99.54%** base-coverage recall and **97.96%** exact base-coordinate recall against `1,628,018` `1-to-1` HPRC graph segments (vs `minimap2 -x asm5`: `46.95s`, `2,947.5 MB` RSS, `99.71%` exact recall / `99.75%` exact precision).
 
 ## Documentation
 

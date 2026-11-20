@@ -1,0 +1,19 @@
+{
+  "primary_records": 66,
+  "total_pairs": 110204880,
+  "unique_x_bp": 110204819,
+  "unique_y_bp": 110204832,
+  "pairs_on_hprc_1to1_x": 110033678,
+  "exact_coord_pairs": 109759180,
+  "within_10bp_pairs": 109986277,
+  "within_100bp_pairs": 110016847,
+  "within_1kb_pairs": 110031399,
+  "exact_coord_x_bp": 109759180,
+  "exact_coord_recall_on_hprc_1to1": 0.997058491961383,
+  "within_100bp_recall_on_hprc_1to1": 0.9993989716304036,
+  "within_1kb_recall_on_hprc_1to1": 0.9995307903609812,
+  "exact_coord_precision_on_shared": 0.997505327414394,
+  "within_10bp_precision_on_shared": 0.9995692137092791,
+  "within_100bp_precision_on_shared": 0.9998470377405725,
+  "within_1kb_precision_on_shared": 0.9999792881593943
+}

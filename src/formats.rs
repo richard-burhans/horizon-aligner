@@ -159,6 +159,7 @@ pub fn format_gfa_paralog_tags(name_x: &str, name_y: &str, dups: &[String]) -> S
 
 /// Partition aligned pairs into colinear runs of at least 12 bases (sorting by `x` if unsorted).
 fn partition_colinear_blocks(pairs: &[(usize, usize)]) -> Vec<(Vec<(usize, usize)>, bool)> {
+    type ActiveChain = (Vec<(usize, usize)>, Option<bool>);
     let sorted_storage: Vec<(usize, usize)>;
     let ordered: &[(usize, usize)] = if pairs.windows(2).all(|w| w[0].0 <= w[1].0) {
         pairs
@@ -169,38 +170,75 @@ fn partition_colinear_blocks(pairs: &[(usize, usize)]) -> Vec<(Vec<(usize, usize
         &sorted_storage
     };
     let mut blocks: Vec<(Vec<(usize, usize)>, bool)> = Vec::new();
-    let mut cur: Vec<(usize, usize)> = Vec::new();
-    let mut cur_rev: Option<bool> = None;
+    let mut active: Vec<ActiveChain> = Vec::new();
 
     for &(x, y) in ordered {
-        if let Some(&(px, py)) = cur.last() {
-            let dx_ok = x > px && (x - px) <= 20;
-            let fwd = dx_ok && y > py && (y - py) <= 20;
-            let rev = dx_ok && py > y && (py - y) <= 20;
-            let matches = match cur_rev {
-                None => fwd || rev,
-                Some(false) => fwd,
-                Some(true) => rev,
-            };
-            if matches {
-                if cur_rev.is_none() {
-                    cur_rev = Some(rev);
+        let mut i = 0;
+        while i < active.len() {
+            let px = active[i].0.last().map_or(x, |&(px, _)| px);
+            if x.saturating_sub(px) > 20 {
+                let (chain, rev_opt) = active.swap_remove(i);
+                if chain.len() >= 12 {
+                    blocks.push((chain, rev_opt.unwrap_or(false)));
                 }
-                cur.push((x, y));
-                continue;
+            } else {
+                i += 1;
             }
         }
-        if cur.len() >= 12 {
-            blocks.push((std::mem::take(&mut cur), cur_rev.unwrap_or(false)));
-        } else {
-            cur.clear();
+
+        let mut best_idx: Option<usize> = None;
+        let mut best_dist = usize::MAX;
+        let mut best_is_rev = false;
+        for (idx, (chain, cur_rev)) in active.iter().enumerate() {
+            if let Some(&(px, py)) = chain.last()
+                && x > px
+                && (x - px) <= 20
+            {
+                let fwd = y > py && (y - py) <= 20;
+                let rev = py > y && (py - y) <= 20;
+                let matches = match cur_rev {
+                    None => fwd || rev,
+                    Some(false) => fwd,
+                    Some(true) => rev,
+                };
+                if matches {
+                    let dist = (x - px) + y.abs_diff(py);
+                    if dist < best_dist {
+                        best_dist = dist;
+                        best_idx = Some(idx);
+                        best_is_rev = rev && !fwd;
+                    }
+                }
+            }
         }
-        cur_rev = None;
-        cur.push((x, y));
+
+        if let Some(idx) = best_idx {
+            if active[idx].1.is_none() {
+                active[idx].1 = Some(best_is_rev);
+            }
+            active[idx].0.push((x, y));
+        } else {
+            if active.len() >= 32
+                && let Some((oldest_idx, _)) = active
+                    .iter()
+                    .enumerate()
+                    .min_by_key(|(_, (c, _))| c.last().map_or(0, |&(px, _)| px))
+            {
+                let (chain, rev_opt) = active.swap_remove(oldest_idx);
+                if chain.len() >= 12 {
+                    blocks.push((chain, rev_opt.unwrap_or(false)));
+                }
+            }
+            active.push((vec![(x, y)], None));
+        }
     }
-    if cur.len() >= 12 {
-        blocks.push((cur, cur_rev.unwrap_or(false)));
+
+    for (chain, rev_opt) in active {
+        if chain.len() >= 12 {
+            blocks.push((chain, rev_opt.unwrap_or(false)));
+        }
     }
+    blocks.sort_unstable_by_key(|(b, _)| (b[0].0, b[0].1));
     blocks
 }
 
@@ -497,5 +535,20 @@ mod tests {
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].0.src, "hg38.chr1");
         assert_eq!(blocks[0].1.src, "mm10.chr1");
+    }
+
+    #[test]
+    fn partition_colinear_blocks_preserves_overlapping_chains() {
+        let mut pairs = Vec::new();
+        for i in 0..15 {
+            pairs.push((100 + i, 200 + i));
+            pairs.push((100 + i, 500 - i));
+        }
+        let blocks = super::partition_colinear_blocks(&pairs);
+        assert_eq!(blocks.len(), 2);
+        assert!(!blocks[0].1);
+        assert!(blocks[1].1);
+        assert_eq!(blocks[0].0.len(), 15);
+        assert_eq!(blocks[1].0.len(), 15);
     }
 }

@@ -808,6 +808,112 @@ def make_fig6_suite_and_vg() -> None:
     save_both(fig, "fig6_suite_and_vg")
 
 
+def make_fig7_chr6_hprc_comparison() -> None:
+    """Three-panel BioVis figure: GRCh38.chr6 x CHM13.chr6 Horizon vs minimap2 vs HPRC graph."""
+    import json
+
+    data_dir = Path(__file__).resolve().parent.parent / "data"
+    hor_npz = data_dir / "chr6_hprc_comparison.npz"
+    hor_json = data_dir / "chr6_hprc_comparison.json"
+    mm_npz = data_dir / "chr6_minimap2_data.npz"
+    mm_json = data_dir / "chr6_minimap2_summary.json"
+    if not (hor_npz.exists() and hor_json.exists() and mm_npz.exists() and mm_json.exists()):
+        print("Skipping fig7_chr6_hprc_comparison (manuscript/data/chr6_*.npz not found)")
+        return
+
+    hdata = np.load(hor_npz)
+    mdata = np.load(mm_npz)
+    with open(hor_json) as f:
+        hsum = json.load(f)
+    with open(mm_json) as f:
+        msum = json.load(f)
+
+    x_hprc = hdata["x_hprc_bp"] / 1e6
+    x_hor_exact = hdata["x_exact_bp"] / 1e6
+    x_mm_exact = mdata["x_mm_exact_bp"] / 1e6
+    truth_segs = hdata["truth_segs"]
+    hor_blocks = hdata["hor_blocks"]
+
+    width_2col = 170.0 * 0.0393701
+    fig = plt.figure(figsize=(width_2col, 4.9))
+    gs = fig.add_gridspec(2, 2, height_ratios=[1.15, 1.0], width_ratios=[1.15, 1.0], hspace=0.46, wspace=0.34)
+
+    # Panel A: Whole-chromosome synteny dot-plot
+    ax_a = fig.add_subplot(gs[0, 0])
+    tx_mid = (truth_segs[:, 0] + truth_segs[:, 1]) / 2.0 / 1e6
+    ty_mid = ((truth_segs[:, 2] + truth_segs[:, 3]) / 2.0 + hsum["y_offset_bp"]) / 1e6
+    ax_a.scatter(tx_mid, ty_mid, s=1.2, c=OI_SKY, alpha=0.35, edgecolors="none", rasterized=True, label="HPRC 1-to-1 segs (≥500 bp)")
+
+    long_mask = (hor_blocks[:, 1] - hor_blocks[:, 0]) >= 2000
+    hb_plot = hor_blocks[long_mask] if np.any(long_mask) else hor_blocks
+    hx_mid = (hb_plot[:, 0] + hb_plot[:, 1]) / 2.0 / 1e6
+    hy_mid = ((hb_plot[:, 2] + hb_plot[:, 3]) / 2.0 + hsum["y_offset_bp"]) / 1e6
+    ax_a.scatter(hx_mid, hy_mid, s=1.0, c=OI_BLUE, alpha=0.55, edgecolors="none", rasterized=True, label="Horizon blocks (≥2 kb)")
+
+    ax_a.axvline(61.0, color=OI_ORANGE, linestyle="--", linewidth=0.9, alpha=0.9)
+    ax_a.text(63.5, 70.0, "q-arm\nstart", fontsize=6.5, color=OI_VERMILION, va="bottom",
+              bbox=dict(boxstyle="round,pad=0.15", facecolor="white", edgecolor="none", alpha=0.85))
+    ax_a.set_xlim(0, 171)
+    ax_a.set_ylim(61, 173)
+    ax_a.set_xlabel("GRCh38.chr6 position (Mbp)", fontsize=8.5)
+    ax_a.set_ylabel("CHM13.chr6 position (Mbp)", fontsize=8.5)
+    ax_a.tick_params(labelsize=7.5)
+    ax_a.legend(loc="upper left", frameon=True, facecolor="white", framealpha=0.92, edgecolor="none", fontsize=6.4, markerscale=3.0, handletextpad=0.3)
+    despine(ax_a)
+    ax_a.text(-0.18, 1.08, "A", transform=ax_a.transAxes, fontsize=11, fontweight="bold", va="top")
+
+    # Panel B: Horizon (many-to-many) vs minimap2 -x asm5 (1-to-1 primary) vs HPRC 1-to-1 truth
+    ax_b = fig.add_subplot(gs[0, 1])
+    metrics = ["Base cov.\nrecall", "Exact (0 bp)\nrecall", "≤ 1 kb\nrecall", "Exact (0 bp)\npair prec."]
+    hor_vals = [
+        100.0 * hsum["x_base_coverage_recall_of_hprc"],
+        100.0 * hsum["exact_coord_recall_on_hprc_1to1"],
+        100.0 * hsum["within_1kb_recall_on_hprc_1to1"],
+        100.0 * hsum["exact_coord_precision_on_shared"],
+    ]
+    mm_vals = [
+        100.0 * (msum["pairs_on_hprc_1to1_x"] / hsum["hprc_1to1_x_bp"]),
+        100.0 * msum["exact_coord_recall_on_hprc_1to1"],
+        100.0 * msum["within_1kb_recall_on_hprc_1to1"],
+        100.0 * msum["exact_coord_precision_on_shared"],
+    ]
+    y_pos = np.arange(len(metrics))
+    h = 0.34
+    b1 = ax_b.barh(y_pos - h / 2, hor_vals, height=h, color=OI_BLUE, alpha=0.92, label="Horizon (many-to-many)")
+    b2 = ax_b.barh(y_pos + h / 2, mm_vals, height=h, color=OI_ORANGE, alpha=0.92, label="minimap2 -x asm5 (1-to-1)")
+    ax_b.set_yticks(y_pos)
+    ax_b.set_yticklabels(metrics, fontsize=7.3)
+    ax_b.invert_yaxis()
+    ax_b.set_xlim(0, 118)
+    ax_b.set_xlabel("Agreement with HPRC 1-to-1 segs (%)", fontsize=8.5)
+    ax_b.tick_params(labelsize=7.5)
+    for bar, v in zip(b1, hor_vals):
+        ax_b.text(v + 1.2, bar.get_y() + bar.get_height() / 2, f"{v:.1f}%", va="center", ha="left", fontsize=6.4, color=OI_BLUE, fontweight="bold")
+    for bar, v in zip(b2, mm_vals):
+        ax_b.text(v + 1.2, bar.get_y() + bar.get_height() / 2, f"{v:.1f}%", va="center", ha="left", fontsize=6.4, color=OI_VERMILION, fontweight="bold")
+    ax_b.legend(loc="lower left", bbox_to_anchor=(-0.02, 1.01), ncol=1, frameon=False, fontsize=6.4, handlelength=1.4)
+    despine(ax_b)
+    ax_b.text(-0.22, 1.14, "B", transform=ax_b.transAxes, fontsize=11, fontweight="bold", va="top")
+
+    # Panel C: 1-Mbp binned exact coordinate recall across GRCh38.chr6
+    ax_c = fig.add_subplot(gs[1, :])
+    bins_mb = np.arange(len(x_hprc)) + 0.5
+    ax_c.fill_between(bins_mb, 0, x_hprc, color="#D1D5DB", alpha=0.55, label="HPRC 1-to-1 shared bp")
+    ax_c.plot(bins_mb, x_mm_exact, color=OI_ORANGE, linewidth=1.1, linestyle="--", label="minimap2 -x asm5 exact (Δy = 0 bp)")
+    ax_c.plot(bins_mb, x_hor_exact, color=OI_BLUE, linewidth=1.15, linestyle="-", label="Horizon exact (Δy = 0 bp)")
+    ax_c.axvspan(58.0, 62.0, color=OI_ORANGE, alpha=0.14, label="Centromere / q-arm")
+    ax_c.set_xlim(0, 171)
+    ax_c.set_ylim(0, 1.05)
+    ax_c.set_xlabel("GRCh38.chr6 position (1 Mbp bins, n = 171)", fontsize=8.5)
+    ax_c.set_ylabel("Exact match fraction / Mbp", fontsize=8.5)
+    ax_c.tick_params(labelsize=7.5)
+    ax_c.legend(loc="upper left", bbox_to_anchor=(0.01, 0.96), ncol=1, frameon=False, fontsize=6.4, handlelength=1.5)
+    despine(ax_c)
+    ax_c.text(-0.08, 1.08, "C", transform=ax_c.transAxes, fontsize=11, fontweight="bold", va="top")
+
+    save_both(fig, "fig7_chr6_hprc_comparison")
+
+
 if __name__ == "__main__":
     make_fig1_architecture()
     make_fig2_benchmarks()
@@ -815,10 +921,11 @@ if __name__ == "__main__":
     make_fig4_ablation_profile()
     make_fig5_pangenome_suite()
     make_fig6_suite_and_vg()
+    make_fig7_chr6_hprc_comparison()
     make_fig_c1_bocpd_mdl_trace()
     make_fig_c2_bandgrid_egraph()
     make_fig_c3_hdf5_hal_seek()
     make_fig_g1_hoxd70_vs_mdl_gc()
     make_fig_g2_hal_binary_layouts()
     make_fig_g3_horizon_bubble_anatomy()
-    print(f"Generated 12 figures (.png + .svg + .pdf) in {OUT_DIR}")
+    print(f"Generated 13 figures (.png + .svg + .pdf) in {OUT_DIR}")
