@@ -291,6 +291,7 @@ fn main() -> Result<()> {
     );
     let (merged_maf, merged_gfa, total_blocks, multi_blocks) =
         merge_pairwise_mafs(hinge_sp, &pairwise_mafs, 1000);
+    let merged_maf = prefix_hinge_species_in_maf(hinge_sp, &merged_maf);
     let out_prefix = &cli.out_prefix;
     fs::write(format!("{out_prefix}.maf"), merged_maf)
         .with_context(|| format!("writing {out_prefix}.maf"))?;
@@ -312,13 +313,57 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+fn prefix_hinge_species_in_maf(hinge_sp: &str, maf: &str) -> String {
+    let prefix = format!("{hinge_sp}.");
+    let mut out = String::with_capacity(maf.len() + 256);
+    let mut first_s_in_block = true;
+    for line in maf.lines() {
+        if line.is_empty() || line.starts_with("a ") || line == "a" {
+            first_s_in_block = true;
+            out.push_str(line);
+            out.push('\n');
+        } else if first_s_in_block && let Some(rest) = line.strip_prefix("s ") {
+            first_s_in_block = false;
+            if let Some((src, tail)) = rest.split_once(' ')
+                && !src.starts_with(&prefix)
+            {
+                out.push_str("s ");
+                out.push_str(&prefix);
+                out.push_str(src);
+                out.push(' ');
+                out.push_str(tail);
+                out.push('\n');
+            } else {
+                out.push_str(line);
+                out.push('\n');
+            }
+        } else {
+            if line.starts_with("s ") {
+                first_s_in_block = false;
+            }
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    use super::prefix_hinge_species_in_maf;
     use crate::rescue::{
         build_ancestral_consensus_contigs, remap_consensus_maf_to_hinge, rescue_transitive_maf,
     };
     use horizon_aligner::complement_base;
+
+    #[test]
+    fn prefix_hinge_species_adds_missing_species_prefix() {
+        let maf = "##maf version=1\na score=2.0\ns NBAG03001603.1 0 4 + 10 ACGT\ns hg38.chr22 0 4 + 10 ACGT\n\n";
+        let got = prefix_hinge_species_in_maf("Pan_troglodytes", maf);
+        assert!(got.contains("s Pan_troglodytes.NBAG03001603.1 0 4 + 10 ACGT\n"));
+        assert!(got.contains("s hg38.chr22 0 4 + 10 ACGT\n"));
+    }
 
     #[test]
     fn complement_and_fwd_pos_handle_both_strands() {

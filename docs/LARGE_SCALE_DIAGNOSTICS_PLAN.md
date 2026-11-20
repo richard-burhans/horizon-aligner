@@ -1,6 +1,6 @@
 # Large-Scale Diagnostics, Bug-Finding & Performance Plan
 
-**Status:** Planned  
+**Status:** Executed (`B1`, `A1`, `A2`, `C1`, `B2`, `A3`, `A4`, `B3` complete; `C2` pending external tools / `.hal` fixture)  
 **Scope:** Using existing large-scale alignment artifacts (`12 GB` HPRC v1.0 GFA, `chr6` MAF, `1.67 GB` `cactus241way_chr22_1MB.maf`, `97 MB` `gibbon_y_tba.maf`) to uncover correctness bugs, calibration gaps, and memory/runtime bottlenecks in `horizon-aligner` before whole-genome scaling.
 
 ---
