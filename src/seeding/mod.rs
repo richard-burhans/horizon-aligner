@@ -32,7 +32,7 @@ fn is_low_complexity_window(sub: &[u8]) -> bool {
     max_c * 4 >= sub.len() * 3 || (sub.len() >= 14 && distinct <= 2)
 }
 
-/// Linear-time SDUST-style triplet low-complexity masker (`W in {16, 32, 64}`, `T = 2.0`,
+/// Linear-time SDUST-style triplet low-complexity masker (`W in {16, 24, 32}`, `T = 2.0`,
 /// Morgulis et al., 2006). Masks homopolymers, dinucleotide, trinucleotide, and tetranucleotide
 /// simple repeats in `O(N)` time so seeders avoid `O(span)` per-position checks.
 #[must_use]
@@ -98,9 +98,11 @@ pub(crate) fn sdust_mask(seq: &[u8]) -> Vec<bool> {
                 for (offset, &t) in triplets[start..start + nw].iter().enumerate() {
                     if t < 64 && counts[t as usize] >= min_c {
                         let p = start + offset;
-                        masked[p] = true;
-                        masked[p + 1] = true;
-                        masked[p + 2] = true;
+                        if !masked[p] || !masked[p + 1] || !masked[p + 2] {
+                            masked[p] = true;
+                            masked[p + 1] = true;
+                            masked[p + 2] = true;
+                        }
                     }
                 }
             }
@@ -139,13 +141,10 @@ pub fn canonical_spaced_seeds_with_opts(
     canonical_spaced_seeds_impl(seq, mask, max_occ, skip_softmasked, ry_mode)
 }
 
-fn canonical_spaced_seeds_impl(
-    seq: &[u8],
+pub(crate) fn parse_mask_offsets(
     mask: &str,
-    max_occ: usize,
-    skip_softmasked: bool,
     ry_mode: bool,
-) -> Result<HashMap<u64, Vec<usize>>, AlignError> {
+) -> Result<(usize, Vec<usize>), AlignError> {
     if mask.is_empty() {
         return Err(AlignError::InvalidMask("mask is empty".to_owned()));
     }
@@ -170,266 +169,52 @@ fn canonical_spaced_seeds_impl(
             "active mask bits must be in 1..={max_bits}"
         )));
     }
+    Ok((span, offsets))
+}
+
+fn canonical_spaced_seeds_impl(
+    seq: &[u8],
+    mask: &str,
+    max_occ: usize,
+    skip_softmasked: bool,
+    ry_mode: bool,
+) -> Result<HashMap<u64, Vec<usize>>, AlignError> {
+    let (span, offsets) = parse_mask_offsets(mask, ry_mode)?;
     if seq.len() < span {
         return Ok(HashMap::new());
     }
 
     let rev_offsets: Vec<usize> = offsets.iter().map(|&o| span - 1 - o).collect();
-    let mut counts: HashMap<u64, usize> = HashMap::with_capacity(seq.len() / 2);
-    let mut positions: HashMap<u64, Vec<usize>> = HashMap::with_capacity(seq.len() / 2);
+    let cap = (seq.len() / 2).min(1 << 20);
+    let mut counts: HashMap<u64, usize> = HashMap::with_capacity(cap);
+    let mut positions: HashMap<u64, Vec<usize>> = HashMap::with_capacity(cap);
 
     for i in 0..=(seq.len() - span) {
         let sub = &seq[i..i + span];
         if span >= 12 && is_low_complexity_window(sub) {
             continue;
         }
-        let mut fwd = 0_u64;
-        let mut rc = 0_u64;
-        let mut valid = true;
-        for (&fo, &ro) in offsets.iter().zip(&rev_offsets) {
-            if skip_softmasked && (sub[fo].is_ascii_lowercase() || sub[ro].is_ascii_lowercase()) {
-                valid = false;
-                break;
-            }
-            let (Some(bf), Some(br)) = (base_to_idx(sub[fo]), base_to_idx(sub[ro])) else {
-                valid = false;
-                break;
-            };
-            if ry_mode {
-                fwd = (fwd << 1) | ((bf & 1) as u64);
-                rc = (rc << 1) | ((1 - (br & 1)) as u64);
-            } else {
-                fwd = (fwd << 2) | (bf as u64);
-                rc = (rc << 2) | ((3 - br) as u64);
-            }
-        }
-        if !valid {
+        let Some((fwd, rc)) =
+            encode_spaced_pair(sub, &offsets, &rev_offsets, skip_softmasked, ry_mode)
+        else {
             continue;
-        }
+        };
         let key = fwd.min(rc);
         let entry = counts.entry(key).or_insert(0);
         *entry += 1;
         if *entry <= max_occ {
             positions.entry(key).or_default().push(i);
+        } else if *entry == max_occ + 1 {
+            positions.remove(&key);
         }
     }
 
-    positions.retain(|k, _| counts.get(k).copied().unwrap_or(usize::MAX) <= max_occ);
     Ok(positions)
 }
 
-/// Compute the Longest Increasing Subsequence chain over `(x, y)` anchors.
-#[must_use]
-pub fn lis_chain(anchors: &[(usize, usize)]) -> Vec<(usize, usize)> {
-    if anchors.is_empty() {
-        return Vec::new();
-    }
-    let mut sorted = anchors.to_vec();
-    sorted.sort_unstable();
-
-    let mut tails_y: Vec<usize> = Vec::with_capacity(sorted.len());
-    let mut tail_idx: Vec<usize> = Vec::with_capacity(sorted.len());
-    let mut prev = vec![usize::MAX; sorted.len()];
-
-    for (idx, &(_, y)) in sorted.iter().enumerate() {
-        let pos = tails_y.partition_point(|&ty| ty < y);
-        if pos == tails_y.len() {
-            tails_y.push(y);
-            tail_idx.push(idx);
-        } else {
-            tails_y[pos] = y;
-            tail_idx[pos] = idx;
-        }
-        if pos > 0 {
-            prev[idx] = tail_idx[pos - 1];
-        }
-    }
-
-    let mut chain = Vec::with_capacity(tail_idx.len());
-    let mut cur = tail_idx[tail_idx.len() - 1];
-    while cur != usize::MAX {
-        chain.push(sorted[cur]);
-        cur = prev[cur];
-    }
-    chain.reverse();
-    chain
-}
-
-/// Cluster `(x, y)` hits on one strand into colinear LCB chains.
-///
-/// Uses `BTreeSet` indices on `(lx, id)` for `max_gap` expiration and `(ly, id)`
-/// for $O(\log |\text{active}|)$ local `y`-window range queries instead of
-/// scanning all active chains across the chromosome.
-#[must_use]
-pub fn cluster_strand_lcbs(
-    hits: &[(usize, usize)],
-    max_gap: usize,
-    max_diag_drift: usize,
-    min_anchors: usize,
-    min_span_bp: usize,
-    max_mean_step: f64,
-) -> Vec<Vec<(usize, usize)>> {
-    use std::collections::BTreeSet;
-
-    if hits.is_empty() {
-        return Vec::new();
-    }
-    let mut sorted = hits.to_vec();
-    sorted.sort_unstable();
-
-    let keep = |ch: &[(usize, usize)]| -> bool {
-        let span_x = ch[ch.len() - 1].0 - ch[0].0;
-        #[allow(clippy::cast_precision_loss)]
-        let mean_step = (span_x as f64) / (ch.len() as f64);
-        ch.len() >= min_anchors && span_x >= min_span_bp && mean_step <= max_mean_step
-    };
-
-    let mut chains: Vec<Vec<(usize, usize)>> = Vec::new();
-    let mut tails: Vec<(usize, usize)> = Vec::new();
-    let mut by_x: BTreeSet<(usize, usize)> = BTreeSet::new();
-    let mut by_y: BTreeSet<(usize, usize)> = BTreeSet::new();
-    let mut finished: Vec<Vec<(usize, usize)>> = Vec::new();
-
-    for &(x, y) in &sorted {
-        let x_floor = x.saturating_sub(max_gap);
-        while let Some(&(lx, id)) = by_x.first() {
-            if lx >= x_floor {
-                break;
-            }
-            by_x.remove(&(lx, id));
-            let (_, ly) = tails[id];
-            by_y.remove(&(ly, id));
-            let ch = std::mem::take(&mut chains[id]);
-            if keep(&ch) {
-                finished.push(ch);
-            }
-        }
-
-        let y_floor = y.saturating_sub(max_gap);
-        let mut best_id: Option<usize> = None;
-        let mut best_cost = usize::MAX;
-        for &(_, id) in by_y.range((y_floor, 0)..(y, 0)) {
-            let (lx, ly) = tails[id];
-            if x > lx && y > ly {
-                let dx = x - lx;
-                let dy = y - ly;
-                let drift = dx.abs_diff(dy);
-                if dx <= max_gap && dy <= max_gap && drift <= max_diag_drift {
-                    let cost = drift + dx;
-                    if cost < best_cost {
-                        best_cost = cost;
-                        best_id = Some(id);
-                    }
-                }
-            }
-        }
-
-        if let Some(id) = best_id {
-            let (prev_x, prev_y) = tails[id];
-            by_x.remove(&(prev_x, id));
-            by_y.remove(&(prev_y, id));
-            chains[id].push((x, y));
-            tails[id] = (x, y);
-            by_x.insert((x, id));
-            by_y.insert((y, id));
-        } else {
-            let id = chains.len();
-            chains.push(vec![(x, y)]);
-            tails.push((x, y));
-            by_x.insert((x, id));
-            by_y.insert((y, id));
-        }
-    }
-
-    for (_, id) in by_x {
-        let ch = std::mem::take(&mut chains[id]);
-        if keep(&ch) {
-            finished.push(ch);
-        }
-    }
-    finished
-}
-
-/// Find local `w=9` spaced-seed anchors with 2-hit diagonal consistency.
-///
-/// # Errors
-///
-/// Returns [`AlignError::InvalidMask`] if `mask` is invalid.
-pub fn local_w9_subchain(
-    sub_x: &[u8],
-    sub_y: &[u8],
-    off_x: usize,
-    off_y: usize,
-    mask: &str,
-    max_diag_diff: usize,
-    max_step_bp: usize,
-) -> Result<Vec<(usize, usize)>, AlignError> {
-    let ix = canonical_spaced_seeds(sub_x, mask, 2)?;
-    let iy = canonical_spaced_seeds(sub_y, mask, 2)?;
-    let mut hits = Vec::new();
-    for (k, pxs) in &ix {
-        if let Some(pys) = iy.get(k) {
-            for &px in pxs {
-                for &py in pys {
-                    hits.push((px, py));
-                }
-            }
-        }
-    }
-    let chain = lis_chain(&hits);
-    let mut kept = Vec::new();
-
-    for (idx, &(x, y)) in chain.iter().enumerate() {
-        #[allow(clippy::cast_possible_wrap)]
-        let diag = (x as isize) - (y as isize);
-        #[allow(clippy::cast_possible_wrap)]
-        let max_dd = max_diag_diff as isize;
-        let has_prev = idx > 0 && {
-            let (px, py) = chain[idx - 1];
-            #[allow(clippy::cast_possible_wrap)]
-            let pdiag = (px as isize) - (py as isize);
-            (diag - pdiag).abs() <= max_dd && (x - px) <= max_step_bp
-        };
-        let has_next = idx + 1 < chain.len() && {
-            let (nx, ny) = chain[idx + 1];
-            #[allow(clippy::cast_possible_wrap)]
-            let ndiag = (nx as isize) - (ny as isize);
-            (diag - ndiag).abs() <= max_dd && (nx - x) <= max_step_bp
-        };
-        if has_prev || has_next {
-            kept.push((off_x + x, off_y + y));
-        }
-    }
-    Ok(kept)
-}
-
-pub(crate) fn merge_colinear_lcbs(
-    lcb_list: &[Vec<(usize, usize)>],
-    max_local_rescue_bp: usize,
-) -> Vec<Vec<(usize, usize)>> {
-    if lcb_list.is_empty() {
-        return Vec::new();
-    }
-    let mut ordered = lcb_list.to_vec();
-    ordered.sort_by_key(|c| c[0].0);
-    let mut merged = vec![ordered[0].clone()];
-    for nxt in ordered.into_iter().skip(1) {
-        let last = &merged[merged.len() - 1];
-        let (px, py) = last[last.len() - 1];
-        let (nx, ny) = nxt[0];
-        if nx > px && ny > py {
-            let dx = nx - px;
-            let dy = ny - py;
-            if dx <= max_local_rescue_bp && dy <= max_local_rescue_bp && dx.abs_diff(dy) <= 4000 {
-                let m_idx = merged.len() - 1;
-                merged[m_idx].extend(nxt);
-                continue;
-            }
-        }
-        merged.push(nxt);
-    }
-    merged
-}
+mod chain;
+pub(crate) use chain::{IntervalSet, merge_colinear_lcbs};
+pub use chain::{cluster_strand_lcbs, lis_chain, local_w9_subchain};
 
 pub(crate) use flat_index::FlatSeedIndex;
 
@@ -473,7 +258,7 @@ pub fn prepare_contig_index_opts(
     )?;
     Ok(ContigIndex {
         seq: seq.to_vec(),
-        seq_rc: revcomp(seq),
+        seq_rc: revcomp_preserve_case(seq),
         sdust,
         seeds,
     })
@@ -485,56 +270,68 @@ pub fn shared_seed_count(idx_x: &ContigIndex, idx_y: &ContigIndex) -> usize {
     idx_x.seeds.shared_unique_keys(&idx_y.seeds)
 }
 
-type LcbList = Vec<Vec<(usize, usize)>>;
+pub(crate) type LcbList = Vec<Vec<(usize, usize)>>;
 
-type AnchorPairs = Vec<(usize, usize)>;
+pub(crate) type AnchorPairs = Vec<(usize, usize)>;
 
-/// Disjoint closed-interval set `[sx, ex]` backed by `BTreeMap` for `O(log K)` overlap checks.
-pub(crate) struct IntervalSet {
-    map: std::collections::BTreeMap<usize, usize>,
+pub(crate) fn encode_spaced_pair(
+    sub: &[u8],
+    offsets: &[usize],
+    rev_offsets: &[usize],
+    skip_softmasked: bool,
+    ry_mode: bool,
+) -> Option<(u64, u64)> {
+    let mut fwd = 0_u64;
+    let mut rc = 0_u64;
+    for (&fo, &ro) in offsets.iter().zip(rev_offsets) {
+        if skip_softmasked && (sub[fo].is_ascii_lowercase() || sub[ro].is_ascii_lowercase()) {
+            return None;
+        }
+        let (bf, br) = (base_to_idx(sub[fo])?, base_to_idx(sub[ro])?);
+        if ry_mode {
+            fwd = (fwd << 1) | ((bf & 1) as u64);
+            rc = (rc << 1) | ((1 - (br & 1)) as u64);
+        } else {
+            fwd = (fwd << 2) | (bf as u64);
+            rc = (rc << 2) | ((3 - br) as u64);
+        }
+    }
+    Some((fwd, rc))
 }
 
-impl IntervalSet {
-    pub(crate) fn new() -> Self {
-        Self {
-            map: std::collections::BTreeMap::new(),
+fn push_transition_keys(
+    fwd: u64,
+    rc: u64,
+    w: usize,
+    min_transitions: usize,
+    max_transitions: usize,
+    keys: &mut Vec<u64>,
+) {
+    keys.clear();
+    if min_transitions == 0 {
+        keys.push(fwd.min(rc));
+    }
+    if min_transitions <= 1 && max_transitions >= 1 {
+        for b in 0..w {
+            let mask = 2_u64 << (2 * (w - 1 - b));
+            keys.push(fwd ^ mask);
+            keys.push(rc ^ mask);
         }
     }
-
-    pub(crate) fn from_lcbs<'a, I>(lcbs: I) -> Self
-    where
-        I: IntoIterator<Item = &'a Vec<(usize, usize)>>,
-    {
-        let mut set = Self::new();
-        for c in lcbs {
-            if let (Some(first), Some(last)) = (c.first(), c.last()) {
-                set.insert_merge(first.0, last.0);
+    if max_transitions >= 2 {
+        for a in 0..w {
+            let mask_a = 2_u64 << (2 * (w - 1 - a));
+            let ma_f = fwd ^ mask_a;
+            let ma_r = rc ^ mask_a;
+            for b in (a + 1)..w {
+                let mask_b = 2_u64 << (2 * (w - 1 - b));
+                keys.push(ma_f ^ mask_b);
+                keys.push(ma_r ^ mask_b);
             }
         }
-        set
     }
-
-    fn insert_merge(&mut self, mut sx: usize, mut ex: usize) {
-        while let Some((&s, &e)) = self.map.range(..=ex).next_back() {
-            if e < sx {
-                break;
-            }
-            self.map.remove(&s);
-            sx = sx.min(s);
-            ex = ex.max(e);
-        }
-        self.map.insert(sx, ex);
-    }
-
-    pub(crate) fn insert_if_disjoint(&mut self, sx: usize, ex: usize) -> bool {
-        if let Some((_, &e)) = self.map.range(..=ex).next_back()
-            && e >= sx
-        {
-            return false;
-        }
-        self.map.insert(sx, ex);
-        true
-    }
+    keys.sort_unstable();
+    keys.dedup();
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -555,49 +352,18 @@ pub(crate) fn find_spaced_transition_hits<S: std::hash::BuildHasher>(
     let w = offsets.len();
     let mut hits_fwd = Vec::new();
     let mut hits_rc = Vec::new();
-    let mut keys = Vec::with_capacity(w * w / 2 + w + 1);
+    let mut keys = Vec::with_capacity(w * w + 2 * w + 1);
     for i in 0..=(seq_x.len() - span) {
-        let sub = &seq_x[i..i + span];
-        let mut fwd = 0_u64;
-        let mut rc = 0_u64;
-        let mut valid = true;
-        for (&fo, &ro) in offsets.iter().zip(rev_offsets) {
-            if skip_softmasked && (sub[fo].is_ascii_lowercase() || sub[ro].is_ascii_lowercase()) {
-                valid = false;
-                break;
-            }
-            let (Some(bf), Some(br)) = (base_to_idx(sub[fo]), base_to_idx(sub[ro])) else {
-                valid = false;
-                break;
-            };
-            fwd = (fwd << 2) | (bf as u64);
-            rc = (rc << 2) | ((3 - br) as u64);
-        }
-        if !valid {
+        let Some((fwd, rc)) = encode_spaced_pair(
+            &seq_x[i..i + span],
+            offsets,
+            rev_offsets,
+            skip_softmasked,
+            false,
+        ) else {
             continue;
-        }
-        keys.clear();
-        if min_transitions == 0 {
-            keys.push(fwd.min(rc));
-        }
-        if min_transitions <= 1 && max_transitions >= 1 {
-            for b in 0..w {
-                let mf = fwd ^ (2_u64 << (2 * (w - 1 - b)));
-                let mr = rc ^ (2_u64 << (2 * b));
-                keys.push(mf.min(mr));
-            }
-        }
-        if max_transitions >= 2 {
-            for a in 0..w {
-                let ma_f = fwd ^ (2_u64 << (2 * (w - 1 - a)));
-                let ma_r = rc ^ (2_u64 << (2 * a));
-                for b in (a + 1)..w {
-                    let mf = ma_f ^ (2_u64 << (2 * (w - 1 - b)));
-                    let mr = ma_r ^ (2_u64 << (2 * b));
-                    keys.push(mf.min(mr));
-                }
-            }
-        }
+        };
+        push_transition_keys(fwd, rc, w, min_transitions, max_transitions, &mut keys);
         for &key in &keys {
             if let Some(pys) = iy_fwd.get(&key) {
                 for &py in pys {
@@ -672,6 +438,7 @@ pub(crate) fn find_spaced_transition_hits_flat(
     max_transitions: usize,
 ) -> (AnchorPairs, AnchorPairs) {
     const CHUNK_LEN: usize = 32_768;
+    debug_assert!(sdust_x.is_none_or(|m| m.len() >= seq_x.len()));
     if seq_x.len() < span {
         return (Vec::new(), Vec::new());
     }
@@ -680,7 +447,7 @@ pub(crate) fn find_spaced_transition_hits_flat(
         let w = offsets.len();
         let mut hits_fwd = Vec::new();
         let mut hits_rc = Vec::new();
-        let mut keys = Vec::with_capacity(w * w / 2 + w + 1);
+        let mut keys = Vec::with_capacity(w * w + 2 * w + 1);
         for i in start_i..end_i {
             if let Some(m) = sdust_x
                 && (m[i] || m[i + span / 2] || m[i + span - 1])
@@ -691,47 +458,12 @@ pub(crate) fn find_spaced_transition_hits_flat(
             if sdust_x.is_none() && span >= 12 && is_low_complexity_window(sub) {
                 continue;
             }
-            let mut fwd = 0_u64;
-            let mut rc = 0_u64;
-            let mut valid = true;
-            for (&fo, &ro) in offsets.iter().zip(rev_offsets) {
-                if skip_softmasked && (sub[fo].is_ascii_lowercase() || sub[ro].is_ascii_lowercase())
-                {
-                    valid = false;
-                    break;
-                }
-                let (Some(bf), Some(br)) = (base_to_idx(sub[fo]), base_to_idx(sub[ro])) else {
-                    valid = false;
-                    break;
-                };
-                fwd = (fwd << 2) | (bf as u64);
-                rc = (rc << 2) | ((3 - br) as u64);
-            }
-            if !valid {
+            let Some((fwd, rc)) =
+                encode_spaced_pair(sub, offsets, rev_offsets, skip_softmasked, false)
+            else {
                 continue;
-            }
-            keys.clear();
-            if min_transitions == 0 {
-                keys.push(fwd.min(rc));
-            }
-            if min_transitions <= 1 && max_transitions >= 1 {
-                for b in 0..w {
-                    let mf = fwd ^ (2_u64 << (2 * (w - 1 - b)));
-                    let mr = rc ^ (2_u64 << (2 * b));
-                    keys.push(mf.min(mr));
-                }
-            }
-            if max_transitions >= 2 {
-                for a in 0..w {
-                    let ma_f = fwd ^ (2_u64 << (2 * (w - 1 - a)));
-                    let ma_r = rc ^ (2_u64 << (2 * a));
-                    for b in (a + 1)..w {
-                        let mf = ma_f ^ (2_u64 << (2 * (w - 1 - b)));
-                        let mr = ma_r ^ (2_u64 << (2 * b));
-                        keys.push(mf.min(mr));
-                    }
-                }
-            }
+            };
+            push_transition_keys(fwd, rc, w, min_transitions, max_transitions, &mut keys);
             for &key in &keys {
                 for &py in iy.get(key) {
                     let py_u = py as usize;
@@ -859,28 +591,24 @@ pub(crate) fn append_two_hit_diagonal_lcbs(
     let mut sorted = hits.to_vec();
     sorted.sort_unstable();
     sorted.dedup();
-    let mut promoted: Vec<Vec<(usize, usize)>> = Vec::new();
+    let mut promoted: Vec<((usize, usize), (usize, usize))> = Vec::new();
     for i in 0..sorted.len() {
         let (x1, y1) = sorted[i];
         let mut j = i + 1;
         while j < sorted.len() && sorted[j].0 - x1 <= max_gap {
             let (x2, y2) = sorted[j];
-            if x2 > x1 && y2 > y1 && y2 - y1 <= max_gap {
-                let d1 = x1.cast_signed() - y1.cast_signed();
-                let d2 = x2.cast_signed() - y2.cast_signed();
-                if (d1 - d2).unsigned_abs() <= max_ddiag {
-                    promoted.push(vec![(x1, y1), (x2, y2)]);
-                    break;
-                }
+            if x2 > x1 && y2 > y1 && y2 - y1 <= max_gap && (x2 - x1).abs_diff(y2 - y1) <= max_ddiag
+            {
+                promoted.push(((x1, y1), (x2, y2)));
+                break;
             }
             j += 1;
         }
     }
     let mut intervals = IntervalSet::from_lcbs(target.iter());
-    for lcb in promoted {
-        let (sx, ex) = (lcb[0].0, lcb[lcb.len() - 1].0);
-        if intervals.insert_if_disjoint(sx, ex) {
-            target.push(lcb);
+    for (p1, p2) in promoted {
+        if intervals.insert_if_disjoint(p1.0, p2.0) {
+            target.push(vec![p1, p2]);
         }
     }
 }
@@ -902,7 +630,9 @@ fn codon_to_aa(b0: u8, b1: u8, b2: u8) -> Option<u8> {
 }
 
 mod flat_index;
+mod hsp;
 mod translated;
+pub(crate) use hsp::*;
 pub(crate) use translated::*;
 
 /// Fast pre-DP score: return the anchor count of the largest `w=12` LCB between two contigs.
@@ -917,7 +647,7 @@ pub fn score_contig_pair_lcb(idx_x: &ContigIndex, idx_y: &ContigIndex) -> usize 
         .unwrap_or(0)
 }
 
-/// Select top-`K` (or reciprocal-best when `top_k == 1`) contig pairs between two assemblies.
+/// Select the union of top-`K` target-per-query and query-per-target contig pairs between two assemblies.
 #[must_use]
 pub fn select_top_k_pairs(
     target_idx: &[(String, ContigIndex)],
@@ -925,7 +655,6 @@ pub fn select_top_k_pairs(
     top_k: usize,
     min_shared_seeds: usize,
 ) -> Vec<Vec<bool>> {
-    use rayon::prelude::*;
     let scores: Vec<((usize, usize), (usize, usize))> = (0..target_idx.len())
         .into_par_iter()
         .flat_map(|x_i| {
@@ -964,8 +693,6 @@ pub fn select_top_k_pairs(
     mask
 }
 
-/// Align two pre-indexed contigs without recomputing KP-14 seed maps.
-///
 /// Complement a single DNA base (preserving case for `A`/`C`/`G`/`T`).
 #[must_use]
 pub fn complement_base(b: u8) -> u8 {
@@ -980,6 +707,12 @@ pub fn complement_base(b: u8) -> u8 {
         b'g' => b'c',
         other => other,
     }
+}
+
+/// Reverse-complement a DNA byte slice while preserving ASCII case (needed for softmasked seeding).
+#[must_use]
+pub fn revcomp_preserve_case(seq: &[u8]) -> Vec<u8> {
+    seq.iter().rev().map(|&b| complement_base(b)).collect()
 }
 
 /// Reverse-complement a DNA byte slice (uppercasing ASCII bases).
@@ -1066,5 +799,39 @@ mod tests {
         let (hits_fwd, hits_rc) = find_lastz12_1transition_hits_flat(&seq, None, &idx, false);
         assert!(hits_fwd.len() >= 60_000);
         assert_eq!(hits_fwd.len(), hits_rc.len());
+    }
+
+    #[test]
+    fn asymmetric_lastz11_finds_rc_1transition_at_unmirrored_offset() {
+        // Construct y where canonical key is rc < fwd, then mutate x at asymmetric MASK_LASTZ11
+        // offset 7 (which has no mirror in OFFSETS, corresponding to rc bit 6).
+        let y = b"TTTTTTTTACGTACGTAC".to_vec(); // 18 bp; revcomp starts with GTACGTACGTAAAAAAAA (smaller)
+        let mut x = y.clone();
+        x[7] = if x[7] == b'A' { b'G' } else { b'A' }; // 1 transition at asymmetric offset 7
+        let iy = FlatSeedIndex::build_with_sdust(&y, MASK_LASTZ11, 4, false, false, None)
+            .expect("build FlatSeedIndex");
+        let (hits_fwd, _) = find_lastz11_1transition_hits_flat(&x, None, &iy, false);
+        assert!(
+            hits_fwd.contains(&(0, 0)),
+            "expected asymmetric MASK_LASTZ11 rc 1-transition hit at (0, 0), got {hits_fwd:?}"
+        );
+    }
+
+    #[test]
+    fn hardcoded_mask_offsets_match_parse_mask_offsets() {
+        let (span12, off12) = parse_mask_offsets(MASK_LASTZ12, false).expect("valid MASK_LASTZ12");
+        assert_eq!(off12, LASTZ12_OFFSETS);
+        let rev12: Vec<usize> = off12.iter().map(|&o| span12 - 1 - o).collect();
+        assert_eq!(rev12, LASTZ12_REV_OFFSETS);
+
+        let (span11, off11) = parse_mask_offsets(MASK_LASTZ11, false).expect("valid MASK_LASTZ11");
+        assert_eq!(off11, [0, 1, 2, 4, 7, 8, 11, 13, 15, 16, 17]);
+        let rev11: Vec<usize> = off11.iter().map(|&o| span11 - 1 - o).collect();
+        assert_eq!(rev11, [17, 16, 15, 13, 10, 9, 6, 4, 2, 1, 0]);
+
+        let (span10, off10) = parse_mask_offsets(MASK_W10, false).expect("valid MASK_W10");
+        assert_eq!(off10, [0, 1, 3, 4, 6, 7, 9, 10, 12, 13]);
+        let rev10: Vec<usize> = off10.iter().map(|&o| span10 - 1 - o).collect();
+        assert_eq!(rev10, [13, 12, 10, 9, 7, 6, 4, 3, 1, 0]);
     }
 }

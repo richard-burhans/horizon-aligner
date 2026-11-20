@@ -2,9 +2,115 @@
 
 #[cfg(test)]
 use super::append_two_hit_diagonal_lcbs;
-use super::{AnchorPairs, ContigIndex, LcbList, base_to_idx, cluster_strand_lcbs, codon_to_aa};
-use rayon::prelude::*;
-use std::collections::HashMap;
+use super::{AnchorPairs, LcbList, cluster_strand_lcbs, codon_to_aa};
+
+const AA5_KEY_SPACE: usize = 59_049; // 9^5
+
+struct Aa5Index {
+    max_occ: usize,
+    counts: Vec<u16>,
+    slots: Vec<u32>,
+}
+
+impl Aa5Index {
+    fn build(seq: &[u8], max_occ: usize, skip_softmasked: bool) -> Self {
+        const AA_OFFSETS: [usize; 5] = [0, 1, 2, 4, 5];
+        let max_occ = max_occ.min(u16::MAX as usize);
+        let Some(slot_len) = (max_occ > 0)
+            .then(|| AA5_KEY_SPACE.checked_mul(max_occ))
+            .flatten()
+        else {
+            return Self {
+                max_occ: 0,
+                counts: Vec::new(),
+                slots: Vec::new(),
+            };
+        };
+        if seq.len() < 18 || seq.len() > u32::MAX as usize {
+            return Self {
+                max_occ,
+                counts: Vec::new(),
+                slots: Vec::new(),
+            };
+        }
+        let mut counts = vec![0_u16; AA5_KEY_SPACE];
+        let mut slots = vec![0_u32; slot_len];
+        for frame in 0..3 {
+            if seq.len() < frame + 18 {
+                continue;
+            }
+            let mut pos = frame;
+            while pos + 18 <= seq.len() {
+                let mut key = 0_usize;
+                let mut valid = true;
+                for &c in &AA_OFFSETS {
+                    let s = &seq[pos + c * 3..pos + c * 3 + 3];
+                    if skip_softmasked && s.iter().any(u8::is_ascii_lowercase) {
+                        valid = false;
+                        break;
+                    }
+                    let Some(aa) = codon_to_aa(s[0], s[1], s[2]) else {
+                        valid = false;
+                        break;
+                    };
+                    key = key * 9 + usize::from(aa_group(aa));
+                }
+                if valid {
+                    let c = counts[key] as usize;
+                    if c < max_occ {
+                        slots[key * max_occ + c] = u32::try_from(pos).unwrap_or(u32::MAX);
+                    }
+                    counts[key] = counts[key].saturating_add(1);
+                }
+                pos += 3;
+            }
+        }
+        Self {
+            max_occ,
+            counts,
+            slots,
+        }
+    }
+
+    fn intersect_into(
+        &self,
+        other: &Self,
+        rev_lens: Option<(usize, usize)>,
+        out: &mut AnchorPairs,
+    ) {
+        if self.counts.is_empty() || other.counts.is_empty() {
+            return;
+        }
+        let mo = self.max_occ;
+        for key in 0..AA5_KEY_SPACE {
+            let cx = self.counts[key] as usize;
+            let cy = other.counts[key] as usize;
+            if cx > 0 && cx <= mo && cy > 0 && cy <= other.max_occ {
+                let xs = &self.slots[key * mo..key * mo + cx];
+                let ys = &other.slots[key * other.max_occ..key * other.max_occ + cy];
+                if let Some((lx, ly)) = rev_lens {
+                    for &rx in xs {
+                        let Some(px) = lx.checked_sub(18 + (rx as usize)) else {
+                            continue;
+                        };
+                        for &ry in ys {
+                            let Some(py) = ly.checked_sub(18 + (ry as usize)) else {
+                                continue;
+                            };
+                            out.push((px, py));
+                        }
+                    }
+                } else {
+                    for &px in xs {
+                        for &py in ys {
+                            out.push((px as usize, py as usize));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 
 const fn aa_group(ax: u8) -> u8 {
     const GROUP: [u8; 20] = [0, 1, 2, 2, 3, 0, 4, 5, 4, 5, 5, 6, 7, 6, 4, 8, 8, 5, 3, 3];
@@ -24,120 +130,137 @@ const fn aa_pair_score(ax: u8, ay: u8) -> i32 {
     if gx < 9 && gx == gy { 6 } else { -6 }
 }
 
-fn index_aa_spaced_5of6_frames(
-    seq: &[u8],
-    max_occ: usize,
-    skip_softmasked: bool,
-) -> HashMap<u32, Vec<usize>> {
-    // Reduced 9-group biochemical alphabet spaced 5-of-6 mask ("111011", 18 bp span).
-    const AA_OFFSETS: [usize; 5] = [0, 1, 2, 4, 5];
-    let mut map: HashMap<u32, Vec<usize>> = HashMap::new();
-    let mut counts: HashMap<u32, usize> = HashMap::new();
-    for frame in 0..3 {
-        if seq.len() < frame + 18 {
-            continue;
-        }
-        let mut pos = frame;
-        while pos + 18 <= seq.len() {
-            let mut key = 0_u32;
-            let mut valid = true;
-            for &c in &AA_OFFSETS {
-                let s = &seq[pos + c * 3..pos + c * 3 + 3];
-                if skip_softmasked && s.iter().any(u8::is_ascii_lowercase) {
-                    valid = false;
-                    break;
-                }
-                let Some(aa) = codon_to_aa(s[0], s[1], s[2]) else {
-                    valid = false;
-                    break;
-                };
-                key = key * 9 + u32::from(aa_group(aa));
-            }
-            if valid {
-                let cnt = counts.entry(key).or_insert(0);
-                *cnt += 1;
-                if *cnt <= max_occ {
-                    map.entry(key).or_default().push(pos);
-                } else {
-                    map.remove(&key);
-                }
-            }
-            pos += 3;
-        }
-    }
-    map
-}
-
 /// Find spaced `5-of-6` translated amino-acid (18 bp) hits across all 6 reading frames (`+`/`+` and `-`/`-` in forward coordinates).
+#[cfg(test)]
 pub(crate) fn find_translated_aa5_hits(
     seq_x: &[u8],
     seq_y: &[u8],
     max_occ: usize,
     skip_softmasked: bool,
 ) -> AnchorPairs {
-    let x_fwd = index_aa_spaced_5of6_frames(seq_x, max_occ, skip_softmasked);
-    let tgt_fwd = index_aa_spaced_5of6_frames(seq_y, max_occ, skip_softmasked);
+    let ((x_fwd, y_fwd), (x_rev, y_rev)) = rayon::join(
+        || {
+            rayon::join(
+                || Aa5Index::build(seq_x, max_occ, skip_softmasked),
+                || Aa5Index::build(seq_y, max_occ, skip_softmasked),
+            )
+        },
+        || {
+            if seq_x.len() >= 18 && seq_y.len() >= 18 {
+                let (rc_x, rc_y) = rayon::join(
+                    || super::revcomp_preserve_case(seq_x),
+                    || super::revcomp_preserve_case(seq_y),
+                );
+                let (xr, yr) = rayon::join(
+                    || Aa5Index::build(&rc_x, max_occ, skip_softmasked),
+                    || Aa5Index::build(&rc_y, max_occ, skip_softmasked),
+                );
+                (Some(xr), Some(yr))
+            } else {
+                (None, None)
+            }
+        },
+    );
     let mut hits = Vec::new();
-    for (k, xs) in &x_fwd {
-        if let Some(ys) = tgt_fwd.get(k) {
-            for &px in xs {
-                for &py in ys {
-                    hits.push((px, py));
-                }
-            }
-        }
-    }
-    if seq_x.len() >= 18 && seq_y.len() >= 18 {
-        let rc_x = crate::revcomp(seq_x);
-        let rc_y = crate::revcomp(seq_y);
-        let x_rev = index_aa_spaced_5of6_frames(&rc_x, max_occ, skip_softmasked);
-        let tgt_rev = index_aa_spaced_5of6_frames(&rc_y, max_occ, skip_softmasked);
-        for (k, xs) in &x_rev {
-            if let Some(ys) = tgt_rev.get(k) {
-                for &rx in xs {
-                    let px = seq_x.len() - 18 - rx;
-                    for &ry in ys {
-                        let py = seq_y.len() - 18 - ry;
-                        hits.push((px, py));
-                    }
-                }
-            }
-        }
+    x_fwd.intersect_into(&y_fwd, None, &mut hits);
+    if let (Some(xr), Some(yr)) = (x_rev, y_rev) {
+        xr.intersect_into(&yr, Some((seq_x.len(), seq_y.len())), &mut hits);
     }
     hits
 }
 
-/// Extend an ungapped codon-level amino-acid HSP from a 5-of-6 spaced (`18 bp`) seed.
-fn extend_aa_ungapped_hsp(
+/// Find spaced `5-of-6` translated amino-acid hits for both forward and reverse-complement
+/// target orientations while indexing `seq_x` and `rc_x` only once.
+pub(crate) fn find_translated_aa5_hits_both(
+    seq_x: &[u8],
+    seq_y: &[u8],
+    seq_y_rc: &[u8],
+    max_occ: usize,
+    skip_softmasked: bool,
+) -> (AnchorPairs, AnchorPairs) {
+    let ((x_fwd, x_rev), (y_fwd, yrc_fwd)) = rayon::join(
+        || {
+            rayon::join(
+                || Aa5Index::build(seq_x, max_occ, skip_softmasked),
+                || {
+                    if seq_x.len() >= 18 {
+                        let rc_x = super::revcomp_preserve_case(seq_x);
+                        Some(Aa5Index::build(&rc_x, max_occ, skip_softmasked))
+                    } else {
+                        None
+                    }
+                },
+            )
+        },
+        || {
+            rayon::join(
+                || Aa5Index::build(seq_y, max_occ, skip_softmasked),
+                || Aa5Index::build(seq_y_rc, max_occ, skip_softmasked),
+            )
+        },
+    );
+
+    let mut hits_fwd = Vec::new();
+    x_fwd.intersect_into(&y_fwd, None, &mut hits_fwd);
+    if let Some(xr) = &x_rev {
+        xr.intersect_into(&yrc_fwd, Some((seq_x.len(), seq_y.len())), &mut hits_fwd);
+    }
+
+    let mut hits_rc = Vec::new();
+    x_fwd.intersect_into(&yrc_fwd, None, &mut hits_rc);
+    if let Some(xr) = &x_rev {
+        xr.intersect_into(&y_fwd, Some((seq_x.len(), seq_y_rc.len())), &mut hits_rc);
+    }
+
+    (hits_fwd, hits_rc)
+}
+
+fn rc_codon_to_aa(seq: &[u8], end_pos: usize) -> Option<u8> {
+    if end_pos < 3 || end_pos > seq.len() {
+        return None;
+    }
+    codon_to_aa(
+        crate::complement_base(seq[end_pos - 1]),
+        crate::complement_base(seq[end_pos - 2]),
+        crate::complement_base(seq[end_pos - 3]),
+    )
+}
+
+#[allow(clippy::too_many_lines)]
+fn extend_aa_ungapped_hsp_oriented(
     seq_x: &[u8],
     seq_y: &[u8],
     px: usize,
     py: usize,
     min_score: i32,
+    rev_coding: bool,
 ) -> Option<(usize, usize, usize, usize, i32)> {
     const AA_XDROP: i32 = 30;
-    const AA_OFFSETS: [usize; 5] = [0, 1, 2, 4, 5];
     if px + 18 > seq_x.len() || py + 18 > seq_y.len() {
         return None;
     }
+    let (req_offsets, wildcard_off): ([usize; 5], usize) = if rev_coding {
+        ([0, 1, 3, 4, 5], 6)
+    } else {
+        ([0, 1, 2, 4, 5], 9)
+    };
+    let codon_at = |seq: &[u8], start: usize| -> Option<u8> {
+        if rev_coding {
+            rc_codon_to_aa(seq, start + 3)
+        } else {
+            codon_to_aa(seq[start], seq[start + 1], seq[start + 2])
+        }
+    };
     let mut core = 0i32;
-    for &c in &AA_OFFSETS {
-        let ax = codon_to_aa(
-            seq_x[px + c * 3],
-            seq_x[px + c * 3 + 1],
-            seq_x[px + c * 3 + 2],
-        )?;
-        let ay = codon_to_aa(
-            seq_y[py + c * 3],
-            seq_y[py + c * 3 + 1],
-            seq_y[py + c * 3 + 2],
-        )?;
+    for c in req_offsets {
+        let ax = codon_at(seq_x, px + c * 3)?;
+        let ay = codon_at(seq_y, py + c * 3)?;
         core += aa_pair_score(ax, ay);
     }
-    // Include the wildcard codon 3 if both codons are valid (non-stop); otherwise skip it cleanly.
+    // Include the wildcard codon if both codons are valid (non-stop); otherwise skip it cleanly.
     if let (Some(ax), Some(ay)) = (
-        codon_to_aa(seq_x[px + 9], seq_x[px + 10], seq_x[px + 11]),
-        codon_to_aa(seq_y[py + 9], seq_y[py + 10], seq_y[py + 11]),
+        codon_at(seq_x, px + wildcard_off),
+        codon_at(seq_y, py + wildcard_off),
     ) {
         core += aa_pair_score(ax, ay);
     }
@@ -149,10 +272,7 @@ fn extend_aa_ungapped_hsp(
     while ix >= 3 && iy >= 3 {
         ix -= 3;
         iy -= 3;
-        let (Some(ax), Some(ay)) = (
-            codon_to_aa(seq_x[ix], seq_x[ix + 1], seq_x[ix + 2]),
-            codon_to_aa(seq_y[iy], seq_y[iy + 1], seq_y[iy + 2]),
-        ) else {
+        let (Some(ax), Some(ay)) = (codon_at(seq_x, ix), codon_at(seq_y, iy)) else {
             break;
         };
         cur += aa_pair_score(ax, ay);
@@ -171,10 +291,7 @@ fn extend_aa_ungapped_hsp(
     ix = px + 18;
     iy = py + 18;
     while ix + 3 <= seq_x.len() && iy + 3 <= seq_y.len() {
-        let (Some(ax), Some(ay)) = (
-            codon_to_aa(seq_x[ix], seq_x[ix + 1], seq_x[ix + 2]),
-            codon_to_aa(seq_y[iy], seq_y[iy + 1], seq_y[iy + 2]),
-        ) else {
+        let (Some(ax), Some(ay)) = (codon_at(seq_x, ix), codon_at(seq_y, iy)) else {
             break;
         };
         cur += aa_pair_score(ax, ay);
@@ -191,6 +308,26 @@ fn extend_aa_ungapped_hsp(
 
     let total = core + best_left + best_right;
     (total >= min_score).then_some((lx, ly, rx, ry, total))
+}
+
+/// Extend an ungapped codon-level amino-acid HSP from a 5-of-6 spaced (`18 bp`) seed,
+/// evaluating both forward (`+`) and reverse-complement (`-`) coding-frame orientations.
+fn extend_aa_ungapped_hsp(
+    seq_x: &[u8],
+    seq_y: &[u8],
+    px: usize,
+    py: usize,
+    min_score: i32,
+) -> Option<(usize, usize, usize, usize, i32)> {
+    match (
+        extend_aa_ungapped_hsp_oriented(seq_x, seq_y, px, py, min_score, false),
+        extend_aa_ungapped_hsp_oriented(seq_x, seq_y, px, py, min_score, true),
+    ) {
+        (Some(a), Some(b)) => Some(if a.4 >= b.4 { a } else { b }),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    }
 }
 
 pub(crate) fn append_hsp_gated_aa_lcbs(
@@ -223,7 +360,7 @@ pub(crate) fn append_hsp_gated_aa_lcbs(
     }
 }
 
-/// Find 2-hit translated amino-acid `5-mer` (15 bp) anchors across all reading frames.
+/// Find 2-hit translated amino-acid 5-of-6 (`18 bp`) anchors across all reading frames.
 #[cfg(test)]
 pub(crate) fn append_translated_aa5_lcbs(
     target: &mut LcbList,
@@ -236,154 +373,9 @@ pub(crate) fn append_translated_aa5_lcbs(
     append_two_hit_diagonal_lcbs(target, &hits, 120, 12);
 }
 
-#[inline]
-fn hsp_pair_score(a: u8, b: u8) -> i32 {
-    let (Some(ia), Some(ib)) = (base_to_idx(a), base_to_idx(b)) else {
-        return -15;
-    };
-    if ia == ib {
-        10
-    } else if (ia ^ ib) == 2 {
-        -3 // transition (A<->G, C<->T)
-    } else {
-        -12 // transversion
-    }
-}
-
-/// Extend a 19-bp seed hit `(px, py)` without gaps using transition-aware X-drop;
-/// returns `Some((start_x, start_y, end_x, end_y, score))` when `score >= min_score`.
-fn extend_ungapped_hsp(
-    seq_x: &[u8],
-    seq_y: &[u8],
-    px: usize,
-    py: usize,
-    min_score: i32,
-) -> Option<(usize, usize, usize, usize, i32)> {
-    const XDROP: i32 = 60;
-    if px + 19 > seq_x.len() || py + 19 > seq_y.len() {
-        return None;
-    }
-    let mut core = 0i32;
-    for off in 0..19 {
-        core += hsp_pair_score(seq_x[px + off], seq_y[py + off]);
-    }
-
-    let mut cur = 0i32;
-    let mut best_left = 0i32;
-    let mut lx = px;
-    let mut ly = py;
-    let mut ix = px;
-    let mut iy = py;
-    while ix > 0 && iy > 0 {
-        ix -= 1;
-        iy -= 1;
-        cur += hsp_pair_score(seq_x[ix], seq_y[iy]);
-        if cur > best_left {
-            best_left = cur;
-            lx = ix;
-            ly = iy;
-        } else if best_left - cur > XDROP {
-            break;
-        }
-    }
-
-    cur = 0;
-    let mut best_right = 0i32;
-    let mut rx = px + 19;
-    let mut ry = py + 19;
-    ix = px + 19;
-    iy = py + 19;
-    while ix < seq_x.len() && iy < seq_y.len() {
-        cur += hsp_pair_score(seq_x[ix], seq_y[iy]);
-        ix += 1;
-        iy += 1;
-        if cur > best_right {
-            best_right = cur;
-            rx = ix;
-            ry = iy;
-        } else if best_right - cur > XDROP {
-            break;
-        }
-    }
-
-    let total = core + best_left + best_right;
-    (total >= min_score).then_some((lx, ly, rx, ry, total))
-}
-
-pub(crate) fn append_hsp_gated_lastz12_lcbs(
-    target: &mut LcbList,
-    seq_x: &[u8],
-    seq_y: &[u8],
-    hits: &[(usize, usize)],
-    min_hsp_score: i32,
-) {
-    #[allow(clippy::cast_precision_loss)]
-    let space_bits = ((seq_x.len().max(1) as f64) * (seq_y.len().max(1) as f64))
-        .log2()
-        .max(10.0);
-    #[allow(clippy::cast_possible_truncation)]
-    let strong_margin = (1.8 * space_bits).round() as i32;
-    let mut filtered_hits: Vec<(usize, usize)> = Vec::new();
-    let mut strong_hsps: Vec<Vec<(usize, usize)>> = Vec::new();
-    let eval_hit = |&(px, py): &(usize, usize)| {
-        let (lx, ly, rx, ry, sc) = extend_ungapped_hsp(seq_x, seq_y, px, py, min_hsp_score)?;
-        let strong = (sc >= min_hsp_score + strong_margin && rx > lx + 19 && ry > ly + 19)
-            .then_some(((lx, ly), (rx - 19, ry - 19)));
-        Some((px, py, strong))
-    };
-    let evaluated: Vec<_> = if hits.len() >= 2048 {
-        hits.par_iter().filter_map(eval_hit).collect()
-    } else {
-        hits.iter().filter_map(eval_hit).collect()
-    };
-    filtered_hits.reserve(evaluated.len());
-    for (px, py, strong) in evaluated {
-        filtered_hits.push((px, py));
-        if let Some((p0, p1)) = strong {
-            strong_hsps.push(vec![p0, p1]);
-        }
-    }
-    let mut candidates = cluster_strand_lcbs(&filtered_hits, 1800, 200, 3, 30, 250.0);
-    candidates.extend(cluster_strand_lcbs(&filtered_hits, 150, 25, 2, 16, 150.0));
-    candidates.extend(strong_hsps);
-    let mut intervals = super::IntervalSet::from_lcbs(target.iter());
-    for lcb in candidates {
-        let (sx, ex) = (lcb[0].0, lcb[lcb.len() - 1].0);
-        if intervals.insert_if_disjoint(sx, ex) {
-            target.push(lcb);
-        }
-    }
-}
-
-pub(crate) fn find_w12_raw_lcbs(idx_x: &ContigIndex, idx_y: &ContigIndex) -> (LcbList, LcbList) {
-    let (hits_fwd, hits_rc) = idx_x.seeds.intersect(&idx_y.seeds);
-    let raw_fwd = cluster_strand_lcbs(&hits_fwd, 2500, 250, 7, 70, 220.0);
-    let raw_rc = cluster_strand_lcbs(&hits_rc, 2500, 250, 7, 70, 220.0);
-    (raw_fwd, raw_rc)
-}
-
-pub(crate) fn append_nonoverlapping_lcbs(
-    target: &mut LcbList,
-    existing: &[Vec<(usize, usize)>],
-    hits: &[(usize, usize)],
-    min_anchors: usize,
-    min_span: usize,
-) {
-    let mut candidates = cluster_strand_lcbs(hits, 1800, 200, min_anchors, min_span, 250.0);
-    // Tight 2-hit diagonal pass (LASTZ-style): 2 nearby hits within 120bp and <=25bp drift.
-    candidates.extend(cluster_strand_lcbs(hits, 120, 25, 2, 16, 120.0));
-    let mut intervals = super::IntervalSet::from_lcbs(existing.iter().chain(target.iter()));
-    for lcb in candidates {
-        let (sx, ex) = (lcb[0].0, lcb[lcb.len() - 1].0);
-        if intervals.insert_if_disjoint(sx, ex) {
-            target.push(lcb);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{append_hsp_gated_aa_lcbs, append_hsp_gated_lastz12_lcbs};
+    use super::append_hsp_gated_aa_lcbs;
     use crate::seeding::LcbList;
 
     #[test]
@@ -397,15 +389,49 @@ mod tests {
     }
 
     #[test]
-    fn hsp_gated_lastz12_parallel_branch_handles_2048_plus_hits() {
-        let unit = b"ACGTTGCATGCAACTGGTCAGTCGATCGTAGCTAGCTGAT";
-        let mut seq = Vec::with_capacity(2400);
-        while seq.len() < 2400 {
-            seq.extend_from_slice(unit);
-        }
-        let hits: Vec<(usize, usize)> = (0..2200).map(|i| (i, i)).collect();
+    fn aa_5of6_extends_minus_strand_coding_with_plus_strand_stops() {
+        // Antisense of Leu (TTA -> TAA on +) and Ser (TCA -> TGA on +) would hit + stop codons,
+        // so only reverse-complement codon translation succeeds.
+        let coding_x = b"ATGGCTCTGTTATCATCAGCTCTGTTATCATCAGCTCTGTTATCATCAATGGCT".to_vec();
+        let coding_y = b"ATGGCCTTGCTCTCGTCGGCCCTGCTCTCGTCGGCCCTGCTCTCGTCGATGGCT".to_vec();
+        let rc_x = crate::revcomp(&coding_x);
+        let rc_y = crate::revcomp(&coding_y);
+        let (hits_fwd, _) = super::find_translated_aa5_hits_both(&rc_x, &rc_y, &coding_y, 2, false);
+        assert_ne!(hits_fwd.len(), 0);
         let mut lcbs: LcbList = Vec::new();
-        append_hsp_gated_lastz12_lcbs(&mut lcbs, &seq, &seq, &hits, 120);
-        assert_ne!(lcbs.len(), 0);
+        append_hsp_gated_aa_lcbs(&mut lcbs, &rc_x, &rc_y, &hits_fwd, 30);
+        assert!(
+            !lcbs.is_empty(),
+            "expected minus-strand coding HSP to pass gating"
+        );
+    }
+
+    #[test]
+    fn aa_5of6_minus_strand_tolerates_wildcard_at_fwd_offset_6() {
+        let coding = b"ATGGCTCTGTTATCATCAGCTCTGTTATCATCA".to_vec();
+        let rc_x = crate::revcomp(&coding);
+        let mut rc_y = rc_x.clone();
+        // Forward offset 6..9 is the reverse-complement wildcard codon (rc codon index 3).
+        rc_y[6..9].copy_from_slice(b"NNN");
+        let mut lcbs: LcbList = Vec::new();
+        append_hsp_gated_aa_lcbs(&mut lcbs, &rc_x, &rc_y, &[(0, 0)], 20);
+        assert!(
+            !lcbs.is_empty(),
+            "expected minus-strand coding HSP to tolerate wildcard at px+6..9"
+        );
+    }
+
+    #[test]
+    fn aa_5of6_handles_short_and_empty_sequences_without_panic() {
+        let rc_empty = crate::revcomp(b"");
+        let (fwd, rev) = super::find_translated_aa5_hits_both(b"ACGT", b"", &rc_empty, 4, false);
+        assert_eq!(fwd, []);
+        assert_eq!(rev, []);
+
+        let aln_short = crate::align_contig_pair(b"ACGTACGT", b"ACGT").expect("short align");
+        assert_eq!(aln_short.aligned_pairs, []);
+
+        let aln_empty = crate::align_contig_pair(b"", b"ACGTACGT").expect("empty align");
+        assert_eq!(aln_empty.aligned_pairs, []);
     }
 }

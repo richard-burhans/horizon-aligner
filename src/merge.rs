@@ -1,6 +1,5 @@
 //! Reference-guided multi-species MAF merging and coordinate projection.
 
-use crate::{egraph, resolve_lcb_duplications};
 use std::fmt::Write as _;
 
 struct PairwiseMafBlock {
@@ -57,7 +56,10 @@ fn project_block_interval(
             if qb != b'-' {
                 qry_before += 1;
             }
-        } else if ref_pos < hi {
+        } else {
+            if ref_pos > hi {
+                break;
+            }
             let prev_idx = ref_pos - lo - 1;
             if qb != b'-' {
                 ins_after[prev_idx].push(qb);
@@ -73,7 +75,7 @@ fn project_block_interval(
         ref_bases,
         qry_bases,
         ins_after,
-        qry_start: blk.qry_start + qry_before,
+        qry_start: blk.qry_start.checked_add(qry_before)?,
         qry_size: qry_in,
         qry_src_size: blk.qry_src_size,
     })
@@ -97,7 +99,9 @@ fn thread_interval_columns(
         .collect();
     let total_cols = span + max_ins.iter().sum::<usize>();
     let mut ref_out = String::with_capacity(total_cols);
-    let mut q_outs: Vec<String> = vec![String::with_capacity(total_cols); sp_proj.len()];
+    let mut q_outs: Vec<String> = (0..sp_proj.len())
+        .map(|_| String::with_capacity(total_cols))
+        .collect();
 
     for (i, &rb) in ref_bases.iter().enumerate() {
         ref_out.push(rb as char);
@@ -139,34 +143,47 @@ fn parse_pairwise_maf_blocks(
 ) -> std::collections::BTreeSet<String> {
     type RawRow = (String, usize, usize, char, usize, String);
     let mut cur_rows: Vec<RawRow> = Vec::new();
-    let mut tokens: Vec<(String, i8)> = Vec::new();
+    let mut tokens_by_contig: std::collections::BTreeMap<String, Vec<(String, i8)>> =
+        std::collections::BTreeMap::new();
 
-    let flush = |rows: &mut Vec<RawRow>,
-                 by_contig: &mut std::collections::BTreeMap<String, Vec<PairwiseMafBlock>>,
-                 tokens: &mut Vec<(String, i8)>| {
-        if rows.len() >= 2 {
-            let r = &rows[0];
-            let q = &rows[1];
-            let b_idx = r.1 / step_bp;
-            tokens.push((format!("B{b_idx}"), if q.3 == '-' { -1 } else { 1 }));
-            by_contig
-                .entry(r.0.clone())
-                .or_default()
-                .push(PairwiseMafBlock {
-                    ref_start: r.1,
-                    ref_end: r.1 + r.2,
-                    ref_src_size: r.4,
-                    qry_species: query_sp.to_owned(),
-                    qry_contig: q.0.clone(),
-                    qry_start: q.1,
-                    qry_strand: q.3,
-                    qry_src_size: q.4,
-                    ref_seq: r.5.as_bytes().to_vec(),
-                    qry_seq: q.5.as_bytes().to_vec(),
-                });
-        }
-        rows.clear();
-    };
+    let flush =
+        |rows: &mut Vec<RawRow>,
+         by_contig: &mut std::collections::BTreeMap<String, Vec<PairwiseMafBlock>>,
+         tokens_by_contig: &mut std::collections::BTreeMap<String, Vec<(String, i8)>>| {
+            if rows.len() >= 2 {
+                let r = &rows[0];
+                let q = &rows[1];
+                if r.3 != '+' || r.5.len() != q.5.len() {
+                    rows.clear();
+                    return;
+                }
+                let Some(ref_end) = r.1.checked_add(r.2) else {
+                    rows.clear();
+                    return;
+                };
+                let b_idx = r.1 / step_bp;
+                tokens_by_contig
+                    .entry(r.0.clone())
+                    .or_default()
+                    .push((format!("B{b_idx}"), if q.3 == '-' { -1 } else { 1 }));
+                by_contig
+                    .entry(r.0.clone())
+                    .or_default()
+                    .push(PairwiseMafBlock {
+                        ref_start: r.1,
+                        ref_end,
+                        ref_src_size: r.4,
+                        qry_species: query_sp.to_owned(),
+                        qry_contig: q.0.clone(),
+                        qry_start: q.1,
+                        qry_strand: q.3,
+                        qry_src_size: q.4,
+                        ref_seq: r.5.as_bytes().to_vec(),
+                        qry_seq: q.5.as_bytes().to_vec(),
+                    });
+            }
+            rows.clear();
+        };
 
     for raw_line in maf_text.lines() {
         let line = raw_line.trim();
@@ -174,7 +191,7 @@ fn parse_pairwise_maf_blocks(
             continue;
         }
         if line.is_empty() {
-            flush(&mut cur_rows, by_contig, &mut tokens);
+            flush(&mut cur_rows, by_contig, &mut tokens_by_contig);
             continue;
         }
         if line == "a"
@@ -182,44 +199,16 @@ fn parse_pairwise_maf_blocks(
                 .strip_prefix('a')
                 .is_some_and(|r| r.starts_with(char::is_whitespace))
         {
-            flush(&mut cur_rows, by_contig, &mut tokens);
-        } else if let Some(rest) = line
-            .strip_prefix('s')
-            .filter(|r| r.starts_with(char::is_whitespace))
-        {
-            let parts: Vec<&str> = rest.split_whitespace().collect();
-            if parts.len() >= 6
-                && let (Ok(start), Ok(size), Ok(src_size)) = (
-                    parts[1].parse::<usize>(),
-                    parts[2].parse::<usize>(),
-                    parts[4].parse::<usize>(),
-                )
-            {
-                let strand = parts[3].chars().next().unwrap_or('+');
-                cur_rows.push((
-                    parts[0].to_owned(),
-                    start,
-                    size,
-                    strand,
-                    src_size,
-                    parts[5].to_owned(),
-                ));
-            }
+            flush(&mut cur_rows, by_contig, &mut tokens_by_contig);
+        } else if let Some((row, size)) = crate::formats::parse_maf_s_line(line) {
+            cur_rows.push((row.src, row.start, size, row.strand, row.src_size, row.seq));
         }
     }
-    flush(&mut cur_rows, by_contig, &mut tokens);
+    flush(&mut cur_rows, by_contig, &mut tokens_by_contig);
 
     let mut sp_dups = std::collections::BTreeSet::new();
-    for win in tokens.chunks(12) {
-        if win.len() < 2 {
-            continue;
-        }
-        let refs: Vec<(&str, i8)> = win.iter().map(|(s, st)| (s.as_str(), *st)).collect();
-        if let Some(expr) = resolve_lcb_duplications(&refs) {
-            for d in egraph::collect_dups(&expr) {
-                sp_dups.insert(d);
-            }
-        }
+    for tokens in tokens_by_contig.values() {
+        crate::formats::collect_windowed_duplications(tokens, &mut sp_dups);
     }
     sp_dups
 }
@@ -388,4 +377,60 @@ fn interval_match_score(proj: &ProjectedInterval) -> isize {
         }
     }
     score
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn project_block_interval_tracks_insertions_and_minus_strand() {
+        let blk = PairwiseMafBlock {
+            ref_start: 10,
+            ref_end: 13,
+            ref_src_size: 100,
+            qry_species: "dog".to_owned(),
+            qry_contig: "chr2".to_owned(),
+            qry_start: 50,
+            qry_strand: '-',
+            qry_src_size: 200,
+            ref_seq: b"A-CG".to_vec(),
+            qry_seq: b"TTGC".to_vec(),
+        };
+        let proj = project_block_interval(&blk, 10, 13).expect("projected");
+        assert_eq!(proj.ref_bases, b"ACG");
+        assert_eq!(proj.qry_bases, b"TGC");
+        assert_eq!(proj.ins_after, vec![vec![b'T'], Vec::new(), Vec::new()]);
+        assert_eq!(proj.qry_size, 4);
+        assert_eq!(proj.qry_start, 50);
+    }
+
+    #[test]
+    fn project_block_interval_preserves_insertion_at_split_boundary() {
+        let blk = PairwiseMafBlock {
+            ref_start: 10,
+            ref_end: 14,
+            ref_src_size: 100,
+            qry_species: "dog".to_owned(),
+            qry_contig: "chr2".to_owned(),
+            qry_start: 20,
+            qry_strand: '+',
+            qry_src_size: 200,
+            ref_seq: b"AC-GT".to_vec(),
+            qry_seq: b"AAAGG".to_vec(),
+        };
+        let left = project_block_interval(&blk, 10, 12).expect("left");
+        assert_eq!(left.ref_bases, b"AC");
+        assert_eq!(left.qry_bases, b"AA");
+        assert_eq!(left.ins_after, vec![Vec::new(), vec![b'A']]);
+        assert_eq!(left.qry_start, 20);
+        assert_eq!(left.qry_size, 3);
+
+        let right = project_block_interval(&blk, 12, 14).expect("right");
+        assert_eq!(right.ref_bases, b"GT");
+        assert_eq!(right.qry_bases, b"GG");
+        assert_eq!(right.ins_after, vec![Vec::new(), Vec::new()]);
+        assert_eq!(right.qry_start, 23);
+        assert_eq!(right.qry_size, 2);
+    }
 }

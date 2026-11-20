@@ -2,7 +2,6 @@
 
 use super::{AnchorPairs, is_low_complexity_window};
 use crate::AlignError;
-use crate::bocpd::base_to_idx;
 
 /// Compact flat sorted spaced-seed index (`12 bytes/entry` vs `~100 bytes/entry` for `HashMap<u64, Vec<usize>>`).
 ///
@@ -28,30 +27,7 @@ impl FlatSeedIndex {
         ry_mode: bool,
         sdust: Option<&[bool]>,
     ) -> Result<Self, AlignError> {
-        if mask.is_empty() {
-            return Err(AlignError::InvalidMask("mask is empty".to_owned()));
-        }
-        let bytes = mask.as_bytes();
-        let span = bytes.len();
-        let mut offsets = Vec::new();
-        for (idx, &ch) in bytes.iter().enumerate() {
-            match ch {
-                b'1' => offsets.push(idx),
-                b'0' => {}
-                _ => {
-                    return Err(AlignError::InvalidMask(format!(
-                        "unexpected char '{}'",
-                        ch as char
-                    )));
-                }
-            }
-        }
-        let max_bits = if ry_mode { 62 } else { 31 };
-        if offsets.is_empty() || offsets.len() > max_bits {
-            return Err(AlignError::InvalidMask(format!(
-                "active mask bits must be in 1..={max_bits}"
-            )));
-        }
+        let (span, offsets) = super::parse_mask_offsets(mask, ry_mode)?;
         if seq.len() < span {
             return Ok(Self {
                 keys: Vec::new(),
@@ -63,7 +39,7 @@ impl FlatSeedIndex {
             });
         }
         if seq.len() > u32::MAX as usize {
-            return Err(AlignError::InvalidMask(
+            return Err(AlignError::InvalidInput(
                 "sequence length exceeds 4 Gbp u32 index limit".to_owned(),
             ));
         }
@@ -71,7 +47,7 @@ impl FlatSeedIndex {
         if let Some(m) = sdust
             && m.len() < seq.len()
         {
-            return Err(AlignError::InvalidMask(
+            return Err(AlignError::InvalidInput(
                 "sdust mask shorter than sequence".to_owned(),
             ));
         }
@@ -88,30 +64,11 @@ impl FlatSeedIndex {
             if sdust.is_none() && span >= 12 && is_low_complexity_window(sub) {
                 continue;
             }
-            let mut fwd = 0_u64;
-            let mut rc = 0_u64;
-            let mut valid = true;
-            for (&fo, &ro) in offsets.iter().zip(&rev_offsets) {
-                if skip_softmasked && (sub[fo].is_ascii_lowercase() || sub[ro].is_ascii_lowercase())
-                {
-                    valid = false;
-                    break;
-                }
-                let (Some(bf), Some(br)) = (base_to_idx(sub[fo]), base_to_idx(sub[ro])) else {
-                    valid = false;
-                    break;
-                };
-                if ry_mode {
-                    fwd = (fwd << 1) | ((bf & 1) as u64);
-                    rc = (rc << 1) | ((1 - (br & 1)) as u64);
-                } else {
-                    fwd = (fwd << 2) | (bf as u64);
-                    rc = (rc << 2) | ((3 - br) as u64);
-                }
-            }
-            if !valid {
+            let Some((fwd, rc)) =
+                super::encode_spaced_pair(sub, &offsets, &rev_offsets, skip_softmasked, ry_mode)
+            else {
                 continue;
-            }
+            };
             #[allow(clippy::cast_possible_truncation)]
             pairs.push((fwd.min(rc), i as u32));
         }

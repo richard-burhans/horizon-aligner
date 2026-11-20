@@ -1,11 +1,10 @@
 //! Topological DAG / partial-order Pair-HMM MDL + BOCPD alignment.
 
 use crate::bocpd::{
-    MIN_POST_PROB, NEG_INF, base_probs, bocpd_gc_profile, joint_pair_bits, logsumexp2, logsumexp3,
+    BocpdScratch, MIN_POST_PROB, NEG_INF, base_probs, bocpd_gc_profile_into, joint_pair_bits,
+    logsumexp2, logsumexp3,
 };
-use crate::mdl::dp::HmmParams;
-use crate::seeding::{FlatSeedIndex, MASK_RY20, MASK_W10, sdust_mask};
-use std::collections::HashMap;
+use crate::mdl::dp::{HmmParams, NormalizedHmmParams};
 
 /// Adaptive banded per-node DP grid (`abPOA`, Gao et al. 2021).
 #[derive(Clone)]
@@ -15,11 +14,13 @@ struct DagBandGrid {
 }
 
 impl DagBandGrid {
-    fn new(bounds: Vec<(usize, usize, usize)>, total_cells: usize, init: f64) -> Self {
-        Self {
-            bounds,
-            data: vec![init; total_cells],
+    fn new(bounds: Vec<(usize, usize, usize)>, total_cells: usize, init: f64) -> Option<Self> {
+        let mut data = Vec::new();
+        if data.try_reserve_exact(total_cells).is_err() {
+            return None;
         }
+        data.resize(total_cells, init);
+        Some(Self { bounds, data })
     }
 
     #[inline]
@@ -47,30 +48,32 @@ impl DagBandGrid {
     }
 }
 
+type NodeBounds = (Vec<(usize, usize, usize)>, usize);
+
 fn build_node_bounds(
     nu: usize,
     s_min: usize,
     s_max: usize,
     total_max: usize,
     m: usize,
-) -> (Vec<(usize, usize, usize)>, usize) {
+) -> Option<NodeBounds> {
     let mut bounds = Vec::with_capacity(nu + 1);
     let mut off = 0usize;
     let use_band = m > 128 && total_max > 0;
     let band_w = (m / 8).clamp(64, 512);
     for i in 0..=nu {
         let (j_lo, j_hi) = if use_band {
-            let lo_est = ((s_min + i) * m) / total_max;
-            let hi_est = ((s_max + i) * m) / total_max;
+            let lo_est = super::dp::band_center(s_min + i, m, total_max);
+            let hi_est = super::dp::band_center(s_max + i, m, total_max);
             (lo_est.saturating_sub(band_w), (hi_est + band_w).min(m))
         } else {
             (0, m)
         };
-        let len = j_hi.saturating_sub(j_lo) + 1;
+        let len = j_hi.saturating_sub(j_lo).checked_add(1)?;
         bounds.push((j_lo, j_hi, off));
-        off += len;
+        off = off.checked_add(len)?;
     }
-    (bounds, off)
+    Some((bounds, off))
 }
 
 /// A topologically ordered node in a sequence DAG for partial-order MDL alignment.
@@ -125,6 +128,7 @@ pub fn align_seq_to_dag_mdl(
     }
 
     let num_nodes = nodes.len();
+    let mut unique_preds: Vec<Vec<usize>> = vec![Vec::new(); num_nodes];
     let mut succs: Vec<Vec<usize>> = vec![Vec::new(); num_nodes];
     for (u, node) in nodes.iter().enumerate() {
         for &p in &node.preds {
@@ -136,31 +140,33 @@ pub fn align_seq_to_dag_mdl(
                     score_bits: 0.0,
                 };
             }
-            succs[p].push(u);
+            if !unique_preds[u].contains(&p) {
+                unique_preds[u].push(p);
+                succs[p].push(u);
+            }
         }
     }
 
-    let gc_y = bocpd_gc_profile(seq_y, 1.0 / 120.0, 80);
-    let pi_y: Vec<[f64; 4]> = gc_y.into_iter().map(base_probs).collect();
-    let pi_nodes: Vec<Vec<[f64; 4]>> = nodes
-        .iter()
-        .map(|nd| {
-            bocpd_gc_profile(&nd.seq, 1.0 / 120.0, 80)
-                .into_iter()
-                .map(base_probs)
-                .collect()
-        })
-        .collect();
+    let mut bocpd_scratch = BocpdScratch::default();
+    let mut gc_buf = Vec::new();
+    bocpd_gc_profile_into(seq_y, 1.0 / 120.0, 80, &mut bocpd_scratch, &mut gc_buf);
+    let pi_y: Vec<[f64; 4]> = gc_buf.iter().copied().map(base_probs).collect();
+    let mut pi_nodes: Vec<Vec<[f64; 4]>> = Vec::with_capacity(num_nodes);
+    for nd in nodes {
+        bocpd_gc_profile_into(&nd.seq, 1.0 / 120.0, 80, &mut bocpd_scratch, &mut gc_buf);
+        pi_nodes.push(gc_buf.iter().copied().map(base_probs).collect());
+    }
 
-    let id_prior = params.identity_prior.clamp(0.40, 0.98);
-    let go_bits = params.gap_open_bits.clamp(-8.0, -1.5);
-    let ge_bits = params.gap_extend_bits.clamp(-4.0, -0.2);
+    let NormalizedHmmParams {
+        id_prior,
+        go_bits,
+        ge_bits,
+        mm_bits,
+        im_bits,
+        ..
+    } = params.normalized();
 
     let ln2 = 2.0_f64.ln();
-    let p_open = 2.0_f64.powf(go_bits);
-    let p_ext = 2.0_f64.powf(ge_bits);
-    let mm_bits = (1.0 - 2.0 * p_open).max(1e-6).log2();
-    let im_bits = (1.0 - p_ext).max(1e-6).log2();
     let go = go_bits * ln2;
     let ge = ge_bits * ln2;
     let mm_ln = mm_bits * ln2;
@@ -195,27 +201,44 @@ pub fn align_seq_to_dag_mdl(
     let mut fiy: Vec<DagBandGrid> = Vec::with_capacity(num_nodes);
 
     for (u, nd) in nodes.iter().enumerate() {
-        let (bounds, cells) =
-            build_node_bounds(nd.seq.len(), start_min[u], start_max[u], total_max, m);
-        fm.push(DagBandGrid::new(bounds.clone(), cells, NEG_INF));
-        fix.push(DagBandGrid::new(bounds.clone(), cells, NEG_INF));
-        fiy.push(DagBandGrid::new(bounds, cells, NEG_INF));
+        let Some((bounds, cells)) =
+            build_node_bounds(nd.seq.len(), start_min[u], start_max[u], total_max, m)
+        else {
+            return GraphAlignment {
+                path_nodes: Vec::new(),
+                kept_pairs: Vec::new(),
+                bubbles: 1,
+                score_bits: 0.0,
+            };
+        };
+        let (Some(g_fm), Some(g_fix), Some(g_fiy)) = (
+            DagBandGrid::new(bounds.clone(), cells, NEG_INF),
+            DagBandGrid::new(bounds.clone(), cells, NEG_INF),
+            DagBandGrid::new(bounds, cells, NEG_INF),
+        ) else {
+            return GraphAlignment {
+                path_nodes: Vec::new(),
+                kept_pairs: Vec::new(),
+                bubbles: 1,
+                score_bits: 0.0,
+            };
+        };
+        fm.push(g_fm);
+        fix.push(g_fix);
+        fiy.push(g_fiy);
     }
 
     for u in 0..num_nodes {
         let nu = nodes[u].seq.len();
         let (j0_lo, j0_hi) = fm[u].row_range(0);
-        if nodes[u].preds.is_empty() {
+        if unique_preds[u].is_empty() {
             fm[u].set(0, 0, 0.0);
         } else {
             for j in j0_lo..=j0_hi {
                 let mut sum_fm = NEG_INF;
                 let mut sum_fix = NEG_INF;
                 let mut sum_fiy = NEG_INF;
-                for &p in &nodes[u].preds {
-                    if p >= u {
-                        continue;
-                    }
+                for &p in &unique_preds[u] {
                     let pend = nodes[p].seq.len();
                     sum_fm = logsumexp2(sum_fm, fm[p].get(pend, j));
                     sum_fix = logsumexp2(sum_fix, fix[p].get(pend, j));
@@ -227,7 +250,7 @@ pub fn align_seq_to_dag_mdl(
             }
         }
 
-        if nodes[u].preds.is_empty() {
+        if unique_preds[u].is_empty() {
             for j in (j0_lo.max(1))..=j0_hi {
                 let cur = fiy[u].get(0, j);
                 let from_left = logsumexp2(fm[u].get(0, j - 1) + go, fiy[u].get(0, j - 1) + ge);
@@ -284,18 +307,25 @@ pub fn align_seq_to_dag_mdl(
         };
     }
 
-    let mut bm: Vec<DagBandGrid> = fm
-        .iter()
-        .map(|g| DagBandGrid::new(g.bounds.clone(), g.data.len(), NEG_INF))
-        .collect();
-    let mut bix: Vec<DagBandGrid> = fm
-        .iter()
-        .map(|g| DagBandGrid::new(g.bounds.clone(), g.data.len(), NEG_INF))
-        .collect();
-    let mut biy: Vec<DagBandGrid> = fm
-        .iter()
-        .map(|g| DagBandGrid::new(g.bounds.clone(), g.data.len(), NEG_INF))
-        .collect();
+    drop(fix);
+    drop(fiy);
+
+    let alloc_like = |template: &[DagBandGrid]| -> Option<Vec<DagBandGrid>> {
+        template
+            .iter()
+            .map(|g| DagBandGrid::new(g.bounds.clone(), g.data.len(), NEG_INF))
+            .collect()
+    };
+    let (Some(mut bm), Some(mut bix), Some(mut biy)) =
+        (alloc_like(&fm), alloc_like(&fm), alloc_like(&fm))
+    else {
+        return GraphAlignment {
+            path_nodes: Vec::new(),
+            kept_pairs: Vec::new(),
+            bubbles: 1,
+            score_bits,
+        };
+    };
 
     for u in (0..num_nodes).rev() {
         let nu = nodes[u].seq.len();
@@ -380,20 +410,22 @@ pub fn align_seq_to_dag_mdl(
             }
         }
     }
+    drop(bix);
+    drop(biy);
 
     // Pure Forward-Backward MEA decoding over the DAG:
     // reuse `fm[u]` for MEA cumulative score and `bm[u]` for posterior match probability.
     for u in 0..num_nodes {
         let nu = nodes[u].seq.len();
         let (j0_lo, j0_hi) = fm[u].row_range(0);
-        if nodes[u].preds.is_empty() {
+        if unique_preds[u].is_empty() {
             for j in j0_lo..=j0_hi {
                 fm[u].set(0, j, 0.0);
             }
         } else {
             for j in j0_lo..=j0_hi {
                 let mut best_p = NEG_INF;
-                for &p in &nodes[u].preds {
+                for &p in &unique_preds[u] {
                     if p < u {
                         best_p = best_p.max(fm[p].get(nodes[p].seq.len(), j));
                     }
@@ -462,7 +494,7 @@ pub fn align_seq_to_dag_mdl(
         if i == 0 {
             let cur = fm[u].get(0, j);
             let mut switched_pred = None;
-            for &p in &nodes[u].preds {
+            for &p in &unique_preds[u] {
                 if p < u && (fm[p].get(nodes[p].seq.len(), j) - cur).abs() < 1e-9 {
                     switched_pred = Some(p);
                     break;
@@ -518,53 +550,17 @@ pub fn align_seq_to_dag_mdl(
     raw_cols.reverse();
     path_nodes.reverse();
 
-    let k = raw_cols.len();
-    let mut abstain = vec![false; k];
-    let mut idx = 0;
-    while idx < k {
-        let (cx, cy, _, pp) = raw_cols[idx];
-        if cx.is_some() && cy.is_some() && pp >= MIN_POST_PROB {
-            let start = idx;
-            let mut block_bits = 0.0;
-            while idx < k
-                && ((raw_cols[idx].0.is_some()
-                    && raw_cols[idx].1.is_some()
-                    && raw_cols[idx].3 >= MIN_POST_PROB)
-                    || (idx + 1 < k
-                        && raw_cols[idx].2 > -2.5
-                        && raw_cols[idx + 1].3 >= MIN_POST_PROB))
-            {
-                block_bits += raw_cols[idx].2;
-                idx += 1;
-            }
-            if block_bits < min_block_bits {
-                abstain[start..idx].fill(true);
-            }
-        } else {
-            abstain[idx] = true;
-            idx += 1;
-        }
-    }
-
-    let mut kept_pairs = Vec::with_capacity(k);
-    let mut bubbles = 0usize;
-    idx = 0;
-    while idx < k {
-        if abstain[idx] {
-            let start = idx;
-            while idx < k && abstain[idx] {
-                idx += 1;
-            }
-            if idx - start >= 6 {
-                bubbles += 1;
-            }
-        } else {
-            if let (Some((nid, np)), Some(yp)) = (raw_cols[idx].0, raw_cols[idx].1) {
-                kept_pairs.push((nid, np, yp));
-            }
-            idx += 1;
-        }
-    }
+    let mut abstain = Vec::new();
+    let (raw_kept, bubbles) = super::dp::filter_mea_pairs_and_count_bubbles(
+        &raw_cols,
+        &mut abstain,
+        MIN_POST_PROB,
+        min_block_bits,
+    );
+    let kept_pairs = raw_kept
+        .into_iter()
+        .map(|((nid, np), yp)| (nid, np, yp))
+        .collect();
 
     GraphAlignment {
         path_nodes,
@@ -572,209 +568,6 @@ pub fn align_seq_to_dag_mdl(
         bubbles,
         score_bits,
     }
-}
-
-/// Seeded DAG alignment: uses `MASK_W10` + `MASK_RY20` spaced seeds to isolate the
-/// connected/reachable DAG subgraph matching `seq_y`, then runs [`align_seq_to_dag_mdl`].
-/// Maps returned node indices back to the original `nodes` slice.
-#[must_use]
-#[allow(clippy::too_many_lines)]
-pub fn align_seq_to_dag_seeded(
-    nodes: &[GraphNode],
-    seq_y: &[u8],
-    params: &HmmParams,
-    min_block_bits: f64,
-) -> GraphAlignment {
-    if nodes.len() <= 8 {
-        return align_seq_to_dag_mdl(nodes, seq_y, params, min_block_bits);
-    }
-
-    let y_sdust = sdust_mask(seq_y);
-    let mut seed_scores: HashMap<usize, usize> = HashMap::new();
-    for (mask, ry) in [(MASK_W10, false), (MASK_RY20, true)] {
-        if ry && !seed_scores.is_empty() {
-            break;
-        }
-        if let Ok(q_idx) =
-            FlatSeedIndex::build_with_sdust(seq_y, mask, 8, false, ry, Some(&y_sdust))
-            && !q_idx.keys.is_empty()
-        {
-            for (nid, nd) in nodes.iter().enumerate() {
-                if nd.seq.len() < mask.len() {
-                    continue;
-                }
-                let min_hits = if nd.seq.len() > 4_000 { 3 } else { 1 };
-                if let Ok(n_idx) =
-                    FlatSeedIndex::build_with_sdust(&nd.seq, mask, 8, false, ry, None)
-                {
-                    let shared = q_idx.shared_unique_keys(&n_idx);
-                    if shared >= min_hits {
-                        *seed_scores.entry(nid).or_insert(0) += shared;
-                    }
-                }
-            }
-        }
-    }
-
-    if seed_scores.is_empty() {
-        let total_bp: usize = nodes.iter().map(|n| n.seq.len()).sum();
-        if total_bp <= 50_000 {
-            return align_seq_to_dag_mdl(nodes, seq_y, params, min_block_bits);
-        }
-        return GraphAlignment {
-            path_nodes: Vec::new(),
-            kept_pairs: Vec::new(),
-            bubbles: usize::from(seq_y.len() >= 6),
-            score_bits: 0.0,
-        };
-    }
-
-    // Expand backward and forward reachability from seeded nodes within a local
-    // sequence budget so large pangenome DAGs do not pull in whole chromosomes.
-    let budget_bp = (seq_y.len() / 2).max(128);
-    let mut succs: Vec<Vec<usize>> = vec![Vec::new(); nodes.len()];
-    for (u, nd) in nodes.iter().enumerate() {
-        for &p in &nd.preds {
-            if p < u {
-                succs[p].push(u);
-            }
-        }
-    }
-
-    let max_seed_score = seed_scores.values().copied().max().unwrap_or(0);
-    let anchor_floor = if nodes.len() > 64 && max_seed_score >= 4 {
-        (max_seed_score / 4).max(2)
-    } else {
-        1
-    };
-    let mut dist_back: Vec<usize> = vec![usize::MAX; nodes.len()];
-    let mut dist_fwd: Vec<usize> = vec![usize::MAX; nodes.len()];
-    for (&s, &sc) in &seed_scores {
-        if sc >= anchor_floor {
-            dist_back[s] = 0;
-            dist_fwd[s] = 0;
-        }
-    }
-    for u in (0..nodes.len()).rev() {
-        if dist_back[u] < budget_bp {
-            for &p in &nodes[u].preds {
-                if p < u {
-                    let cand = dist_back[u].saturating_add(nodes[p].seq.len());
-                    if cand <= budget_bp && cand < dist_back[p] {
-                        dist_back[p] = cand;
-                    }
-                }
-            }
-        }
-    }
-    for u in 0..nodes.len() {
-        if dist_fwd[u] < budget_bp {
-            for &s in &succs[u] {
-                let cand = dist_fwd[u].saturating_add(nodes[s].seq.len());
-                if cand <= budget_bp && cand < dist_fwd[s] {
-                    dist_fwd[s] = cand;
-                }
-            }
-        }
-    }
-    let anchor_count = dist_back.iter().filter(|&&d| d == 0).count();
-    let use_bridge_only = nodes.len() > 64 && anchor_count >= 2;
-    let active_nodes: Vec<usize> = (0..nodes.len())
-        .filter(|&u| {
-            if use_bridge_only {
-                dist_back[u] == 0 || (dist_back[u] <= budget_bp && dist_fwd[u] <= budget_bp)
-            } else {
-                dist_back[u] <= budget_bp || dist_fwd[u] <= budget_bp
-            }
-        })
-        .collect();
-
-    // Partition active_nodes into weakly connected components so an unrelated
-    // decoy hit never distorts `total_max` banding for the true component.
-    let mut active_pos: HashMap<usize, usize> = HashMap::with_capacity(active_nodes.len());
-    for (idx, &u) in active_nodes.iter().enumerate() {
-        active_pos.insert(u, idx);
-    }
-    let mut undir: Vec<Vec<usize>> = vec![Vec::new(); active_nodes.len()];
-    for (idx, &u) in active_nodes.iter().enumerate() {
-        for &p in &nodes[u].preds {
-            if let Some(&p_idx) = active_pos.get(&p) {
-                undir[idx].push(p_idx);
-                undir[p_idx].push(idx);
-            }
-        }
-    }
-    let mut visited = vec![false; active_nodes.len()];
-    let mut components: Vec<(usize, usize, Vec<usize>)> = Vec::new();
-    for start in 0..active_nodes.len() {
-        if visited[start] {
-            continue;
-        }
-        visited[start] = true;
-        let mut stack = vec![start];
-        let mut comp = Vec::new();
-        let mut comp_score = 0usize;
-        let mut comp_bp = 0usize;
-        while let Some(cur) = stack.pop() {
-            let orig = active_nodes[cur];
-            comp.push(orig);
-            comp_score += seed_scores.get(&orig).copied().unwrap_or(0);
-            comp_bp += nodes[orig].seq.len();
-            for &nb in &undir[cur] {
-                if !visited[nb] {
-                    visited[nb] = true;
-                    stack.push(nb);
-                }
-            }
-        }
-        comp.sort_unstable();
-        if comp_bp <= 200_000 {
-            components.push((comp_score, comp_bp, comp));
-        }
-    }
-    components.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
-
-    let mut best_aln = GraphAlignment {
-        path_nodes: Vec::new(),
-        kept_pairs: Vec::new(),
-        bubbles: usize::from(seq_y.len() >= 6),
-        score_bits: 0.0,
-    };
-    for (_, _, comp) in components.into_iter().take(2) {
-        let mut old_to_new: HashMap<usize, usize> = HashMap::with_capacity(comp.len());
-        let mut new_to_old: Vec<usize> = Vec::with_capacity(comp.len());
-        let mut sub_nodes: Vec<GraphNode> = Vec::with_capacity(comp.len());
-        for old_id in comp {
-            let nd = &nodes[old_id];
-            let new_id = sub_nodes.len();
-            old_to_new.insert(old_id, new_id);
-            new_to_old.push(old_id);
-            let mapped_preds = nd
-                .preds
-                .iter()
-                .filter_map(|p| old_to_new.get(p).copied())
-                .collect();
-            sub_nodes.push(GraphNode {
-                name: nd.name.clone(),
-                seq: nd.seq.clone(),
-                preds: mapped_preds,
-            });
-        }
-        let mut aln = align_seq_to_dag_mdl(&sub_nodes, seq_y, params, min_block_bits);
-        for nid in &mut aln.path_nodes {
-            *nid = new_to_old[*nid];
-        }
-        for (nid, _, _) in &mut aln.kept_pairs {
-            *nid = new_to_old[*nid];
-        }
-        if aln.kept_pairs.len() > best_aln.kept_pairs.len()
-            || (aln.kept_pairs.len() == best_aln.kept_pairs.len()
-                && aln.score_bits > best_aln.score_bits)
-        {
-            best_aln = aln;
-        }
-    }
-    best_aln
 }
 
 #[cfg(test)]
@@ -814,79 +607,18 @@ mod tests {
     }
 
     #[test]
-    fn seeded_dag_aligns_ignoring_disconnected_decoy_component() {
-        let mut nodes = Vec::new();
-        // 6 unrelated decoy nodes
-        for idx in 0..6 {
-            nodes.push(GraphNode {
-                name: format!("decoy_{idx}"),
-                seq: b"CCCCCCCCCCCCCCCCCCCCCCCCC".to_vec(),
-                preds: if idx == 0 { vec![] } else { vec![idx - 1] },
-            });
-        }
-        // Real 4-node diamond component (indices 6..10)
-        nodes.push(GraphNode {
-            name: "r0".into(),
-            seq: b"ACTGACTGACTGACTGACTGACTGACTG".to_vec(),
-            preds: vec![],
-        });
-        nodes.push(GraphNode {
-            name: "r1".into(),
-            seq: b"TTTTTTTTTTTTTTTTTTTTTTTTTTTT".to_vec(),
-            preds: vec![6],
-        });
-        nodes.push(GraphNode {
-            name: "r2".into(),
-            seq: b"GATTACAGATTACAGATTACAGATTACA".to_vec(),
-            preds: vec![6],
-        });
-        nodes.push(GraphNode {
-            name: "r3".into(),
-            seq: b"CATGCATGCATGCATGCATGCATGCATG".to_vec(),
-            preds: vec![7, 8],
-        });
-        let query =
-            b"ACTGACTGACTGACTGACTGACTGACTGGATTACAGATTACAGATTACAGATTACACATGCATGCATGCATGCATGCATGCATG";
-        let aln = align_seq_to_dag_seeded(&nodes, query, &HmmParams::default(), 10.0);
-        assert_eq!(aln.path_nodes, vec![6, 8, 9]);
-        assert_eq!(aln.kept_pairs.len(), query.len());
-    }
+    fn dag_rejects_empty_and_nontopological_preds() {
+        let params = HmmParams::default();
+        let empty = align_seq_to_dag_mdl(&[], b"ACGT", &params, 10.0);
+        assert_eq!(empty.kept_pairs, [] as [(usize, usize, usize); 0]);
 
-    #[test]
-    fn dag_handles_query_insertion_spanning_node_boundary() {
-        let nodes = vec![
-            GraphNode {
-                name: "n0".into(),
-                seq: b"ACTGACTGACTGACTGACTGACTGACTGACTG".to_vec(),
-                preds: vec![],
-            },
-            GraphNode {
-                name: "n1".into(),
-                seq: b"GATTACAGATTACAGATTACAGATTACAGATT".to_vec(),
-                preds: vec![0],
-            },
-        ];
-        let query = b"ACTGACTGACTGACTGACTGACTGACTGACTGCCCCCC\
-                      GATTACAGATTACAGATTACAGATTACAGATT";
-        let aln = align_seq_to_dag_seeded(&nodes, query, &HmmParams::default(), 10.0);
-        assert_eq!(aln.path_nodes, vec![0, 1]);
-        assert!(aln.kept_pairs.iter().any(|&(n, _, _)| n == 0));
-        assert!(aln.kept_pairs.iter().any(|&(n, _, _)| n == 1));
-    }
-
-    #[test]
-    fn seeded_dag_abstains_without_oom_on_large_unseeded_graph() {
-        let nodes: Vec<GraphNode> = (0..12)
-            .map(|idx| GraphNode {
-                name: format!("big_{idx}"),
-                seq: vec![b'A'; 5_000],
-                preds: if idx == 0 { vec![] } else { vec![idx - 1] },
-            })
-            .collect();
-        let query = vec![b'N'; 400];
-        let aln = align_seq_to_dag_seeded(&nodes, &query, &HmmParams::default(), 10.0);
-        assert_eq!(aln.path_nodes, [] as [usize; 0]);
-        assert_eq!(aln.kept_pairs, [] as [(usize, usize, usize); 0]);
-        assert_eq!(aln.bubbles, 1);
+        let nodes = vec![GraphNode {
+            name: "n0".into(),
+            seq: b"ACGTACGTACGT".to_vec(),
+            preds: vec![0],
+        }];
+        let bad_topo = align_seq_to_dag_mdl(&nodes, b"ACGTACGTACGT", &params, 10.0);
+        assert_eq!(bad_topo.kept_pairs, [] as [(usize, usize, usize); 0]);
+        assert_eq!(bad_topo.bubbles, 1);
     }
 }

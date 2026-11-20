@@ -13,25 +13,53 @@ pub mod seeding;
 pub use bocpd::bocpd_gc_profile;
 pub use formats::{
     MafRow, format_gfa_blocks, format_gfa_paralog_tags, format_gfa_summary, format_maf_blocks,
-    parse_two_row_maf_blocks, read_fasta_contigs, resolve_alignment_duplications,
-    resolve_lcb_duplications,
+    matches_sample_prefix, parse_maf_s_line, parse_two_row_maf_blocks, read_fasta_contigs,
+    read_vm_hwm_kb, resolve_alignment_duplications, resolve_lcb_duplications, strip_sample_prefix,
 };
 pub use mdl::{
-    AlignConfig, ContigAlignment, GapResult, GraphAlignment, GraphNode, HmmParams,
+    AlignConfig, ContigAlignment, DagSeedIndex, GapResult, GraphAlignment, GraphNode, HmmParams,
     align_contig_pair, align_contig_pair_indexed, align_contig_pair_indexed_with_min_lcb,
-    align_contig_pair_with_config, align_seq_to_dag_mdl, align_seq_to_dag_seeded, banded_mdl_gap,
-    banded_mdl_gap_with_params, mdl_xdrop_extend, mdl_xdrop_extend_with_params,
+    align_contig_pair_with_config, align_seq_to_dag_mdl, align_seq_to_dag_seeded,
+    align_seq_to_dag_seeded_indexed, banded_mdl_gap, banded_mdl_gap_with_params, mdl_xdrop_extend,
+    mdl_xdrop_extend_with_params,
 };
 pub use merge::merge_pairwise_mafs;
 pub use seeding::{
-    ContigIndex, MASK_LASTZ11, MASK_LASTZ12, MASK_PRIMARY_11_15, MASK_W9, MASK_W10,
+    ContigIndex, MASK_LASTZ11, MASK_LASTZ12, MASK_PH11_18, MASK_PRIMARY_11_15, MASK_W9, MASK_W10,
     canonical_spaced_seeds, canonical_spaced_seeds_with_opts, cluster_strand_lcbs, complement_base,
     find_lastz12_1transition_hits, find_lastz12_2transition_hits, lis_chain, local_w9_subchain,
-    prepare_contig_index, prepare_contig_index_opts, revcomp, score_contig_pair_lcb,
-    select_top_k_pairs, shared_seed_count,
+    prepare_contig_index, prepare_contig_index_opts, revcomp, revcomp_preserve_case,
+    score_contig_pair_lcb, select_top_k_pairs, shared_seed_count,
 };
 
 use thiserror::Error;
+
+/// Parse and validate a `--min-fallback-cov` CLI argument in `0.0..=1.0`.
+///
+/// # Errors
+/// Returns an error if `raw` does not parse as a finite `f64` within `0.0..=1.0`.
+pub fn parse_min_fallback_cov_arg(raw: &str) -> anyhow::Result<f64> {
+    let val: f64 = raw
+        .parse()
+        .map_err(|e| anyhow::anyhow!("parsing --min-fallback-cov: {e}"))?;
+    anyhow::ensure!(
+        val.is_finite() && (0.0..=1.0).contains(&val),
+        "--min-fallback-cov must be a finite number in 0.0..=1.0 (got {val})"
+    );
+    Ok(val)
+}
+
+/// Parse and validate a non-negative `--hsp-threshold` CLI argument.
+///
+/// # Errors
+/// Returns an error if `raw` does not parse as a non-negative `i32`.
+pub fn parse_hsp_threshold_arg(raw: &str) -> anyhow::Result<i32> {
+    let val: i32 = raw
+        .parse()
+        .map_err(|e| anyhow::anyhow!("parsing --hsp-threshold: {e}"))?;
+    anyhow::ensure!(val >= 0, "--hsp-threshold must be non-negative (got {val})");
+    Ok(val)
+}
 
 /// Errors returned by sequence validation or alignment routines.
 #[derive(Debug, Error)]
@@ -40,6 +68,9 @@ pub enum AlignError {
     /// Raised when an empty mask or invalid mask character is supplied.
     #[error("invalid spaced-seed mask: {0}")]
     InvalidMask(String),
+    /// Raised when an input sequence or auxiliary mask violates size or alignment invariants.
+    #[error("invalid alignment input: {0}")]
+    InvalidInput(String),
 }
 
 #[cfg(test)]

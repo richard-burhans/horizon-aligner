@@ -1,11 +1,11 @@
 //! Multi-contig whole-genome aligner CLI using KP-14 + parallel MDL/BOCPD.
 
 use anyhow::{Context, Result, bail};
-use horizon_aligner::gfa::stream_gfa;
+use horizon_aligner::gfa::{GfaRecord, stream_gfa_records};
 use horizon_aligner::{
-    AlignConfig, ContigIndex, GraphNode, HmmParams, align_contig_pair_with_config,
-    align_seq_to_dag_seeded, format_gfa_blocks, format_gfa_paralog_tags, format_gfa_summary,
-    format_maf_blocks, prepare_contig_index_opts, read_fasta_contigs,
+    AlignConfig, ContigIndex, DagSeedIndex, GraphNode, HmmParams, align_contig_pair_with_config,
+    align_seq_to_dag_seeded_indexed, format_gfa_blocks, format_gfa_paralog_tags,
+    format_gfa_summary, format_maf_blocks, prepare_contig_index_opts, read_fasta_contigs,
     resolve_alignment_duplications, revcomp, select_top_k_pairs, shared_seed_count,
 };
 use rayon::prelude::*;
@@ -35,7 +35,7 @@ struct CliArgs {
 }
 
 #[allow(clippy::too_many_lines)]
-fn parse_args() -> Result<CliArgs> {
+fn parse_args() -> Result<Option<CliArgs>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut pos = Vec::new();
     let mut maf_out = None;
@@ -54,6 +54,12 @@ fn parse_args() -> Result<CliArgs> {
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            "-h" | "--help" => {
+                println!(
+                    "usage: horizon_wga <target.fa> <query.fa> [max_contigs] [--maf out.maf] [--gfa out.gfa] [--min-shared-seeds N] [--min-top-lcb N] [--top-k K | --rbest] [--resolve-dups] [--respect-softmask] [--ry-seeds | --no-ry-seeds] [--min-fallback-cov F] [--hsp-threshold N]\n       (max_contigs defaults to 1; pass 0 to align all contigs)\n       horizon_wga --hal-info <file.hal>\n       horizon_wga --graph <graph.gfa> <query.fa> [max_contigs]"
+                );
+                return Ok(None);
+            }
             "--maf" => {
                 maf_out = Some(PathBuf::from(
                     args.get(i + 1).context("missing value for --maf")?,
@@ -111,21 +117,17 @@ fn parse_args() -> Result<CliArgs> {
                 i += 1;
             }
             "--min-fallback-cov" => {
-                min_fallback_cov = Some(
-                    args.get(i + 1)
-                        .context("missing value for --min-fallback-cov")?
-                        .parse()
-                        .context("parsing --min-fallback-cov")?,
-                );
+                let raw = args
+                    .get(i + 1)
+                    .context("missing value for --min-fallback-cov")?;
+                min_fallback_cov = Some(horizon_aligner::parse_min_fallback_cov_arg(raw)?);
                 i += 2;
             }
             "--hsp-threshold" => {
-                hsp_threshold = Some(
-                    args.get(i + 1)
-                        .context("missing value for --hsp-threshold")?
-                        .parse()
-                        .context("parsing --hsp-threshold")?,
-                );
+                let raw = args
+                    .get(i + 1)
+                    .context("missing value for --hsp-threshold")?;
+                hsp_threshold = Some(horizon_aligner::parse_hsp_threshold_arg(raw)?);
                 i += 2;
             }
             "--hal-info" => {
@@ -150,18 +152,41 @@ fn parse_args() -> Result<CliArgs> {
         }
     }
 
+    if hal_info.is_some() && graph_path.is_some() {
+        bail!("--hal-info and --graph cannot be combined");
+    }
     if pos.len() < 2 && hal_info.is_none() && (graph_path.is_none() || pos.is_empty()) {
         bail!(
-            "usage: horizon_wga <target.fa> <query.fa> [max_contigs] [--maf out.maf] [--gfa out.gfa] [--graph target.gfa] [--hal-info file.hal] [--top-k K] [--rbest] [--resolve-dups] [--respect-softmask] [--ry-seeds|--no-ry-seeds]"
+            "usage: horizon_wga <target.fa> <query.fa> [max_contigs] [--maf out.maf] [--gfa out.gfa] [--graph target.gfa] [--hal-info file.hal] [--min-shared-seeds N] [--min-top-lcb N] [--top-k K | --rbest] [--resolve-dups] [--respect-softmask] [--ry-seeds | --no-ry-seeds] [--min-fallback-cov F] [--hsp-threshold N]"
         );
     }
-    let (fa_x, fa_y, max_contigs) = if graph_path.is_some() && (pos.len() == 1 || pos.len() == 2) {
+    let (fa_x, fa_y, max_contigs) = if hal_info.is_some() {
+        if !pos.is_empty() {
+            bail!("--hal-info does not accept positional arguments");
+        }
+        (PathBuf::new(), PathBuf::new(), 1)
+    } else if graph_path.is_some() {
+        if pos.len() > 2 {
+            bail!(
+                "--graph mode accepts <query.fa> [max_contigs], got {} positional args",
+                pos.len()
+            );
+        }
+        if maf_out.is_some() || gfa_out.is_some() {
+            bail!("--maf and --gfa outputs are not supported in --graph mode");
+        }
         let mc = match pos.get(1) {
             Some(s) => s.parse().context("parsing max_contigs")?,
             None => 1,
         };
         (PathBuf::new(), PathBuf::from(&pos[0]), mc)
     } else {
+        if pos.len() > 3 {
+            bail!(
+                "expected <target.fa> <query.fa> [max_contigs], got {} positional args",
+                pos.len()
+            );
+        }
         let mc = match pos.get(2) {
             Some(s) => s.parse().context("parsing max_contigs")?,
             None => 1,
@@ -173,7 +198,7 @@ fn parse_args() -> Result<CliArgs> {
         )
     };
 
-    Ok(CliArgs {
+    Ok(Some(CliArgs {
         fa_x,
         fa_y,
         max_contigs,
@@ -189,12 +214,14 @@ fn parse_args() -> Result<CliArgs> {
         graph_path,
         min_fallback_cov,
         hsp_threshold,
-    })
+    }))
 }
 
 #[allow(clippy::too_many_lines)]
 fn main() -> Result<()> {
-    let cli = parse_args()?;
+    let Some(cli) = parse_args()? else {
+        return Ok(());
+    };
     if let Some(hal_path) = &cli.hal_info {
         let info = horizon_aligner::hal::inspect_hal_genomes(hal_path)
             .with_context(|| format!("inspecting {}", hal_path.display()))?
@@ -218,12 +245,14 @@ fn main() -> Result<()> {
     if let Some(graph_p) = &cli.graph_path {
         let t0 = Instant::now();
         let dag_nodes = load_gfa_dag(graph_p)?;
+        let dag_index = DagSeedIndex::build(&dag_nodes);
         let queries = read_fasta_contigs(&cli.fa_y, cli.max_contigs)?;
         let mut total_pairs = 0usize;
         let mut total_bubbles = 0usize;
         for (qname, qseq) in &queries {
             let dag_params = estimate_dag_hmm_params(&dag_nodes, qseq);
-            let aln = align_seq_to_dag_seeded(&dag_nodes, qseq, &dag_params, 10.0);
+            let aln =
+                align_seq_to_dag_seeded_indexed(&dag_nodes, &dag_index, qseq, &dag_params, 10.0);
             total_pairs += aln.kept_pairs.len();
             total_bubbles += aln.bubbles;
             let path_str = aln.path_nodes.iter().fold(String::new(), |mut acc, &idx| {
@@ -283,8 +312,6 @@ fn main() -> Result<()> {
     };
 
     let mut total_pairs = 0usize;
-    let mut total_unique_x = 0usize;
-    let mut total_unique_y = 0usize;
     let mut total_bubbles = 0usize;
     let mut pruned_pairs = 0usize;
     let mut summary_out = String::new();
@@ -294,18 +321,25 @@ fn main() -> Result<()> {
         .map(|p| File::create(p).map(BufWriter::new))
         .transpose()
         .context("creating MAF output")?;
+    if let Some(w) = maf_writer.as_mut() {
+        w.write_all(b"##maf version=1 scoring=horizon_mdl\n")?;
+    }
     let mut gfa_writer = cli
         .gfa_out
         .as_ref()
         .map(|p| File::create(p).map(BufWriter::new))
         .transpose()
         .context("creating GFA output")?;
+    if let Some(w) = gfa_writer.as_mut() {
+        w.write_all(b"H\tVN:Z:1.1\n")?;
+    }
 
     let allowed = (cli.top_k > 0)
         .then(|| select_top_k_pairs(&idx_x, &idx_y, cli.top_k, cli.min_shared_seeds));
 
-    for (x_i, (nx, ix)) in idx_x.iter().enumerate() {
-        for (y_i, (ny, iy)) in idx_y.iter().enumerate() {
+    let mut candidate_pairs: Vec<(usize, usize)> = Vec::new();
+    for (x_i, (_, ix)) in idx_x.iter().enumerate() {
+        for (y_i, (_, iy)) in idx_y.iter().enumerate() {
             if let Some(mask) = allowed.as_ref()
                 && !mask[x_i][y_i]
             {
@@ -316,47 +350,61 @@ fn main() -> Result<()> {
                 pruned_pairs += 1;
                 continue;
             }
-            let aln = align_contig_pair_with_config(ix, iy, &cfg)?;
-            if aln.aligned_pairs.is_empty() {
-                pruned_pairs += 1;
-                continue;
-            }
-            total_pairs += aln.aligned_pairs.len();
-            let mut ux = 0usize;
-            let mut last_x = usize::MAX;
-            let mut ys: Vec<usize> = Vec::with_capacity(aln.aligned_pairs.len());
-            for &(px, py) in &aln.aligned_pairs {
-                if px != last_x {
-                    ux += 1;
-                    last_x = px;
-                }
-                ys.push(py);
-            }
-            ys.sort_unstable();
-            ys.dedup();
-            total_unique_x += ux;
-            total_unique_y += ys.len();
-            total_bubbles += aln.macro_bubbles + aln.internal_bubbles;
-            summary_out.push_str(&format_gfa_summary(nx, ny, &aln));
+            candidate_pairs.push((x_i, y_i));
+        }
+    }
 
-            if let Some(w) = maf_writer.as_mut() {
-                let sx = &contigs_x[x_i].1;
-                let sy = &contigs_y[y_i].1;
-                let text = format_maf_blocks(nx, sx.len(), ny, sy.len(), sx, sy, &aln);
-                w.write_all(text.as_bytes())?;
-            }
-            if let Some(w) = gfa_writer.as_mut() {
-                let text = format_gfa_blocks(nx, ny, &aln);
-                w.write_all(text.as_bytes())?;
-            }
-            if cli.resolve_dups {
-                let dups = resolve_alignment_duplications(&aln, 1000);
-                let tag_line = format_gfa_paralog_tags(nx, ny, &dups);
-                if !tag_line.is_empty() {
-                    summary_out.push_str(&tag_line);
-                    if let Some(w) = gfa_writer.as_mut() {
-                        w.write_all(tag_line.as_bytes())?;
-                    }
+    let aligned_results: Vec<Result<_>> = candidate_pairs
+        .into_par_iter()
+        .map(|(x_i, y_i)| {
+            let aln = align_contig_pair_with_config(&idx_x[x_i].1, &idx_y[y_i].1, &cfg)?;
+            Ok((x_i, y_i, aln))
+        })
+        .collect();
+
+    let mut target_pos_by_contig: Vec<Vec<usize>> = vec![Vec::new(); idx_x.len()];
+    let mut query_pos_by_contig: Vec<Vec<usize>> = vec![Vec::new(); idx_y.len()];
+
+    for item in aligned_results {
+        let (x_i, y_i, aln) = item?;
+        let nx = idx_x[x_i].0.as_str();
+        let ny = idx_y[y_i].0.as_str();
+        if aln.aligned_pairs.is_empty() {
+            pruned_pairs += 1;
+            continue;
+        }
+        total_pairs += aln.aligned_pairs.len();
+        target_pos_by_contig[x_i].extend(aln.aligned_pairs.iter().map(|&(px, _)| px));
+        query_pos_by_contig[y_i].extend(aln.aligned_pairs.iter().map(|&(_, py)| py));
+        total_bubbles += aln.macro_bubbles + aln.internal_bubbles;
+        let gfa_sum = format_gfa_summary(nx, ny, &aln);
+        if summary_out.is_empty() {
+            summary_out.push_str(&gfa_sum);
+        } else {
+            summary_out.push_str(gfa_sum.strip_prefix("H\tVN:Z:1.1\n").unwrap_or(&gfa_sum));
+        }
+
+        if let Some(w) = maf_writer.as_mut() {
+            let sx = &contigs_x[x_i].1;
+            let sy = &contigs_y[y_i].1;
+            let text = format_maf_blocks(nx, sx.len(), ny, sy.len(), sx, sy, &aln);
+            let body = text
+                .strip_prefix("##maf version=1 scoring=horizon_mdl\n")
+                .unwrap_or(&text);
+            w.write_all(body.as_bytes())?;
+        }
+        if let Some(w) = gfa_writer.as_mut() {
+            let text = format_gfa_blocks(nx, ny, &aln);
+            let body = text.strip_prefix("H\tVN:Z:1.1\n").unwrap_or(&text);
+            w.write_all(body.as_bytes())?;
+        }
+        if cli.resolve_dups {
+            let dups = resolve_alignment_duplications(&aln, 1000);
+            let tag_line = format_gfa_paralog_tags(nx, ny, &dups);
+            if !tag_line.is_empty() {
+                summary_out.push_str(&tag_line);
+                if let Some(w) = gfa_writer.as_mut() {
+                    w.write_all(tag_line.as_bytes())?;
                 }
             }
         }
@@ -368,6 +416,23 @@ fn main() -> Result<()> {
     if let Some(w) = gfa_writer.as_mut() {
         w.flush()?;
     }
+
+    let total_unique_x: usize = target_pos_by_contig
+        .into_iter()
+        .map(|mut v| {
+            v.sort_unstable();
+            v.dedup();
+            v.len()
+        })
+        .sum();
+    let total_unique_y: usize = query_pos_by_contig
+        .into_iter()
+        .map(|mut v| {
+            v.sort_unstable();
+            v.dedup();
+            v.len()
+        })
+        .sum();
 
     let elapsed = t0.elapsed().as_secs_f64();
     println!(
@@ -416,26 +481,35 @@ fn estimate_dag_hmm_params(nodes: &[GraphNode], seq_y: &[u8]) -> HmmParams {
                             node_hits.push((np, qp));
                             let mut fwd_m = 0usize;
                             let mut rc_m = 0usize;
-                            let mut valid_n = 0usize;
+                            let mut valid_f = 0usize;
+                            let mut valid_r = 0usize;
                             for off in 0..span {
                                 let bx = nd.seq[np + off].to_ascii_uppercase();
                                 let by_f = seq_y[qp + off].to_ascii_uppercase();
                                 let by_r = complement_base(seq_y[qp + span - 1 - off])
                                     .to_ascii_uppercase();
-                                if matches!(bx, b'A' | b'C' | b'G' | b'T')
-                                    && matches!(by_f, b'A' | b'C' | b'G' | b'T')
-                                {
-                                    valid_n += 1;
-                                    if bx == by_f {
-                                        fwd_m += 1;
+                                if matches!(bx, b'A' | b'C' | b'G' | b'T') {
+                                    if matches!(by_f, b'A' | b'C' | b'G' | b'T') {
+                                        valid_f += 1;
+                                        if bx == by_f {
+                                            fwd_m += 1;
+                                        }
                                     }
-                                    if bx == by_r {
-                                        rc_m += 1;
+                                    if matches!(by_r, b'A' | b'C' | b'G' | b'T') {
+                                        valid_r += 1;
+                                        if bx == by_r {
+                                            rc_m += 1;
+                                        }
                                     }
                                 }
                             }
-                            total += valid_n;
-                            matches += fwd_m.max(rc_m);
+                            if fwd_m * valid_r >= rc_m * valid_f {
+                                total += valid_f;
+                                matches += fwd_m;
+                            } else {
+                                total += valid_r;
+                                matches += rc_m;
+                            }
                         }
                         if total >= 2000 {
                             break;
@@ -502,33 +576,25 @@ type DirectedEdges = Vec<(usize, usize)>;
 
 #[allow(clippy::too_many_lines)]
 fn load_gfa_dag(path: &std::path::Path) -> Result<Vec<GraphNode>> {
-    let segs = std::cell::RefCell::new(Vec::<(String, Vec<u8>)>::new());
-    let name_to_raw = std::cell::RefCell::new(HashMap::<String, usize>::new());
-    let raw_edges = std::cell::RefCell::new(Vec::<(String, u8, String, u8)>::new());
+    let mut segs = Vec::<(String, Vec<u8>)>::new();
+    let mut name_to_raw = HashMap::<String, usize>::new();
+    let mut raw_edges = Vec::<(String, u8, String, u8)>::new();
 
-    stream_gfa(
-        path,
-        |s| {
-            if s.sequence != b"*" {
-                let idx = segs.borrow().len();
-                name_to_raw.borrow_mut().insert(s.name.clone(), idx);
-                segs.borrow_mut().push((s.name, s.sequence));
+    stream_gfa_records(path, |rec| {
+        match rec {
+            GfaRecord::Segment(s) if s.sequence != b"*" => {
+                let idx = segs.len();
+                name_to_raw.insert(s.name.clone(), idx);
+                segs.push((s.name, s.sequence));
             }
-            Ok(())
-        },
-        |l| {
-            raw_edges
-                .borrow_mut()
-                .push((l.from, l.from_orient, l.to, l.to_orient));
-            Ok(())
-        },
-        |_| Ok(()),
-        |_| Ok(()),
-    )?;
+            GfaRecord::Link(l) => {
+                raw_edges.push((l.from, l.from_orient, l.to, l.to_orient));
+            }
+            _ => {}
+        }
+        Ok(std::ops::ControlFlow::Continue(()))
+    })?;
 
-    let segs = segs.into_inner();
-    let name_to_raw = name_to_raw.into_inner();
-    let raw_edges = raw_edges.into_inner();
     let has_rev = raw_edges
         .iter()
         .any(|(_, fo, _, to)| *fo == b'-' || *to == b'-');
@@ -600,6 +666,11 @@ fn load_gfa_dag(path: &std::path::Path) -> Result<Vec<GraphNode>> {
     }
     // Append any remaining nodes (if cycles existed) in input order
     if order.len() < n {
+        eprintln!(
+            "warning: cyclic GFA detected ({} of {} oriented nodes in cycles); back-edges will be dropped to form a DAG",
+            n - order.len(),
+            n
+        );
         let seen: std::collections::HashSet<usize> = order.iter().copied().collect();
         for i in 0..n {
             if !seen.contains(&i) {
@@ -640,7 +711,7 @@ mod tests {
 
     #[test]
     fn load_gfa_dag_handles_bidirected_minus_links() -> Result<()> {
-        let dir = std::env::temp_dir().join("horizon_wga_dag_test");
+        let dir = std::env::temp_dir().join(format!("horizon_wga_dag_test_{}", std::process::id()));
         std::fs::create_dir_all(&dir)?;
         let gfa = dir.join("inv.gfa");
         // Seg a -> Seg b(-) -> Seg c(+)
@@ -659,7 +730,8 @@ mod tests {
         let mut query = b"ACTGACTGACTGACTGACTG".to_vec();
         query.extend_from_slice(&b_rc);
         query.extend_from_slice(b"GATTACAGATTACAGATTAC");
-        let aln = align_seq_to_dag_seeded(&nodes, &query, &HmmParams::default(), 10.0);
+        let aln =
+            horizon_aligner::align_seq_to_dag_seeded(&nodes, &query, &HmmParams::default(), 10.0);
         let path_names: Vec<&str> = aln
             .path_nodes
             .iter()

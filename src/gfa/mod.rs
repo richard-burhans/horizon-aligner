@@ -39,11 +39,14 @@ impl SpoolableGfaInput {
         let (tmp_path, mut file) = loop {
             let seq = STDIN_SPOOL_SEQ.fetch_add(1, Ordering::Relaxed);
             let candidate = temp_dir.join(format!("horizon_stdin_{pid}_{seq}.gfa"));
-            match OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&candidate)
+            let mut opts = OpenOptions::new();
+            opts.write(true).create_new(true);
+            #[cfg(unix)]
             {
+                use std::os::unix::fs::OpenOptionsExt as _;
+                opts.mode(0o600);
+            }
+            match opts.open(&candidate) {
                 Ok(f) => break (candidate, f),
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
                 Err(e) => return Err(e.into()),
@@ -75,12 +78,64 @@ impl Drop for SpoolableGfaInput {
     }
 }
 
+/// Open a buffered writer to `out_path`, or to standard output when `out_path` is `None`.
+///
+/// # Errors
+/// Returns an error if `out_path` cannot be created.
+pub fn open_output_writer(out_path: Option<&str>) -> io::Result<io::BufWriter<Box<dyn io::Write>>> {
+    let sink: Box<dyn io::Write> = match out_path {
+        Some(path) => Box::new(File::create(path)?),
+        None => Box::new(io::stdout().lock()),
+    };
+    Ok(io::BufWriter::new(sink))
+}
+
 /// Represents a GFA Segment (S line)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GfaSegment {
     pub name: String,
     pub sequence: Vec<u8>,
     pub tags: Option<String>,
+}
+
+impl GfaSegment {
+    /// Return segment length in bp, reading `LN:i:` from tab-separated tags when sequence is `*`.
+    #[must_use]
+    pub fn seq_len(&self) -> usize {
+        if self.sequence != b"*" {
+            return self.sequence.len();
+        }
+        self.tags
+            .as_deref()
+            .into_iter()
+            .flat_map(|t| t.split('\t'))
+            .find_map(|tag| tag.strip_prefix("LN:i:")?.parse::<usize>().ok())
+            .unwrap_or(0)
+    }
+}
+
+fn open_reader_path(path: &Path) -> Result<Box<dyn BufRead>> {
+    if path == Path::new("-") {
+        return Ok(Box::new(BufReader::new(io::stdin())));
+    }
+    let file = File::open(path)?;
+    let is_gz = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("gz") || e.eq_ignore_ascii_case("bgz"));
+    if is_gz {
+        Ok(Box::new(BufReader::new(MultiGzDecoder::new(file))))
+    } else {
+        Ok(Box::new(BufReader::new(file)))
+    }
+}
+
+/// Open a GFA/text path (plain, `.gz`/`.bgz`, or `"-"` for stdin) as a buffered line reader.
+///
+/// # Errors
+/// Returns an error if the file cannot be opened.
+pub fn open_line_reader(path: &str) -> Result<Box<dyn BufRead>> {
+    open_reader_path(Path::new(path))
 }
 
 /// Represents a GFA Link (L line)
@@ -110,6 +165,7 @@ pub struct GfaWalk {
     pub start: usize,
     pub end: usize,
     pub walk: String, // e.g. ">1>2<3>4"
+    pub tags: Option<String>,
 }
 
 /// Parse a GFA v1.0 path `segment_names` field such as `14+,15-` into `(segment_name, is_forward)` steps.
@@ -174,58 +230,102 @@ where
     FP: FnMut(GfaPath) -> Result<()>,
     FW: FnMut(GfaWalk) -> Result<()>,
 {
-    let path_ref = path.as_ref();
-    if path_ref == Path::new("-") {
-        let stdin = io::stdin();
-        let reader = BufReader::new(stdin.lock());
-        return stream_gfa_reader(reader, on_segment, on_link, on_path, on_walk);
-    }
-
-    let file = File::open(path_ref)?;
-    let is_gz = path_ref.extension().is_some_and(|ext| ext == "gz");
-    if is_gz {
-        let reader = BufReader::new(MultiGzDecoder::new(file));
-        stream_gfa_reader(reader, on_segment, on_link, on_path, on_walk)
-    } else {
-        let reader = BufReader::new(file);
-        stream_gfa_reader(reader, on_segment, on_link, on_path, on_walk)
-    }
+    let reader = open_reader_path(path.as_ref())?;
+    stream_gfa_reader(reader, on_segment, on_link, on_path, on_walk)
 }
 
-/// Stream GFA records from any buffered reader.
+/// A single parsed GFA v1.1 record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GfaRecord {
+    Segment(GfaSegment),
+    Link(GfaLink),
+    Path(GfaPath),
+    Walk(GfaWalk),
+}
+
+const MAX_GFA_LINE_BYTES: usize = 256 * 1024 * 1024;
+
+/// Stream GFA records from a path with a single callback that may stop early via `ControlFlow::Break(())`.
 ///
 /// # Errors
-/// Returns an error if reading fails or if any callback returns an error.
-pub fn stream_gfa_reader<R, FS, FL, FP, FW>(
-    mut reader: R,
-    mut on_segment: FS,
-    mut on_link: FL,
-    mut on_path: FP,
-    mut on_walk: FW,
-) -> Result<()>
+/// Returns an error if the file cannot be opened, reading fails, a line exceeds 256 MiB, or the callback errors.
+pub fn stream_gfa_records<P, F>(path: P, on_record: F) -> Result<()>
+where
+    P: AsRef<Path>,
+    F: FnMut(GfaRecord) -> Result<std::ops::ControlFlow<()>>,
+{
+    let reader = open_reader_path(path.as_ref())?;
+    stream_gfa_records_reader(reader, on_record)
+}
+
+fn parse_walk_record(mut parts: std::str::Split<'_, char>) -> std::io::Result<GfaWalk> {
+    let parse_coord = |tok: Option<&str>, field: &str| -> std::io::Result<usize> {
+        match tok {
+            Some("*") | None => Ok(0),
+            Some(s) => s.parse::<usize>().map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("invalid GFA walk {field} coordinate: `{s}`"),
+                )
+            }),
+        }
+    };
+    let sample = parts.next().unwrap_or("").to_string();
+    let haplotype = parts.next().unwrap_or("").to_string();
+    let seq_id = parts.next().unwrap_or("").to_string();
+    let start = parse_coord(parts.next(), "start")?;
+    let end = parse_coord(parts.next(), "end")?;
+    let walk = parts.next().unwrap_or("").to_string();
+    let rest: Vec<&str> = parts.collect();
+    let tags = (!rest.is_empty()).then(|| rest.join("\t"));
+    Ok(GfaWalk {
+        sample,
+        haplotype,
+        seq_id,
+        start,
+        end,
+        walk,
+        tags,
+    })
+}
+
+/// Stream GFA records from a buffered reader with a single callback that may stop early.
+///
+/// # Errors
+/// Returns an error if reading fails, a line exceeds 256 MiB, or the callback errors.
+pub fn stream_gfa_records_reader<R, F>(mut reader: R, mut on_record: F) -> Result<()>
 where
     R: BufRead,
-    FS: FnMut(GfaSegment) -> Result<()>,
-    FL: FnMut(GfaLink) -> Result<()>,
-    FP: FnMut(GfaPath) -> Result<()>,
-    FW: FnMut(GfaWalk) -> Result<()>,
+    F: FnMut(GfaRecord) -> Result<std::ops::ControlFlow<()>>,
 {
     let mut line = String::new();
-    while reader.read_line(&mut line)? > 0 {
+    loop {
+        line.clear();
+        let n =
+            std::io::Read::take(&mut reader, MAX_GFA_LINE_BYTES as u64 + 1).read_line(&mut line)?;
+        if n == 0 {
+            break;
+        }
+        if line.len() > MAX_GFA_LINE_BYTES && !line.ends_with('\n') {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "GFA line exceeds 256 MiB safety limit",
+            )
+            .into());
+        }
         let trimmed = line.trim_end_matches(&['\r', '\n'][..]);
         if trimmed.is_empty()
             || trimmed.starts_with('#')
             || trimmed == "H"
             || trimmed.starts_with("H\t")
         {
-            line.clear();
             continue;
         }
 
         let mut parts = trimmed.split('\t');
         let record_type = parts.next().unwrap_or("");
 
-        match record_type {
+        let flow = match record_type {
             "S" => {
                 let mut s_parts = trimmed.splitn(4, '\t');
                 let _ = s_parts.next();
@@ -234,11 +334,11 @@ where
                 let tags = s_parts
                     .next()
                     .and_then(|t| (!t.is_empty()).then(|| t.to_string()));
-                on_segment(GfaSegment {
+                on_record(GfaRecord::Segment(GfaSegment {
                     name,
                     sequence,
                     tags,
-                })?;
+                }))?
             }
             "L" => {
                 let from = parts.next().unwrap_or("").to_string();
@@ -252,50 +352,57 @@ where
                     .and_then(|s| s.as_bytes().first().copied())
                     .unwrap_or(b'+');
                 let overlap = parts.next().unwrap_or("").to_string();
-                on_link(GfaLink {
+                on_record(GfaRecord::Link(GfaLink {
                     from,
                     from_orient,
                     to,
                     to_orient,
                     overlap,
-                })?;
+                }))?
             }
-            "P" => {
-                on_path(GfaPath {
-                    name: parts.next().unwrap_or("").to_string(),
-                    segment_names: parts.next().unwrap_or("").to_string(),
-                    overlaps: parts.next().unwrap_or("").to_string(),
-                })?;
-            }
-            "W" => {
-                // W sample hap seq_id start end walk
-                let parse_coord =
-                    |tok: Option<&str>, field: &str| -> Result<usize, std::io::Error> {
-                        match tok {
-                            Some("*") | None => Ok(0),
-                            Some(s) => s.parse::<usize>().map_err(|_| {
-                                std::io::Error::new(
-                                    std::io::ErrorKind::InvalidData,
-                                    format!("invalid GFA walk {field} coordinate: `{s}`"),
-                                )
-                            }),
-                        }
-                    };
-                on_walk(GfaWalk {
-                    sample: parts.next().unwrap_or("").to_string(),
-                    haplotype: parts.next().unwrap_or("").to_string(),
-                    seq_id: parts.next().unwrap_or("").to_string(),
-                    start: parse_coord(parts.next(), "start")?,
-                    end: parse_coord(parts.next(), "end")?,
-                    walk: parts.next().unwrap_or("").to_string(),
-                })?;
-            }
-            _ => {} // Ignore custom tags/lines like C, J, U, O
+            "P" => on_record(GfaRecord::Path(GfaPath {
+                name: parts.next().unwrap_or("").to_string(),
+                segment_names: parts.next().unwrap_or("").to_string(),
+                overlaps: parts.next().unwrap_or("").to_string(),
+            }))?,
+            "W" => on_record(GfaRecord::Walk(parse_walk_record(parts)?))?,
+            _ => std::ops::ControlFlow::Continue(()),
+        };
+        if flow.is_break() {
+            break;
         }
-        line.clear();
     }
 
     Ok(())
+}
+
+/// Stream GFA records from any buffered reader.
+///
+/// # Errors
+/// Returns an error if reading fails or if any callback returns an error.
+pub fn stream_gfa_reader<R, FS, FL, FP, FW>(
+    reader: R,
+    mut on_segment: FS,
+    mut on_link: FL,
+    mut on_path: FP,
+    mut on_walk: FW,
+) -> Result<()>
+where
+    R: BufRead,
+    FS: FnMut(GfaSegment) -> Result<()>,
+    FL: FnMut(GfaLink) -> Result<()>,
+    FP: FnMut(GfaPath) -> Result<()>,
+    FW: FnMut(GfaWalk) -> Result<()>,
+{
+    stream_gfa_records_reader(reader, |rec| {
+        match rec {
+            GfaRecord::Segment(s) => on_segment(s)?,
+            GfaRecord::Link(l) => on_link(l)?,
+            GfaRecord::Path(p) => on_path(p)?,
+            GfaRecord::Walk(w) => on_walk(w)?,
+        }
+        Ok(std::ops::ControlFlow::Continue(()))
+    })
 }
 
 #[cfg(test)]
@@ -369,7 +476,11 @@ W\tGRCh38\t0\tchr22\t0\t8\t>1<2
     #[test]
     fn streams_gzipped_gfa_file() {
         let dir = std::env::temp_dir();
-        let gz_path = dir.join("horizon_test_stream.gfa.gz");
+        let gz_path = dir.join(format!(
+            "horizon_test_stream_{}_{:?}.gfa.gz",
+            std::process::id(),
+            std::thread::current().id()
+        ));
         {
             // Write two concatenated gzip members (simulating BGZF / multi-member gzip)
             let mut f = File::create(&gz_path).unwrap();
@@ -406,5 +517,39 @@ W\tGRCh38\t0\tchr22\t0\t8\t>1<2
         let _ = std::fs::remove_file(&gz_path);
         assert_eq!(seg_count, 1);
         assert_eq!(walk_count, 1);
+    }
+
+    #[test]
+    fn seq_len_path_steps_break_and_invalid_walk_coord() {
+        let seg = GfaSegment {
+            name: "s1".to_owned(),
+            sequence: b"*".to_vec(),
+            tags: Some("LN:i:42".to_owned()),
+        };
+        assert_eq!(seg.seq_len(), 42);
+        assert_eq!(
+            parse_path_steps("a+,b-, ,c+"),
+            vec![("a", true), ("b", false), ("c", true)]
+        );
+
+        let data = "H\tVN:Z:1.1\nS\ts1\tACGT\nS\ts2\tTGCA\n";
+        let mut seen = 0usize;
+        stream_gfa_records_reader(std::io::Cursor::new(data), |rec| {
+            if matches!(rec, GfaRecord::Segment(_)) {
+                seen += 1;
+                return Ok(std::ops::ControlFlow::Break(()));
+            }
+            Ok(std::ops::ControlFlow::Continue(()))
+        })
+        .expect("break cleanly");
+        assert_eq!(seen, 1);
+
+        let bad = "W\tHG002\t0\tchr1\tbad\t10\t>s1\n";
+        assert!(
+            stream_gfa_records_reader(std::io::Cursor::new(bad), |_| {
+                Ok(std::ops::ControlFlow::Continue(()))
+            })
+            .is_err()
+        );
     }
 }

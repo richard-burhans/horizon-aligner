@@ -29,23 +29,24 @@ pub fn encode_hal_dna(dna: &[u8]) -> Vec<u8> {
     out
 }
 
-fn encode_hal_seq_index(seqs: &[HalSequence]) -> Vec<u8> {
+fn encode_hal_seq_index(
+    seqs: &[HalSequence],
+    tops: &[HalTopSegment],
+    bottoms: &[HalBottomSegment],
+) -> Vec<u8> {
     let mut out = Vec::with_capacity(seqs.len() * 24);
     for s in seqs {
+        let top_off = tops.partition_point(|t| t.start < s.offset) as u64;
+        let bot_off = bottoms.partition_point(|b| b.start < s.offset) as u64;
         out.extend_from_slice(&(s.offset as u64).to_le_bytes());
-        out.extend_from_slice(&0u64.to_le_bytes());
-        out.extend_from_slice(&0u64.to_le_bytes());
+        out.extend_from_slice(&top_off.to_le_bytes());
+        out.extend_from_slice(&bot_off.to_le_bytes());
     }
     out
 }
 
 fn encode_hal_seq_names(seqs: &[HalSequence]) -> (Vec<u8>, usize) {
-    let stride = seqs
-        .iter()
-        .map(|s| s.name.len() + 1)
-        .max()
-        .unwrap_or(1)
-        .max(1);
+    let stride = seqs.iter().map(|s| s.name.len() + 1).max().unwrap_or(1);
     let mut out = vec![0u8; seqs.len() * stride];
     for (i, s) in seqs.iter().enumerate() {
         let bytes = s.name.as_bytes();
@@ -198,7 +199,8 @@ impl Hdf5V0Builder {
         loop {
             let num_chunks = level_nodes.len().div_ceil(MAX_TREE_CHILDREN);
             let mut next_level: Vec<(u64, u64, u64)> = Vec::with_capacity(num_chunks);
-            for (chunk_idx, chunk) in level_nodes.chunks(MAX_TREE_CHILDREN).enumerate() {
+            let mut prev_last_off = 0u64;
+            for chunk in level_nodes.chunks(MAX_TREE_CHILDREN) {
                 self.align8();
                 let node_addr = self.buf.len() as u64;
                 self.buf.extend_from_slice(b"TREE");
@@ -209,23 +211,19 @@ impl Hdf5V0Builder {
                 );
                 self.buf.extend_from_slice(&u64::MAX.to_le_bytes());
                 self.buf.extend_from_slice(&u64::MAX.to_le_bytes());
-                for (i, &(first_off, child_addr, _)) in chunk.iter().enumerate() {
-                    let key = if chunk_idx == 0 && i == 0 {
-                        0u64
-                    } else {
-                        first_off
-                    };
-                    self.buf.extend_from_slice(&key.to_le_bytes());
+                self.buf.extend_from_slice(&prev_last_off.to_le_bytes());
+                for &(_, child_addr, last_off) in chunk {
                     self.buf.extend_from_slice(&child_addr.to_le_bytes());
+                    self.buf.extend_from_slice(&last_off.to_le_bytes());
                 }
                 let first_key = chunk.first().map_or(0, |&(first_off, _, _)| first_off);
                 let end_key = chunk.last().map_or(0, |&(_, _, last_off)| last_off);
-                self.buf.extend_from_slice(&end_key.to_le_bytes());
                 for _ in chunk.len()..MAX_TREE_CHILDREN {
                     self.buf.extend_from_slice(&0u64.to_le_bytes());
                     self.buf.extend_from_slice(&0u64.to_le_bytes());
                 }
                 next_level.push((first_key, node_addr, end_key));
+                prev_last_off = end_key;
             }
             for idx in 0..next_level.len() {
                 let addr = usize::try_from(next_level[idx].1).unwrap_or(0);
@@ -277,12 +275,7 @@ impl Hdf5V0Builder {
         self.buf.extend_from_slice(&heap_data_addr.to_le_bytes());
 
         let mut snods: Vec<(u64, u64, u64)> = Vec::new();
-        for chunk in sorted
-            .iter()
-            .enumerate()
-            .collect::<Vec<_>>()
-            .chunks(MAX_SNOD)
-        {
+        for (chunk_idx, chunk) in sorted.chunks(MAX_SNOD).enumerate() {
             self.align8();
             let snod_addr = self.buf.len() as u64;
             self.buf.extend_from_slice(b"SNOD");
@@ -290,7 +283,8 @@ impl Hdf5V0Builder {
             self.buf.push(0);
             self.buf
                 .extend_from_slice(&u16::try_from(chunk.len()).unwrap_or(u16::MAX).to_le_bytes());
-            for &(idx, &(_, obj_addr)) in chunk {
+            for (local_idx, &(_, obj_addr)) in chunk.iter().enumerate() {
+                let idx = chunk_idx * MAX_SNOD + local_idx;
                 let mut rec = [0u8; 40];
                 rec[0..8].copy_from_slice(&name_offsets[idx].to_le_bytes());
                 rec[8..16].copy_from_slice(&obj_addr.to_le_bytes());
@@ -300,8 +294,9 @@ impl Hdf5V0Builder {
             for _ in chunk.len()..MAX_SNOD {
                 self.buf.extend_from_slice(&[0u8; 40]);
             }
-            let first_off = name_offsets[chunk[0].0];
-            let last_off = name_offsets[chunk[chunk.len() - 1].0];
+            let base_idx = chunk_idx * MAX_SNOD;
+            let first_off = name_offsets[base_idx];
+            let last_off = name_offsets[base_idx + chunk.len() - 1];
             snods.push((first_off, snod_addr, last_off));
         }
 
@@ -347,7 +342,8 @@ impl HalAlignment {
             let dna_packed = encode_hal_dna(&g.dna);
             let dna_addr = w.write_dataset(&[dna_packed.len() as u64], 1, &dna_packed);
 
-            let seqidx_bytes = encode_hal_seq_index(&g.sequences);
+            let seqidx_bytes =
+                encode_hal_seq_index(&g.sequences, &g.top_segments, &g.bottom_segments);
             let seqidx_addr = w.write_dataset(&[g.sequences.len() as u64], 24, &seqidx_bytes);
 
             let (seqname_bytes, stride) = encode_hal_seq_names(&g.sequences);

@@ -4,13 +4,14 @@ use anyhow::{Context, Result, bail};
 use horizon_aligner::egraph::{
     EGraph, Expr, MdlCostModel, build_seq_expr, extract_min_mdl_cost, saturate_synteny,
 };
-use horizon_aligner::gfa::{SpoolableGfaInput, parse_path_steps, parse_walk_steps, stream_gfa};
-use std::cell::RefCell;
+use horizon_aligner::gfa::{
+    GfaRecord, SpoolableGfaInput, open_output_writer, parse_path_steps, parse_walk_steps,
+    stream_gfa_records,
+};
 use std::collections::{HashMap, HashSet};
 use std::env;
-use std::fs::File;
-use std::io::{self, BufRead, BufReader, BufWriter, Write};
-use std::path::Path;
+use std::io::{BufRead, Write};
+use std::ops::ControlFlow;
 use std::time::Instant;
 
 struct CliArgs {
@@ -35,18 +36,7 @@ struct ResolveStats {
     total_mdl_bits_saved: f64,
 }
 
-fn read_vm_hwm_kb() -> Option<usize> {
-    let status = std::fs::read_to_string("/proc/self/status").ok()?;
-    for line in status.lines() {
-        if let Some(rest) = line.strip_prefix("VmHWM:") {
-            let num = rest.split_whitespace().next()?.parse::<usize>().ok()?;
-            return Some(num);
-        }
-    }
-    None
-}
-
-fn parse_args() -> Result<CliArgs> {
+fn parse_args() -> Result<Option<CliArgs>> {
     let args: Vec<String> = env::args().skip(1).collect();
     if args.is_empty() || args.iter().any(|a| a == "-h" || a == "--help") {
         println!(
@@ -56,7 +46,7 @@ fn parse_args() -> Result<CliArgs> {
              runs bounded synteny e-graph saturation with MdlCostModel extraction, and rewrites\n\
              simplified walks/paths back into valid GFA."
         );
-        std::process::exit(0);
+        return Ok(None);
     }
 
     let mut gfa_in: Option<String> = None;
@@ -109,7 +99,11 @@ fn parse_args() -> Result<CliArgs> {
     }
 
     let gfa_in = gfa_in.context("missing <input.gfa[.gz]>")?;
-    Ok(CliArgs {
+    anyhow::ensure!(
+        divergence.is_finite() && divergence > 0.0,
+        "--divergence must be a finite positive number, got {divergence}"
+    );
+    Ok(Some(CliArgs {
         gfa_in,
         out_path,
         collapse_dups,
@@ -117,7 +111,7 @@ fn parse_args() -> Result<CliArgs> {
         max_bubble_steps: max_bubble_steps.max(2),
         min_anchor_bp,
         divergence: divergence.clamp(1e-6, 0.75),
-    })
+    }))
 }
 
 fn flatten_expr(expr: &Expr, flip: bool, collapse_dups: bool, out: &mut Vec<(String, bool)>) {
@@ -223,9 +217,15 @@ fn resolve_window(
     flatten_expr(&expr, false, collapse_dups, &mut resolved);
 
     let invs_before = steps.iter().filter(|&&(_, f)| !f).count();
-    let invs_after_flat = resolved.iter().filter(|(_, f)| !*f).count();
-    if invs_before > invs_after_flat {
-        stats.invs_cancelled += invs_before - invs_after_flat;
+    let invs_after_uncollapsed = if collapse_dups {
+        let mut uncollapsed = Vec::with_capacity(steps.len());
+        flatten_expr(&expr, false, false, &mut uncollapsed);
+        uncollapsed.iter().filter(|(_, f)| !*f).count()
+    } else {
+        resolved.iter().filter(|(_, f)| !*f).count()
+    };
+    if invs_before > invs_after_uncollapsed {
+        stats.invs_cancelled += invs_before - invs_after_uncollapsed;
     }
 
     let changed = resolved.len() != steps.len()
@@ -293,50 +293,37 @@ fn pass1_index(
     min_anchor_bp: usize,
 ) -> Result<(HashMap<String, usize>, HashSet<String>)> {
     let mut seg_lens: HashMap<String, usize> = HashMap::new();
-    let seg_visits: RefCell<HashMap<String, usize>> = RefCell::new(HashMap::new());
+    let mut seg_visits: HashMap<String, usize> = HashMap::new();
 
-    stream_gfa(
-        gfa_path,
-        |s| {
-            let len = if s.sequence == b"*" {
-                s.tags
-                    .iter()
-                    .find_map(|t| {
-                        t.strip_prefix("LN:i:")
-                            .and_then(|v| v.parse::<usize>().ok())
-                    })
-                    .unwrap_or(0)
-            } else {
-                s.sequence.len()
-            };
-            seg_lens.insert(s.name, len);
-            Ok(())
-        },
-        |_| Ok(()),
-        |p| {
-            let mut seen_in_path = HashSet::new();
-            let mut visits = seg_visits.borrow_mut();
-            for (seg, _) in parse_path_steps(&p.segment_names) {
-                if seen_in_path.insert(seg) {
-                    *visits.entry(seg.to_string()).or_insert(0) += 1;
+    stream_gfa_records(gfa_path, |rec| {
+        match rec {
+            GfaRecord::Segment(s) => {
+                let len = s.seq_len();
+                seg_lens.insert(s.name, len);
+            }
+            GfaRecord::Link(_) => {}
+            GfaRecord::Path(p) => {
+                let mut seen_in_path = HashSet::new();
+                for (seg, _) in parse_path_steps(&p.segment_names) {
+                    if seen_in_path.insert(seg) {
+                        *seg_visits.entry(seg.to_string()).or_insert(0) += 1;
+                    }
                 }
             }
-            Ok(())
-        },
-        |w| {
-            let mut seen_in_walk = HashSet::new();
-            let mut visits = seg_visits.borrow_mut();
-            for (seg, _) in parse_walk_steps(&w.walk) {
-                if seen_in_walk.insert(seg) {
-                    *visits.entry(seg.to_string()).or_insert(0) += 1;
+            GfaRecord::Walk(w) => {
+                let mut seen_in_walk = HashSet::new();
+                for (seg, _) in parse_walk_steps(&w.walk) {
+                    if seen_in_walk.insert(seg) {
+                        *seg_visits.entry(seg.to_string()).or_insert(0) += 1;
+                    }
                 }
             }
-            Ok(())
-        },
-    )?;
+        }
+        Ok(ControlFlow::Continue(()))
+    })?;
 
     let mut anchors = HashSet::new();
-    for (seg, visits) in seg_visits.into_inner() {
+    for (seg, visits) in seg_visits {
         let len = seg_lens.get(&seg).copied().unwrap_or(0);
         if visits >= 2 || len >= min_anchor_bp {
             anchors.insert(seg);
@@ -345,21 +332,10 @@ fn pass1_index(
     Ok((seg_lens, anchors))
 }
 
-fn open_line_reader(path: &str) -> Result<Box<dyn BufRead>> {
-    if path == "-" {
-        Ok(Box::new(BufReader::new(io::stdin())))
-    } else {
-        let file = File::open(path).with_context(|| format!("opening {path}"))?;
-        let is_gz = Path::new(path).extension().is_some_and(|e| e == "gz");
-        if is_gz {
-            let dec = flate2::read::MultiGzDecoder::new(file);
-            Ok(Box::new(BufReader::new(dec)))
-        } else {
-            Ok(Box::new(BufReader::new(file)))
-        }
-    }
-}
-
+/// Pass 2: rewrite `P`/`W` records and emit only `L` links still traversed by resolved walks.
+///
+/// Note: buffers `L` lines in `raw_l_lines` so unused links can be pruned after all `P`/`W` lines
+/// are seen; memory scales with the number of `L` records in the input GFA.
 #[allow(clippy::too_many_lines)]
 fn pass2_rewrite<W: Write>(
     gfa_path: &str,
@@ -368,7 +344,7 @@ fn pass2_rewrite<W: Write>(
     anchors: &HashSet<String>,
     cli: &CliArgs,
 ) -> Result<ResolveStats> {
-    let mut reader = open_line_reader(gfa_path)?;
+    let mut reader = horizon_aligner::gfa::open_line_reader(gfa_path)?;
     let mut stats = ResolveStats::default();
     let mut line = String::new();
     let mut raw_l_lines: Vec<String> = Vec::new();
@@ -471,14 +447,26 @@ fn pass2_rewrite<W: Write>(
                         .iter()
                         .zip(steps.iter())
                         .all(|((a, fa), &(b, fb))| a == b && *fa == fb);
-                let start_pos: usize = cols[4].parse().unwrap_or(0);
-                let end_str = if !same_steps && all_known && resolved_bp > 0 {
-                    (start_pos + resolved_bp).to_string()
+                let end_str = if !same_steps
+                    && all_known
+                    && resolved_bp > 0
+                    && let Ok(start_pos) = cols[4].parse::<usize>()
+                {
+                    start_pos.saturating_add(resolved_bp).to_string()
                 } else {
                     cols[5].to_string()
                 };
                 let extra_tags: String = if cols.len() > 7 {
-                    format!("\t{}", cols[7..].join("\t"))
+                    let kept: Vec<&str> = cols[7..]
+                        .iter()
+                        .copied()
+                        .filter(|t| !(cli.tag_walks && !tags.is_empty() && t.starts_with("EG:Z:")))
+                        .collect();
+                    if kept.is_empty() {
+                        String::new()
+                    } else {
+                        format!("\t{}", kept.join("\t"))
+                    }
                 } else {
                     String::new()
                 };
@@ -553,24 +541,20 @@ fn pass2_rewrite<W: Write>(
 }
 
 fn main() -> Result<()> {
-    let cli = parse_args()?;
+    let Some(cli) = parse_args()? else {
+        return Ok(());
+    };
     let t0 = Instant::now();
     let spooled = SpoolableGfaInput::new(&cli.gfa_in)?;
     let effective_gfa = spooled.path();
     let (seg_lens, anchors) = pass1_index(effective_gfa, cli.min_anchor_bp)?;
 
-    let stats = if let Some(ref out_p) = cli.out_path {
-        let mut writer =
-            BufWriter::new(File::create(out_p).with_context(|| format!("creating {out_p}"))?);
-        pass2_rewrite(effective_gfa, &mut writer, &seg_lens, &anchors, &cli)?
-    } else {
-        let stdout = io::stdout();
-        let mut writer = BufWriter::new(stdout.lock());
-        pass2_rewrite(effective_gfa, &mut writer, &seg_lens, &anchors, &cli)?
-    };
+    let mut writer = open_output_writer(cli.out_path.as_deref())?;
+    let stats = pass2_rewrite(effective_gfa, &mut writer, &seg_lens, &anchors, &cli)?;
+    writer.flush()?;
 
     #[allow(clippy::cast_precision_loss)]
-    let hwm_mb = read_vm_hwm_kb().map_or(0.0, |kb| kb as f64 / 1024.0);
+    let hwm_mb = horizon_aligner::read_vm_hwm_kb().map_or(0.0, |kb| kb as f64 / 1024.0);
     eprintln!(
         "segments={} anchors={} paths={} walks={} windows={} simplified={} dups_detected={} dups_collapsed={} invs_cancelled={} mdl_bits_saved={:.1} elapsed_s={:.3} peak_rss_mb={:.1}",
         seg_lens.len(),
@@ -595,7 +579,7 @@ mod tests {
 
     #[test]
     fn resolves_tandem_dup_and_cancels_double_inversion_in_gfa_walk() -> Result<()> {
-        let dir = std::env::temp_dir().join("horizon_resolve_test");
+        let dir = std::env::temp_dir().join(format!("horizon_resolve_test_{}", std::process::id()));
         std::fs::create_dir_all(&dir)?;
         let gfa_in = dir.join("in.gfa");
         let gfa_out = dir.join("out.gfa");
@@ -608,7 +592,8 @@ mod tests {
              L\ta\t+\tb\t+\t0M\n\
              L\tb\t+\tb\t+\t0M\n\
              L\tb\t+\tc\t+\t0M\n\
-             W\tHG002\t1\tchr6\t0\t80\t>a>b>b>c\n",
+             W\tHG002\t1\tchr6\t0\t80\t>a>b>b>c\n\
+             W\tHG002\t2\tchr7\t0\t60\t>a<b<b>c\n",
         )?;
 
         let cli = CliArgs {
@@ -621,15 +606,16 @@ mod tests {
             divergence: 0.01,
         };
         let (seg_lens, anchors) = pass1_index(&cli.gfa_in, cli.min_anchor_bp)?;
-        let mut writer = BufWriter::new(File::create(&gfa_out)?);
+        let mut writer = std::io::BufWriter::new(std::fs::File::create(&gfa_out)?);
         let stats = pass2_rewrite(&cli.gfa_in, &mut writer, &seg_lens, &anchors, &cli)?;
-        assert_eq!(stats.walks_seen, 1);
-        assert_eq!(stats.dups_detected, 1);
-        assert_eq!(stats.dups_collapsed, 1);
+        assert_eq!(stats.walks_seen, 2);
+        assert_eq!(stats.dups_detected, 2);
+        assert_eq!(stats.dups_collapsed, 2);
         assert!(stats.total_mdl_bits_saved > 0.0);
 
         let out_text = std::fs::read_to_string(&gfa_out)?;
         assert!(out_text.contains("W\tHG002\t1\tchr6\t0\t60\t>a>b>c\tEG:Z:"));
+        assert!(out_text.contains("W\tHG002\t2\tchr7\t0\t60\t>a<b>c\tEG:Z:"));
         assert!(out_text.contains("L\ta\t+\tb\t+\t0M"));
         assert!(out_text.contains("L\tb\t+\tc\t+\t0M"));
         assert!(!out_text.contains("L\tb\t+\tb\t+\t0M"));

@@ -8,6 +8,12 @@ use std::time::Instant;
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "-h" || a == "--help") {
+        println!(
+            "usage: horizon_merge <ref_species> <bin_bp> <maf_out> <gfa_out> <sp=path.maf>..."
+        );
+        return Ok(());
+    }
     if args.len() < 5 {
         bail!("usage: horizon_merge <ref_species> <bin_bp> <maf_out> <gfa_out> <sp=path.maf>...");
     }

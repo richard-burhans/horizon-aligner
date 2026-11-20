@@ -1,38 +1,24 @@
 //! Evaluate `horizon-aligner` recall, precision, and abstention against truth MAF (supports single- and multi-contig FASTAs).
 
 use anyhow::{Context, Result};
-use horizon_aligner::{AlignConfig, align_contig_pair_with_config, prepare_contig_index_opts};
+use horizon_aligner::{
+    AlignConfig, MafRow, align_contig_pair_with_config, parse_hsp_threshold_arg, parse_maf_s_line,
+    parse_min_fallback_cov_arg, prepare_contig_index_opts,
+};
+use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::io::BufRead as _;
 use std::path::Path;
 use std::time::Instant;
 
-fn matches_species(id: &str, target: &str) -> bool {
-    id == target
-        || id
-            .strip_prefix(target)
-            .is_some_and(|rest| rest.starts_with('.'))
-}
+const USAGE: &str = "usage: horizon_eval <ref_name> <target_name> <ref.fa> <target.fa> <truth.maf> [--min-fallback-cov F] [--hsp-threshold N]";
 
 fn read_named_contigs(path: &Path, target: &str) -> Result<HashMap<String, Vec<u8>>> {
-    let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    let mut contigs: HashMap<String, Vec<u8>> = HashMap::new();
-    let mut active_id: Option<String> = None;
-    for line in text.lines() {
-        if let Some(rest) = line.strip_prefix('>') {
-            let id = rest.split_whitespace().next().unwrap_or("");
-            if matches_species(id, target) {
-                active_id = Some(id.to_string());
-                contigs.entry(id.to_string()).or_default();
-            } else {
-                active_id = None;
-            }
-        } else if let Some(ref id) = active_id
-            && let Some(seq) = contigs.get_mut(id)
-        {
-            seq.extend_from_slice(line.trim().as_bytes());
-        }
-    }
+    let contigs = horizon_aligner::read_fasta_contigs(path, usize::MAX)?
+        .into_iter()
+        .filter(|(id, _)| horizon_aligner::matches_sample_prefix(id, target))
+        .collect();
     Ok(contigs)
 }
 
@@ -41,43 +27,33 @@ type MafEntry = ((String, String), HashSet<(usize, usize)>);
 
 #[allow(clippy::similar_names)]
 fn parse_maf_pairs_by_contig(path: &Path, cx: &str, cy: &str) -> Result<MafPairMap> {
-    let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let file = fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let mut reader = std::io::BufReader::new(file);
     let mut out: MafPairMap = HashMap::new();
-    let mut cur: Vec<Vec<String>> = Vec::new();
-    let flush = |cur: &mut Vec<Vec<String>>, out: &mut MafPairMap| -> Result<()> {
+    let mut cur: Vec<MafRow> = Vec::new();
+    let flush = |cur: &mut Vec<MafRow>, out: &mut MafPairMap| -> Result<()> {
         let rx_row = cur
             .iter()
-            .find(|r| r.len() >= 7 && matches_species(&r[1], cx));
+            .find(|r| horizon_aligner::matches_sample_prefix(&r.src, cx));
         let ry_row = cur
             .iter()
-            .find(|r| r.len() >= 7 && matches_species(&r[1], cy));
+            .find(|r| horizon_aligner::matches_sample_prefix(&r.src, cy));
         if let (Some(rx), Some(ry)) = (rx_row, ry_row) {
-            let ref_id = rx[1].clone();
-            let tgt_id = ry[1].clone();
-            let sx: usize = rx[2].parse()?;
-            let stx = &rx[4];
-            let src_lx: usize = rx[5].parse()?;
-            let ax = rx[6].as_bytes();
+            let ax = rx.seq.as_bytes();
+            let ay = ry.seq.as_bytes();
+            anyhow::ensure!(
+                ax.len() == ay.len(),
+                "MAF block alignment length mismatch ({} vs {})",
+                ax.len(),
+                ay.len()
+            );
 
-            let sy: usize = ry[2].parse()?;
-            let sty = &ry[4];
-            let src_ly: usize = ry[5].parse()?;
-            let ay = ry[6].as_bytes();
-
-            let pair_set = out.entry((ref_id, tgt_id)).or_default();
+            let pair_set = out.entry((rx.src.clone(), ry.src.clone())).or_default();
             let (mut ix, mut iy) = (0usize, 0usize);
             for (&ca, &cb) in ax.iter().zip(ay) {
                 if ca != b'-' && cb != b'-' {
-                    let px = if stx == "+" {
-                        sx + ix
-                    } else {
-                        src_lx.saturating_sub(1 + sx + ix)
-                    };
-                    let py = if sty == "+" {
-                        sy + iy
-                    } else {
-                        src_ly.saturating_sub(1 + sy + iy)
-                    };
+                    let px = rx.fwd_pos(ix);
+                    let py = ry.fwd_pos(iy);
                     pair_set.insert((px, py));
                 }
                 if ca != b'-' {
@@ -91,12 +67,22 @@ fn parse_maf_pairs_by_contig(path: &Path, cx: &str, cy: &str) -> Result<MafPairM
         cur.clear();
         Ok(())
     };
-    for line in text.lines() {
-        if line.starts_with("s ") {
-            cur.push(line.split_whitespace().map(str::to_owned).collect());
-        } else if line.trim().is_empty() && !cur.is_empty() {
-            flush(&mut cur, &mut out)?;
+    let mut line = String::new();
+    while reader.read_line(&mut line)? > 0 {
+        let trimmed = line.trim();
+        if trimmed.is_empty()
+            || trimmed == "a"
+            || trimmed
+                .strip_prefix('a')
+                .is_some_and(|r| r.starts_with(char::is_whitespace))
+        {
+            if !cur.is_empty() {
+                flush(&mut cur, &mut out)?;
+            }
+        } else if let Some((row, _)) = parse_maf_s_line(trimmed) {
+            cur.push(row);
         }
+        line.clear();
     }
     if !cur.is_empty() {
         flush(&mut cur, &mut out)?;
@@ -104,57 +90,90 @@ fn parse_maf_pairs_by_contig(path: &Path, cx: &str, cy: &str) -> Result<MafPairM
     Ok(out)
 }
 
-fn main() -> Result<()> {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() < 6 {
-        anyhow::bail!(
-            "usage: horizon_eval <ref_name> <target_name> <ref.fa> <target.fa> <truth.maf>"
-        );
-    }
-    let ref_name = &args[1];
-    let target_name = &args[2];
-    let ref_contigs = read_named_contigs(Path::new(&args[3]), ref_name)?;
-    let tgt_contigs = read_named_contigs(Path::new(&args[4]), target_name)?;
-    let maf_by_pair = parse_maf_pairs_by_contig(Path::new(&args[5]), ref_name, target_name)?;
+struct EvalCliArgs {
+    ref_name: String,
+    target_name: String,
+    ref_fa: std::path::PathBuf,
+    tgt_fa: std::path::PathBuf,
+    truth_maf: std::path::PathBuf,
+    min_fallback_cov: Option<f64>,
+    hsp_threshold: Option<i32>,
+}
 
+fn parse_eval_args() -> Result<Option<EvalCliArgs>> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut pos = Vec::new();
     let mut min_fallback_cov = None;
     let mut hsp_threshold = None;
-    let mut i = 6;
+    let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            "-h" | "--help" => {
+                println!("{USAGE}");
+                return Ok(None);
+            }
             "--min-fallback-cov" => {
-                let val = args
+                let raw = args
                     .get(i + 1)
                     .context("missing value for --min-fallback-cov")?;
-                min_fallback_cov = Some(val.parse().context("parsing --min-fallback-cov")?);
+                min_fallback_cov = Some(parse_min_fallback_cov_arg(raw)?);
                 i += 2;
             }
             "--hsp-threshold" => {
-                let val = args
+                let raw = args
                     .get(i + 1)
                     .context("missing value for --hsp-threshold")?;
-                hsp_threshold = Some(val.parse().context("parsing --hsp-threshold")?);
+                hsp_threshold = Some(parse_hsp_threshold_arg(raw)?);
                 i += 2;
             }
-            other => anyhow::bail!("unknown argument '{other}'"),
+            s if s.starts_with('-') => anyhow::bail!("unknown argument '{s}'"),
+            _ => {
+                pos.push(args[i].as_str());
+                i += 1;
+            }
         }
     }
-
-    let cfg = AlignConfig {
+    if pos.len() != 5 {
+        anyhow::bail!("{USAGE}");
+    }
+    Ok(Some(EvalCliArgs {
+        ref_name: pos[0].to_string(),
+        target_name: pos[1].to_string(),
+        ref_fa: pos[2].into(),
+        tgt_fa: pos[3].into(),
+        truth_maf: pos[4].into(),
         min_fallback_cov,
         hsp_threshold,
+    }))
+}
+
+fn main() -> Result<()> {
+    let Some(cli) = parse_eval_args()? else {
+        return Ok(());
+    };
+    let ref_contigs = read_named_contigs(&cli.ref_fa, &cli.ref_name)?;
+    let tgt_contigs = read_named_contigs(&cli.tgt_fa, &cli.target_name)?;
+    let maf_by_pair = parse_maf_pairs_by_contig(&cli.truth_maf, &cli.ref_name, &cli.target_name)?;
+
+    let cfg = AlignConfig {
+        min_fallback_cov: cli.min_fallback_cov,
+        hsp_threshold: cli.hsp_threshold,
         ..AlignConfig::default()
     };
 
     let t0 = Instant::now();
-    let mut ref_idx_cache = HashMap::new();
-    let mut tgt_idx_cache = HashMap::new();
-    for (id, seq) in &ref_contigs {
-        ref_idx_cache.insert(id.clone(), prepare_contig_index_opts(seq, false)?);
-    }
-    for (id, seq) in &tgt_contigs {
-        tgt_idx_cache.insert(id.clone(), prepare_contig_index_opts(seq, false)?);
-    }
+    let needed_refs: HashSet<&str> = maf_by_pair.keys().map(|(r, _)| r.as_str()).collect();
+    let needed_tgts: HashSet<&str> = maf_by_pair.keys().map(|(_, t)| t.as_str()).collect();
+    let ref_idx_cache: HashMap<String, _> = ref_contigs
+        .par_iter()
+        .filter(|(id, _)| needed_refs.contains(id.as_str()))
+        .map(|(id, seq)| Ok((id.clone(), prepare_contig_index_opts(seq, false)?)))
+        .collect::<Result<_>>()?;
+    let tgt_idx_cache: HashMap<String, _> = tgt_contigs
+        .par_iter()
+        .filter(|(id, _)| needed_tgts.contains(id.as_str()))
+        .map(|(id, seq)| Ok((id.clone(), prepare_contig_index_opts(seq, false)?)))
+        .collect::<Result<_>>()?;
 
     let mut total_proto = 0usize;
     let mut total_maf = 0usize;
@@ -164,6 +183,7 @@ fn main() -> Result<()> {
     let mut pairs: Vec<MafEntry> = maf_by_pair.into_iter().collect();
     pairs.sort_by(|a, b| a.0.cmp(&b.0));
 
+    let mut aligned_pairs = Vec::with_capacity(pairs.len());
     for ((ref_id, tgt_id), maf_set) in &pairs {
         let (Some(idx_r), Some(idx_t)) = (ref_idx_cache.get(ref_id), tgt_idx_cache.get(tgt_id))
         else {
@@ -173,12 +193,30 @@ fn main() -> Result<()> {
             );
             continue;
         };
-        total_maf += maf_set.len();
-        let aln = align_contig_pair_with_config(idx_r, idx_t, &cfg)?;
-        let proto_set: HashSet<(usize, usize)> = aln.aligned_pairs.iter().copied().collect();
-        total_proto += proto_set.len();
-        total_overlap += proto_set.intersection(maf_set).count();
-        total_bubbles += aln.macro_bubbles + aln.internal_bubbles;
+        aligned_pairs.push((idx_r, idx_t, maf_set));
+    }
+
+    let pair_stats: Vec<Result<(usize, usize, usize, usize)>> = aligned_pairs
+        .into_par_iter()
+        .map(|(idx_r, idx_t, maf_set)| {
+            let aln = align_contig_pair_with_config(idx_r, idx_t, &cfg)?;
+            let proto_set: HashSet<(usize, usize)> = aln.aligned_pairs.iter().copied().collect();
+            let overlap = proto_set.intersection(maf_set).count();
+            Ok((
+                maf_set.len(),
+                proto_set.len(),
+                overlap,
+                aln.macro_bubbles + aln.internal_bubbles,
+            ))
+        })
+        .collect();
+
+    for res in pair_stats {
+        let (maf_len, proto_len, overlap, bubbles) = res?;
+        total_maf += maf_len;
+        total_proto += proto_len;
+        total_overlap += overlap;
+        total_bubbles += bubbles;
     }
 
     let elapsed = t0.elapsed().as_secs_f64();
@@ -208,8 +246,9 @@ mod tests {
     #[test]
     fn parses_named_contigs_and_maf_pairs() {
         let dir = std::env::temp_dir();
-        let fa_path = dir.join("horizon_eval_test.fa");
-        let maf_path = dir.join("horizon_eval_test.maf");
+        let pid = std::process::id();
+        let fa_path = dir.join(format!("horizon_eval_test_{pid}.fa"));
+        let maf_path = dir.join(format!("horizon_eval_test_{pid}.maf"));
 
         fs::write(&fa_path, ">hg38.chr22\nACGT\nTGCA\n>other\nAAAA\n").unwrap();
         let contigs = read_named_contigs(&fa_path, "hg38").unwrap();

@@ -133,7 +133,32 @@ mod tests {
         assert_eq!(resolve_binary_name("lift"), Some("horizon_lift"));
         assert_eq!(resolve_binary_name("clean"), Some("horizon_clean"));
         assert_eq!(resolve_binary_name("resolve"), Some("horizon_resolve"));
+        assert_eq!(resolve_binary_name("merge"), Some("horizon_merge"));
+        assert_eq!(resolve_binary_name("guide"), Some("horizon_guide"));
+        assert_eq!(resolve_binary_name("eval"), Some("horizon_eval"));
         assert_eq!(resolve_binary_name("bench-chr1"), Some("bench_chr1"));
         assert_eq!(resolve_binary_name("nonexistent"), None);
+    }
+
+    #[test]
+    fn find_sibling_or_path_prefers_existing_sibling_and_falls_back() {
+        let dir = std::env::temp_dir().join(format!("horizon_bin_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let exe = dir.join("horizon");
+        let sibling = dir.join("horizon_wga");
+        std::fs::write(&sibling, b"").expect("write dummy sibling");
+
+        assert_eq!(find_sibling_or_path("horizon_wga", Some(&exe)), sibling);
+        assert_eq!(
+            find_sibling_or_path("horizon_missing", Some(&exe)),
+            PathBuf::from("horizon_missing")
+        );
+        assert_eq!(
+            find_sibling_or_path("horizon_wga", None),
+            PathBuf::from("horizon_wga")
+        );
+
+        let _ = std::fs::remove_file(&sibling);
+        let _ = std::fs::remove_dir(&dir);
     }
 }

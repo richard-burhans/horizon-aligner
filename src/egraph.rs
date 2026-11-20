@@ -29,6 +29,7 @@ pub enum Expr {
 pub struct EGraph {
     parent: Vec<usize>,
     classes: HashMap<usize, HashSet<ENode>>,
+    parents: Vec<Vec<(ENode, usize)>>,
     memo: HashMap<ENode, usize>,
     worklist: Vec<usize>,
 }
@@ -41,11 +42,34 @@ impl EGraph {
     }
 
     /// Find canonical e-class representative with path compression.
+    ///
+    /// # Panics
+    /// Panics if `eid >= self.parent.len()`.
     pub fn find(&mut self, mut eid: usize) -> usize {
+        assert!(
+            eid < self.parent.len(),
+            "e-class id {eid} out of bounds (len={})",
+            self.parent.len()
+        );
         while self.parent[eid] != eid {
             let p = self.parent[eid];
             self.parent[eid] = self.parent[p];
             eid = self.parent[eid];
+        }
+        eid
+    }
+
+    fn find_imm(&self, mut eid: usize) -> usize {
+        debug_assert!(
+            eid < self.parent.len(),
+            "e-class id {eid} out of bounds (len={})",
+            self.parent.len()
+        );
+        while let Some(&p) = self.parent.get(eid) {
+            if p == eid {
+                break;
+            }
+            eid = p;
         }
         eid
     }
@@ -67,6 +91,10 @@ impl EGraph {
         }
         let eid = self.parent.len();
         self.parent.push(eid);
+        self.parents.push(Vec::new());
+        for &child in &cnode.children {
+            self.parents[child].push((cnode.clone(), eid));
+        }
         let mut set = HashSet::new();
         set.insert(cnode.clone());
         self.classes.insert(eid, set);
@@ -90,6 +118,8 @@ impl EGraph {
         if let Some(nodes_b) = self.classes.remove(&rb) {
             self.classes.entry(ra).or_default().extend(nodes_b);
         }
+        let parents_b = std::mem::take(&mut self.parents[rb]);
+        self.parents[ra].extend(parents_b);
         self.worklist.push(ra);
         ra
     }
@@ -105,28 +135,41 @@ impl EGraph {
         }
     }
 
-    fn repair(&mut self, mut eid: usize) {
-        eid = self.find(eid);
-        let Some(nodes) = self.classes.remove(&eid) else {
-            return;
-        };
-        let mut new_set = HashSet::new();
-        for node in nodes {
-            self.memo.remove(&node);
-            let cnode = self.canonicalize(&node);
-            if let Some(&other_raw) = self.memo.get(&cnode) {
+    fn repair(&mut self, eid: usize) {
+        let eid = self.find(eid);
+        let parent_entries = std::mem::take(&mut self.parents[eid]);
+        let mut new_parents: HashMap<ENode, usize> = HashMap::new();
+        for (pnode, peid) in parent_entries {
+            self.memo.remove(&pnode);
+            let peid = self.find(peid);
+            let cpnode = self.canonicalize(&pnode);
+            if let Some(nodes) = self.classes.get_mut(&peid) {
+                nodes.remove(&pnode);
+                nodes.insert(cpnode.clone());
+            }
+            if let Some(&other_raw) = self.memo.get(&cpnode) {
                 let other = self.find(other_raw);
-                if other != eid {
-                    // Re-insert partially built set before union.
-                    self.classes.entry(eid).or_default().extend(new_set);
-                    eid = self.union(eid, other);
-                    new_set = HashSet::new();
+                if other != peid {
+                    self.union(peid, other);
                 }
             }
-            self.memo.insert(cnode.clone(), eid);
-            new_set.insert(cnode);
+            let peid = self.find(peid);
+            self.memo.insert(cpnode.clone(), peid);
+            if let Some(&prev_peid) = new_parents.get(&cpnode) {
+                let prev = self.find(prev_peid);
+                if prev != peid {
+                    let merged = self.union(prev, peid);
+                    new_parents.insert(cpnode, merged);
+                    continue;
+                }
+            }
+            new_parents.insert(cpnode, peid);
         }
-        self.classes.entry(eid).or_default().extend(new_set);
+        let final_eid = self.find(eid);
+        for (cpnode, peid) in new_parents {
+            let rep = self.find(peid);
+            self.parents[final_eid].push((cpnode, rep));
+        }
     }
 }
 
@@ -168,23 +211,36 @@ pub fn saturate_synteny(eg: &mut EGraph, max_iters: usize, max_nodes: usize) {
             break;
         }
         let mut merges: Vec<(usize, usize)> = Vec::new();
-        let snapshot: Vec<(usize, Vec<ENode>)> = eg
+        let mut snapshot: Vec<(usize, Vec<ENode>)> = eg
             .classes
             .iter()
-            .map(|(&id, set)| (id, set.iter().cloned().collect()))
+            .map(|(&id, set)| {
+                let mut nodes: Vec<ENode> = set.iter().cloned().collect();
+                nodes.sort_unstable_by(|a, b| {
+                    a.op.cmp(&b.op).then_with(|| a.children.cmp(&b.children))
+                });
+                (id, nodes)
+            })
             .collect();
+        snapshot.sort_unstable_by_key(|(id, _)| *id);
 
         for (eid, nodes) in snapshot {
             if eg.memo.len() >= max_nodes {
                 break;
             }
             for node in nodes {
+                if eg.memo.len() >= max_nodes {
+                    break;
+                }
                 if node.op == "inv" && node.children.len() == 1 {
                     let child = eg.find(node.children[0]);
-                    let cnodes: Vec<ENode> = eg
+                    let mut cnodes: Vec<ENode> = eg
                         .classes
                         .get(&child)
                         .map_or_default(|s| s.iter().cloned().collect());
+                    cnodes.sort_unstable_by(|a, b| {
+                        a.op.cmp(&b.op).then_with(|| a.children.cmp(&b.children))
+                    });
                     for cnode in cnodes {
                         if cnode.op == "inv" && cnode.children.len() == 1 {
                             merges.push((eid, cnode.children[0]));
@@ -215,10 +271,13 @@ pub fn saturate_synteny(eg: &mut EGraph, max_iters: usize, max_nodes: usize) {
                         });
                         merges.push((eid, dup_x));
                     }
-                    let anodes: Vec<ENode> = eg
+                    let mut anodes: Vec<ENode> = eg
                         .classes
                         .get(&a)
                         .map_or_default(|s| s.iter().cloned().collect());
+                    anodes.sort_unstable_by(|x, y| {
+                        x.op.cmp(&y.op).then_with(|| x.children.cmp(&y.children))
+                    });
                     for anode in anodes {
                         if anode.op == "seq" && anode.children.len() == 2 {
                             let (x, y) = (anode.children[0], anode.children[1]);
@@ -233,10 +292,13 @@ pub fn saturate_synteny(eg: &mut EGraph, max_iters: usize, max_nodes: usize) {
                             merges.push((eid, rhs));
                         }
                     }
-                    let bnodes: Vec<ENode> = eg
+                    let mut bnodes: Vec<ENode> = eg
                         .classes
                         .get(&b)
                         .map_or_default(|s| s.iter().cloned().collect());
+                    bnodes.sort_unstable_by(|x, y| {
+                        x.op.cmp(&y.op).then_with(|| x.children.cmp(&y.children))
+                    });
                     for bnode in bnodes {
                         if bnode.op == "seq" && bnode.children.len() == 2 {
                             let (y, z) = (bnode.children[0], bnode.children[1]);
@@ -347,7 +409,11 @@ impl MdlCostModel {
         match expr {
             Expr::Block(lbl) => {
                 if let Some(&(len_bp, div)) = stats.get(lbl) {
-                    let p = div.clamp(1e-6, 0.75);
+                    let p = if div.is_finite() {
+                        div.clamp(1e-6, 0.75)
+                    } else {
+                        0.75
+                    };
                     let h2 = -p * p.log2() - (1.0 - p) * (1.0 - p).log2() + p * 3.0_f64.log2();
                     #[allow(clippy::cast_precision_loss)]
                     {
@@ -366,6 +432,7 @@ impl MdlCostModel {
 }
 
 /// Extract minimum-MDL-bit-cost synteny expression rooted at `root`.
+/// Returns `None` if `root` is out of bounds or has no extractable expression.
 #[must_use]
 pub fn extract_min_cost(eg: &mut EGraph, root: usize) -> Option<(f64, Expr)> {
     let model = MdlCostModel::from_egraph(eg);
@@ -373,52 +440,68 @@ pub fn extract_min_cost(eg: &mut EGraph, root: usize) -> Option<(f64, Expr)> {
 }
 
 /// Extract minimum-parsimony synteny expression rooted at `root` under an explicit [`MdlCostModel`].
+/// Returns `None` if `root` is out of bounds or has no extractable expression.
 #[must_use]
 pub fn extract_min_mdl_cost(
     eg: &mut EGraph,
     root: usize,
     model: &MdlCostModel,
 ) -> Option<(f64, Expr)> {
+    if root >= eg.parent.len() {
+        return None;
+    }
     let mut best: HashMap<usize, (f64, Expr)> = HashMap::new();
     let max_rounds = eg.classes.len() + 2;
-    let class_ids: Vec<usize> = eg.classes.keys().copied().collect();
+    let mut class_ids: Vec<usize> = eg.classes.keys().copied().collect();
+    class_ids.sort_unstable();
 
     for _ in 0..max_rounds {
         let mut updated = false;
         for raw_id in &class_ids {
             let eid = eg.find(*raw_id);
-            let nodes: Vec<ENode> = eg
-                .classes
-                .get(&eid)
-                .map_or_default(|s| s.iter().cloned().collect());
+            let Some(node_set) = eg.classes.get(&eid) else {
+                continue;
+            };
+            let mut nodes: Vec<&ENode> = node_set.iter().collect();
+            nodes
+                .sort_unstable_by(|a, b| a.op.cmp(&b.op).then_with(|| a.children.cmp(&b.children)));
             for node in nodes {
-                let cand: Option<(f64, Expr)> = if let Some(lbl) = node.op.strip_prefix("blk:") {
-                    Some((model.block_bits(lbl), Expr::Block(lbl.to_owned())))
-                } else if node.op == "inv" && node.children.len() == 1 {
-                    best.get(&eg.find(node.children[0]))
-                        .map(|(c, e)| (c + model.inv_op_bits, Expr::Inv(Box::new(e.clone()))))
-                } else if node.op == "dup" && node.children.len() == 1 {
-                    best.get(&eg.find(node.children[0]))
-                        .map(|(c, e)| (model.dup_cost(*c, e), Expr::Dup(Box::new(e.clone()))))
-                } else if node.op == "seq" && node.children.len() == 2 {
-                    let left = best.get(&eg.find(node.children[0]));
-                    let right = best.get(&eg.find(node.children[1]));
-                    match (left, right) {
-                        (Some((c1, e1)), Some((c2, e2))) => Some((
-                            c1 + c2 + model.seq_op_bits,
-                            Expr::Seq(Box::new(e1.clone()), Box::new(e2.clone())),
-                        )),
-                        _ => None,
-                    }
-                } else {
-                    None
-                };
-
-                if let Some((cost, expr)) = cand {
-                    let replace = best.get(&eid).is_none_or(|(cur_cost, _)| cost < *cur_cost);
-                    if replace {
-                        best.insert(eid, (cost, expr));
+                if let Some(lbl) = node.op.strip_prefix("blk:") {
+                    let cost = model.block_bits(lbl);
+                    if best.get(&eid).is_none_or(|(cur, _)| cost < *cur) {
+                        best.insert(eid, (cost, Expr::Block(lbl.to_owned())));
                         updated = true;
+                    }
+                } else if node.op == "inv" && node.children.len() == 1 {
+                    let cid = eg.find_imm(node.children[0]);
+                    if let Some((c, e)) = best.get(&cid) {
+                        let cost = c + model.inv_op_bits;
+                        if best.get(&eid).is_none_or(|(cur, _)| cost < *cur) {
+                            let expr = Expr::Inv(Box::new(e.clone()));
+                            best.insert(eid, (cost, expr));
+                            updated = true;
+                        }
+                    }
+                } else if node.op == "dup" && node.children.len() == 1 {
+                    let cid = eg.find_imm(node.children[0]);
+                    if let Some((c, e)) = best.get(&cid) {
+                        let cost = model.dup_cost(*c, e);
+                        if best.get(&eid).is_none_or(|(cur, _)| cost < *cur) {
+                            let expr = Expr::Dup(Box::new(e.clone()));
+                            best.insert(eid, (cost, expr));
+                            updated = true;
+                        }
+                    }
+                } else if node.op == "seq" && node.children.len() == 2 {
+                    let l_id = eg.find_imm(node.children[0]);
+                    let r_id = eg.find_imm(node.children[1]);
+                    if let (Some((c1, e1)), Some((c2, e2))) = (best.get(&l_id), best.get(&r_id)) {
+                        let cost = c1 + c2 + model.seq_op_bits;
+                        if best.get(&eid).is_none_or(|(cur, _)| cost < *cur) {
+                            let expr = Expr::Seq(Box::new(e1.clone()), Box::new(e2.clone()));
+                            best.insert(eid, (cost, expr));
+                            updated = true;
+                        }
                     }
                 }
             }
@@ -514,5 +597,39 @@ mod tests {
             !has_dup_of(&expr_high, "B"),
             "75% (JC-saturated) div should NOT collapse dup: {expr_high:?}"
         );
+    }
+
+    #[test]
+    fn congruence_closure_propagates_to_parent_enodes() {
+        let mut eg = EGraph::new();
+        let a = eg.add(ENode {
+            op: "blk:A".to_owned(),
+            children: Vec::new(),
+        });
+        let b = eg.add(ENode {
+            op: "blk:B".to_owned(),
+            children: Vec::new(),
+        });
+        let inv_a = eg.add(ENode {
+            op: "inv".to_owned(),
+            children: vec![a],
+        });
+        let inv_inv_a = eg.add(ENode {
+            op: "inv".to_owned(),
+            children: vec![inv_a],
+        });
+        let seq_nested = eg.add(ENode {
+            op: "seq".to_owned(),
+            children: vec![inv_inv_a, b],
+        });
+        let seq_plain = eg.add(ENode {
+            op: "seq".to_owned(),
+            children: vec![a, b],
+        });
+        assert_ne!(eg.find(seq_nested), eg.find(seq_plain));
+
+        eg.union(inv_inv_a, a);
+        eg.rebuild();
+        assert_eq!(eg.find(seq_nested), eg.find(seq_plain));
     }
 }

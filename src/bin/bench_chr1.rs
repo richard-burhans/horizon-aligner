@@ -2,42 +2,24 @@
 
 use anyhow::{Context, Result};
 use horizon_aligner::{MASK_PRIMARY_11_15, banded_mdl_gap, canonical_spaced_seeds, lis_chain};
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 fn read_first_contig(path: &Path) -> Result<Vec<u8>> {
-    let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    let mut seq = Vec::with_capacity(700_000);
-    let mut started = false;
-    for line in text.lines() {
-        if line.starts_with('>') {
-            if started {
-                break;
-            }
-            started = true;
-        } else if started {
-            seq.extend_from_slice(line.trim().as_bytes());
-        }
-    }
-    Ok(seq)
-}
-
-fn revcomp(seq: &[u8]) -> Vec<u8> {
-    seq.iter()
-        .rev()
-        .map(|&b| match b.to_ascii_uppercase() {
-            b'A' => b'T',
-            b'T' => b'A',
-            b'C' => b'G',
-            b'G' => b'C',
-            other => other,
-        })
-        .collect()
+    let contigs = horizon_aligner::read_fasta_contigs(path, 1)?;
+    contigs
+        .into_iter()
+        .next()
+        .map(|(_, seq)| seq)
+        .with_context(|| format!("no contigs found in {}", path.display()))
 }
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
+    if args.iter().skip(1).any(|a| a == "-h" || a == "--help") {
+        println!("usage: bench_chr1 <target.fa> <query.fa>");
+        return Ok(());
+    }
     if args.len() < 3 {
         anyhow::bail!("usage: bench_chr1 <target.fa> <query.fa>");
     }
@@ -51,18 +33,22 @@ fn main() -> Result<()> {
     let iy_fwd = canonical_spaced_seeds(&seq_y_raw, MASK_PRIMARY_11_15, 1)?;
     let mut hits_fwd = Vec::new();
     for (k, px) in &ix {
-        if let Some(py) = iy_fwd.get(k) {
-            hits_fwd.push((px[0], py[0]));
+        if let Some(py) = iy_fwd.get(k)
+            && let (Some(&x0), Some(&y0)) = (px.first(), py.first())
+        {
+            hits_fwd.push((x0, y0));
         }
     }
     let chain_fwd = lis_chain(&hits_fwd);
 
-    let seq_y_rc = revcomp(&seq_y_raw);
+    let seq_y_rc = horizon_aligner::revcomp(&seq_y_raw);
     let iy_rc = canonical_spaced_seeds(&seq_y_rc, MASK_PRIMARY_11_15, 1)?;
     let mut hits_rc = Vec::new();
     for (k, px) in &ix {
-        if let Some(py) = iy_rc.get(k) {
-            hits_rc.push((px[0], py[0]));
+        if let Some(py) = iy_rc.get(k)
+            && let (Some(&x0), Some(&y0)) = (px.first(), py.first())
+        {
+            hits_rc.push((x0, y0));
         }
     }
     let chain_rc = lis_chain(&hits_rc);
@@ -124,11 +110,13 @@ fn main() -> Result<()> {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn revcomp_and_read_first_contig_work() {
-        assert_eq!(revcomp(b"ACGTN"), b"NACGT");
-        let fa_path = std::env::temp_dir().join("bench_chr1_test.fa");
+        assert_eq!(horizon_aligner::revcomp(b"ACGTN"), b"NACGT");
+        let fa_path =
+            std::env::temp_dir().join(format!("bench_chr1_test_{}.fa", std::process::id()));
         fs::write(&fa_path, ">c1\nACGT\nTTAA\n>c2\nGGGG\n").unwrap();
         let seq = read_first_contig(&fa_path).unwrap();
         let _ = fs::remove_file(&fa_path);
