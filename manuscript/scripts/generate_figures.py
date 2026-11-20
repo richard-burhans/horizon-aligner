@@ -660,42 +660,57 @@ def make_fig_g3_horizon_bubble_anatomy() -> None:
 
 
 def make_fig5_pangenome_suite() -> None:
-    """Two-panel BioVis figure: chr6 FlatSeedIndex+Rayon speedup & 12 GB HPRC suite scaling."""
+    """Two-panel BioVis figure: chr6 stage speedups & 12 GB HPRC suite scaling."""
     fig, (ax1, ax2) = plt.subplots(
-        1, 2, figsize=(10.6, 4.1), gridspec_kw={"width_ratios": [1.05, 1.25], "wspace": 0.34}
+        1, 2, figsize=(10.8, 4.2), gridspec_kw={"width_ratios": [1.1, 1.25], "wspace": 0.34}
     )
 
     # Panel A: Full GRCh38.chr6 (170.8 Mbp) x CHM13.chr6 (110.7 Mbp) stage breakdown
-    configs = ["Baseline\n(1e47fe0)", "FlatSeedIndex + Rayon\n(53130b8)"]
+    configs = [
+        "Baseline\n(1e47fe0)",
+        "FlatSeedIndex +\nRayon (53130b8)",
+        "DP + seed_end +\nw=10 (8cd5db0)",
+    ]
     stages = [
-        ("KP-14 + w=10", [29.78, 28.46], OI_BLUE),
-        ("LASTZ12 1-trans (lz1)", [588.67, 47.87], OI_ORANGE),
-        ("HSP gate + LCBs (seed_end)", [184.65, 91.04], OI_SKY),
-        ("BandGrid MDL DP", [179.93, 187.35], OI_GREEN),
-        ("X-drop + I/O", [79.42, 96.63], OI_GRAY),
+        ("KP-14 + w=10", [29.78, 28.46, 11.73], OI_BLUE),
+        ("LASTZ12 1-trans (lz1)", [588.67, 47.87, 24.54], OI_ORANGE),
+        ("HSP gate + LCBs (seed_end)", [184.65, 91.04, 22.88], OI_SKY),
+        ("BandGrid DP + X-drop + I/O", [259.35, 283.98, 208.71], OI_GREEN),
     ]
     x = np.arange(len(configs))
     bottom = np.zeros(len(configs))
     for label, vals, col in stages:
         arr = np.array(vals)
-        ax1.bar(x, arr, width=0.46, bottom=bottom, color=col, edgecolor="white", linewidth=0.7, label=label)
+        ax1.bar(x, arr, width=0.48, bottom=bottom, color=col, edgecolor="white", linewidth=0.7, label=label)
         bottom += arr
 
-    ax1.text(0, 1062.45 + 24, "1,062.45 s\n(17m 42s)", ha="center", va="bottom", fontsize=8.0, fontweight="bold", color=OI_BLACK)
-    ax1.text(1, 451.35 + 24, "451.35 s\n(2.35× faster)", ha="center", va="bottom", fontsize=8.0, fontweight="bold", color=OI_BLUE)
+    ax1.text(0, 1062.45 + 22, "1,062.45 s\n(17m 42s)", ha="center", va="bottom", fontsize=7.8, fontweight="bold", color=OI_BLACK)
+    ax1.text(1, 451.35 + 22, "451.35 s\n(2.35× faster)", ha="center", va="bottom", fontsize=7.8, fontweight="bold", color=OI_BLUE)
+    ax1.text(2, 267.86 + 22, "267.86 s\n(3.97× faster)", ha="center", va="bottom", fontsize=7.8, fontweight="bold", color=OI_GREEN)
     ax1.annotate(
-        "lz1: 588.7s → 47.9s\n(12.3× faster)",
-        xy=(1, 52),
-        xytext=(0.66, 720),
+        "lz1: 588.7s → 47.9s → 24.5s\n(24.0× faster)",
+        xy=(2.25, 24.0),
+        xytext=(1.70, 770),
         ha="center",
-        fontsize=7.6,
+        fontsize=7.2,
         fontweight="bold",
         color=OI_VERMILION,
-        arrowprops=dict(arrowstyle="->", color=OI_VERMILION, lw=1.0),
+        arrowprops=dict(arrowstyle="->", color=OI_VERMILION, lw=1.0, connectionstyle="arc3,rad=-0.30"),
+    )
+    ax1.annotate(
+        "seed_end: 184.7s → 22.9s (8.1×)\nDP+X-drop+I/O: 284.0s → 208.7s",
+        xy=(2.25, 165.0),
+        xytext=(1.70, 620),
+        ha="center",
+        fontsize=7.1,
+        fontweight="bold",
+        color=OI_BLACK,
+        arrowprops=dict(arrowstyle="->", color=OI_BLACK, lw=0.9, connectionstyle="arc3,rad=-0.28"),
     )
     ax1.set_xticks(x)
-    ax1.set_xticklabels(configs, fontsize=8.2)
-    ax1.set_ylim(0, 1240)
+    ax1.set_xticklabels(configs, fontsize=7.8)
+    ax1.set_xlim(-0.55, 2.55)
+    ax1.set_ylim(0, 1250)
     ax1.set_ylabel("Wall-Clock Runtime (s)", fontsize=9.0)
     ax1.set_title("Full GRCh38.chr6 × CHM13.chr6 Breakdown", loc="left", fontsize=9.8)
     ax1.legend(frameon=False, fontsize=7.0, loc="upper right")
@@ -749,10 +764,10 @@ def make_fig6_suite_and_vg() -> None:
     tools = [
         ("horizon_gfa stats", 0.0256, 22.7, OI_PURPLE, (10, -2), "left"),
         ("horizon_clean", 0.0525, 36.9, OI_GREEN, (10, 8), "left"),
-        ("horizon_wga --graph\n(20k DAG nodes)", 0.821, 404.4, OI_BLUE, (10, 6), "left"),
-        ("vg convert -g -p\n(vg v1.60.0)", 1.8292, 76.6, OI_GRAY, (-8, 16), "right"),
-        ("vg stats -z -l -N\n(vg v1.60.0, 168× slower)", 4.2984, 77.0, OI_VERMILION, (0, 20), "center"),
-        ("horizon_guide\n(5-sp HAL)", 2.527, 610.1, OI_SKY, (8, -6), "left"),
+        ("horizon_wga --graph\n(20k DAG nodes)", 0.821, 404.4, OI_BLUE, (-10, -8), "right"),
+        ("vg convert -g -p\n(vg v1.60.0)", 1.8292, 76.6, OI_GRAY, (-10, 6), "right"),
+        ("vg stats -z -l -N\n(vg v1.60.0, 168× slower)", 4.2984, 77.0, OI_VERMILION, (4, 24), "center"),
+        ("horizon_guide\n(5-sp HAL)", 2.527, 610.1, OI_SKY, (10, 4), "left"),
         ("horizon_merge\n(92-sp chrM)", 4.451, 26.8, OI_GREEN, (0, -20), "center"),
         ("horizon_resolve\n(e-graph walks)", 8.106, 36.9, OI_ORANGE, (-10, 12), "right"),
     ]
@@ -771,7 +786,7 @@ def make_fig6_suite_and_vg() -> None:
         )
     ax1.set_xscale("log")
     ax1.set_yscale("log")
-    ax1.set_xlim(0.015, 20)
+    ax1.set_xlim(0.014, 26)
     ax1.set_ylim(12, 1200)
     ax1.set_xlabel("Wall-Clock Runtime (s, log scale)", fontsize=9.0)
     ax1.set_ylabel("Peak RSS Memory (MB, log scale)", fontsize=9.0)
@@ -781,20 +796,20 @@ def make_fig6_suite_and_vg() -> None:
     ax1.text(-0.15, 1.07, "A", transform=ax1.transAxes, fontsize=11.5, fontweight="bold", va="top")
 
     # Panel B: R1-HMM BOCPD LCB gate precision gain & 18%-GC null suppression
-    cats = ["Random 18% GC\n(10 kb null, ÷100 pairs)", "Horse\n(Precision %)", "Macaque\n(Precision %)", "Marmoset\n(Precision %)"]
+    cats = ["Random 18% GC\n(10 kb, ÷100)", "Horse\n(Precision %)", "Macaque\n(Precision %)", "Marmoset\n(Precision %)"]
     before = [180.77, 65.4, 84.6, 86.1]
     after = [0.0, 72.3, 86.9, 87.7]
     x = np.arange(len(cats))
-    w = 0.36
+    w = 0.38
     b1 = ax2.bar(x - w / 2, before, width=w, color=OI_GRAY, edgecolor="white", label="Before BOCPD LCB Gate")
     b2 = ax2.bar(x + w / 2, after, width=w, color=OI_BLUE, edgecolor="white", label="After BOCPD LCB Gate (HEAD)")
 
     for bar, val in zip(b1, before):
         txt = "18,077" if val > 100 else f"{val:.1f}%"
-        ax2.text(bar.get_x() + bar.get_width() / 2, val + 2.5, txt, ha="center", va="bottom", fontsize=7.2, color=OI_BLACK)
+        ax2.text(bar.get_x() + bar.get_width() / 2, val + 2.5, txt, ha="center", va="bottom", fontsize=6.8, color=OI_BLACK)
     for bar, val in zip(b2, after):
         txt = "0" if val == 0 else f"{val:.1f}%"
-        ax2.text(bar.get_x() + bar.get_width() / 2, val + 2.5, txt, ha="center", va="bottom", fontsize=7.2, fontweight="bold", color=OI_BLUE)
+        ax2.text(bar.get_x() + bar.get_width() / 2, val + 2.5, txt, ha="center", va="bottom", fontsize=6.8, fontweight="bold", color=OI_BLUE)
 
     ax2.set_xticks(x)
     ax2.set_xticklabels(cats, fontsize=7.5)
@@ -909,7 +924,7 @@ def make_fig7_chr6_hprc_comparison() -> None:
     ax_c.tick_params(labelsize=7.5)
     ax_c.legend(loc="upper left", bbox_to_anchor=(0.01, 0.96), ncol=1, frameon=False, fontsize=6.4, handlelength=1.5)
     despine(ax_c)
-    ax_c.text(-0.08, 1.08, "C", transform=ax_c.transAxes, fontsize=11, fontweight="bold", va="top")
+    ax_c.text(-0.08, 1.15, "C", transform=ax_c.transAxes, fontsize=11, fontweight="bold", va="top")
 
     save_both(fig, "fig7_chr6_hprc_comparison")
 
