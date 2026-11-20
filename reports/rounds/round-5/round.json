@@ -795,5 +795,9 @@
     "by": "49d61257-2436-4355-8b77-038c755c0125",
     "date": "2026-11-20",
     "evidence": "reports/rounds/round-5/cold-audit.md: PASS; cargo fmt --check, cargo clippy --all-targets --all-features -- -D warnings, cargo test --all-features (97 passed, 0 failed, 1 ignored), rg 0 matches for KP-14|BandGrid|1110110110111, scripts/round corrections 5 (8/8 APPLIED), scripts/round check 5 --full (exit 0)."
+  },
+  "closed": "2026-11-20",
+  "closed_at_code": {
+    "horizon-aligner": "4d2844e27fc32049c06a0af2e0b83f68d183f79c"
   }
 }
