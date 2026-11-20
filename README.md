@@ -7,7 +7,7 @@ A pure-Rust **information-theoretic genome alignment and pangenome suite** combi
 - **Pairwise & DAG/POA MDL alignment (`horizon_wga`):** Strand-symmetric `KP-14` (`11-of-15`) indexing in `FlatSeedIndex` (`12 bytes/entry` + 16-bit prefix buckets) with SDUST repeat masking, Rayon-parallel `LASTZ12`/`LASTZ11` transition seeding, `w=10`/`w=9`, 1-bit `R/Y`, and 6-frame `AA5` fallback seeding, driving flat `BandGrid` Pair-HMM forward-backward alignment (`src/mdl/dp.rs`) and seeded DAG/POA alignment (`horizon_wga --graph`, `src/mdl/dag.rs`).
 - **Calibrated epistemic abstention (Horizon Bubbles):** Intervals falling below the search-space-scaled MDL floor (`0.55 log2(N*M)` + conformal `10.0`-bit floor) or `min_post_prob` abstain explicitly as `# HB:Z:` / `HB:i:1` Horizon Bubbles rather than forcing spurious base pairs.
 - **Streaming `12 GB+` GFA pangenome toolkit (`src/gfa/mod.rs`, `src/coord.rs`):**
-  - `horizon_gfa`: Single-pass BGZF/gzip (`MultiGzDecoder`) `stats` (`99.97 s`, `97.0 MB` RSS across `81.4M` segments / `3.29 Gbp`) and two-pass chromosome `extract`.
+  - `horizon_gfa`: Single-pass BGZF/gzip (`MultiGzDecoder`) `stats` (`196.93 s`, `96.9 MB` RSS across `81.4M` segments / `3.29 Gbp`) and two-pass chromosome `extract`.
   - `horizon_lift`: Graph-aware BED/GFF3 coordinate liftover with `--bridge-bp` micro-bubble coalescing and UCSC reverse-strand arithmetic.
   - `horizon_clean`: Two-pass `S`-flank-indexed BOCPD+MDL junction scoring that severs unsupported (`sup=0`) discordant links into Horizon Bubbles.
   - `horizon_resolve`: Standalone MDL-calibrated e-graph resolution (`MdlCostModel`) over GFA `P`/`W` walks (`--collapse-dups`, `--tag-walks`).
@@ -93,17 +93,19 @@ target/release/horizon_guide --progressive --rbest --hal out.hal tree.nwk genome
 
 ## Performance Highlights
 
-- **Pairwise WGA benchmarks (`scripts/benchmarks/run_all_evals.py`):**
-  - `multiz100way` (`hg38` vs `panTro4` chrM): **94.4%** recall / **97.4%** precision (`0.18s`).
-  - `multiz100way` (`hg38` vs `mm10` chrM): **76.4%** recall / **93.6%** precision (`0.16s`).
-  - `cactus447way` (`hg38` vs `Macaca_mulatta`): **90.8%** recall / **86.9%** precision (`0.39s`).
-  - `multiz470way` (`hg38` vs `HLcalPym1`): **85.7%** recall / **87.7%** precision (`0.41s`).
-  - `cactus447way` (`hg38` vs `Equus_caballus`): **54.0%** recall / **72.4%** precision (`0.24s`).
-- **12 GB HPRC v1.0 Minigraph-Cactus Graph & Whole-Chromosome Scale:**
-  - Full-graph `horizon_gfa stats` (`81.4M` segments, `3.29 Gbp`, `113.0M` links): **99.97 s**, **97.0 MB** peak RSS.
-  - `horizon_lift --bridge-bp 10` (`500` `GRCh38.chr22` 1-kb windows → `CHM13.chr22`): **182.67 s**, **619.7 MB** peak RSS.
-  - `horizon_wga --resolve-dups` (`GRCh38.chr22` vs `CHM13.chr22`): **116.58 s**, **3,336.4 MB** peak RSS (`95.6%` of `CHM13.chr22` q-arm).
-  - `horizon_wga --resolve-dups` (`GRCh38.chr6` `170.8 Mbp` vs `CHM13.chr6` `110.7 Mbp`): **451.35 s** (`7m 31s`, **2.35×** faster than `1,062.45 s` baseline via 16-bit prefix-bucketed `FlatSeedIndex` + Rayon `LASTZ12` transition seeding), **10.27 GB** peak RSS.
+- **Pairwise WGA benchmarks (`scripts/benchmarks/run_all_evals.py` on `8cd5db0`):**
+  - `multiz100way` (`hg38` vs `panTro4` chrM): **95.6%** recall / **97.4%** precision (`0.058s`).
+  - `multiz100way` (`hg38` vs `mm10` chrM): **76.5%** recall / **93.7%** precision (`0.064s`).
+  - `cactus447way` (`hg38` vs `Macaca_mulatta`): **91.4%** recall / **87.0%** precision (`0.102s`).
+  - `multiz470way` (`hg38` vs `HLcalPym1`): **86.3%** recall / **87.7%** precision (`0.189s`).
+  - `cactus447way` (`hg38` vs `Equus_caballus`): **54.0%** recall / **67.6%** precision (`0.068s`).
+  - `cactus241way` (`chr22 1MB`, `hg38` vs `Canis_lupus_familiaris`, `31` contigs): **59.8%** recall / **78.5%** precision (`0.852s`).
+  - `B10K 363-way` (`chr1:5.9M–6.4M`, `Gallus_gallus` vs `Taeniopygia_guttata`): **71.1%** recall / **95.1%** precision (`0.642s`).
+- **12 GB HPRC v1.0 Minigraph-Cactus Graph & Whole-Chromosome Scale (`8cd5db0`):**
+  - Full-graph `horizon_gfa stats` (`81.4M` segments, `3.29 Gbp`, `113.0M` links): **196.93 s**, **96.9 MB** peak RSS.
+  - `horizon_lift --bridge-bp 10` (`500` `GRCh38.chr22` 1-kb windows → `CHM13.chr22`): **177.55 s**, **708.8 MB** peak RSS (`472` exact, `5` partial, `15` split, `8` unmapped).
+  - `horizon_wga --resolve-dups` (`GRCh38.chr22` vs `CHM13.chr22`): **69.10 s**, **3,971.6 MB** peak RSS (`95.6%` of `CHM13.chr22` q-arm).
+  - `horizon_wga --resolve-dups` (`GRCh38.chr6` `170.8 Mbp` vs `CHM13.chr6` `110.7 Mbp`): **258.88s–267.86s** (`282.2M` pairs, `98.9%` of `CHM13.chr6` q-arm), **99.82%** exact base-coordinate precision against `1,628,018` `1-to-1` HPRC graph segments (`76.44%` exact recall).
 
 ## Documentation
 

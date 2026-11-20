@@ -704,13 +704,13 @@ def make_fig5_pangenome_suite() -> None:
 
     # Panel B: 12 GB HPRC v1.0 Graph & Suite Scaling (Wall Time vs Peak RSS)
     suite_runs = [
-        ("horizon_gfa stats\n(12 GB HPRC, 81.4M segs)", 99.97, 97.0, OI_PURPLE, (10, -2), "left"),
-        ("horizon_gfa extract\n(GRCh38+CHM13 chr22)", 295.62, 455.8, OI_PURPLE, (10, -10), "left"),
-        ("horizon_gfa extract\n(GRCh38+CHM13 chr6)", 399.48, 1254.9, OI_PURPLE, (10, 4), "left"),
-        ("horizon_lift --to-chrom chr22\n(500 chr22 windows)", 178.93, 708.6, OI_GREEN, (-10, 12), "right"),
-        ("horizon_wga --resolve-dups\n(chr22 50.8 × 35.6 Mbp)", 116.58, 3336.4, OI_BLUE, (10, 12), "left"),
-        ("horizon_wga --resolve-dups\n(chr6 HEAD 170.8 × 110.7 Mbp)", 592.68, 12533.0, OI_BLUE, (-10, -12), "right"),
-        ("horizon_wga --resolve-dups\n(chr6 20 Mbp q-arm)", 38.23, 2409.7, OI_SKY, (8, -18), "left"),
+        ("horizon_gfa stats\n(12 GB HPRC, 81.4M segs)", 196.93, 96.9, OI_PURPLE, (10, -2), "left"),
+        ("horizon_gfa extract\n(GRCh38+CHM13 chr22)", 193.89, 474.2, OI_PURPLE, (10, -14), "left"),
+        ("horizon_gfa extract\n(GRCh38+CHM13 chr6)", 317.00, 1526.7, OI_PURPLE, (10, 4), "left"),
+        ("horizon_lift --to-chrom chr22\n(500 chr22 windows)", 177.55, 708.8, OI_GREEN, (-10, 12), "right"),
+        ("horizon_wga --resolve-dups\n(chr22 50.8 × 35.6 Mbp)", 69.10, 3971.6, OI_BLUE, (10, 12), "left"),
+        ("horizon_wga --resolve-dups\n(chr6 8cd5db0 170.8 × 110.7 Mbp)", 267.86, 12533.0, OI_BLUE, (10, -10), "left"),
+        ("horizon_wga --resolve-dups\n(chr6 20 Mbp q-arm)", 12.84, 2409.7, OI_SKY, (8, -18), "left"),
     ]
     for label, wt, rss, col, (dx, dy), ha in suite_runs:
         ax2.scatter(wt, rss, color=col, s=64, edgecolor="white", linewidth=0.9, zorder=4)
@@ -727,7 +727,7 @@ def make_fig5_pangenome_suite() -> None:
         )
 
     ax2.set_yscale("log")
-    ax2.set_xlim(0, 640)
+    ax2.set_xlim(0, 460)
     ax2.set_ylim(50, 26000)
     ax2.set_xlabel("Wall-Clock Runtime (s)", fontsize=9.0)
     ax2.set_ylabel("Peak RSS Memory (MB, log scale)", fontsize=9.0)
