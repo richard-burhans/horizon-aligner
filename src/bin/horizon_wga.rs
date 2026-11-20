@@ -362,8 +362,14 @@ fn main() -> Result<()> {
         })
         .collect();
 
-    let mut target_pos_by_contig: Vec<Vec<usize>> = vec![Vec::new(); idx_x.len()];
-    let mut query_pos_by_contig: Vec<Vec<usize>> = vec![Vec::new(); idx_y.len()];
+    let mut target_cov_by_contig: Vec<Vec<u64>> = contigs_x
+        .iter()
+        .map(|(_, s)| vec![0_u64; s.len().div_ceil(64)])
+        .collect();
+    let mut query_cov_by_contig: Vec<Vec<u64>> = contigs_y
+        .iter()
+        .map(|(_, s)| vec![0_u64; s.len().div_ceil(64)])
+        .collect();
 
     for item in aligned_results {
         let (x_i, y_i, aln) = item?;
@@ -374,8 +380,16 @@ fn main() -> Result<()> {
             continue;
         }
         total_pairs += aln.aligned_pairs.len();
-        target_pos_by_contig[x_i].extend(aln.aligned_pairs.iter().map(|&(px, _)| px));
-        query_pos_by_contig[y_i].extend(aln.aligned_pairs.iter().map(|&(_, py)| py));
+        let x_bits = &mut target_cov_by_contig[x_i];
+        let y_bits = &mut query_cov_by_contig[y_i];
+        for &(px, py) in &aln.aligned_pairs {
+            if let Some(w) = x_bits.get_mut(px >> 6) {
+                *w |= 1_u64 << (px & 63);
+            }
+            if let Some(w) = y_bits.get_mut(py >> 6) {
+                *w |= 1_u64 << (py & 63);
+            }
+        }
         total_bubbles += aln.macro_bubbles + aln.internal_bubbles;
         let gfa_sum = format_gfa_summary(nx, ny, &aln);
         if summary_out.is_empty() {
@@ -417,21 +431,13 @@ fn main() -> Result<()> {
         w.flush()?;
     }
 
-    let total_unique_x: usize = target_pos_by_contig
-        .into_iter()
-        .map(|mut v| {
-            v.sort_unstable();
-            v.dedup();
-            v.len()
-        })
+    let total_unique_x: usize = target_cov_by_contig
+        .iter()
+        .map(|bits| bits.iter().map(|w| w.count_ones() as usize).sum::<usize>())
         .sum();
-    let total_unique_y: usize = query_pos_by_contig
-        .into_iter()
-        .map(|mut v| {
-            v.sort_unstable();
-            v.dedup();
-            v.len()
-        })
+    let total_unique_y: usize = query_cov_by_contig
+        .iter()
+        .map(|bits| bits.iter().map(|w| w.count_ones() as usize).sum::<usize>())
         .sum();
 
     let elapsed = t0.elapsed().as_secs_f64();

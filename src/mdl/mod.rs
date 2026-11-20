@@ -121,6 +121,7 @@ struct PrimaryMetrics {
     covered_x: Vec<bool>,
     covered_bp: usize,
     primary_cov: f64,
+    search_space_bits: f64,
     effective_min_bits: f64,
     base_hsp_thresh: i32,
     min_fallback_cov: f64,
@@ -183,6 +184,7 @@ fn compute_primary_metrics(
         covered_x,
         covered_bp,
         primary_cov,
+        search_space_bits,
         effective_min_bits,
         base_hsp_thresh,
         min_fallback_cov,
@@ -232,6 +234,7 @@ pub fn align_contig_pair_with_config(
         covered_x,
         covered_bp,
         primary_cov,
+        search_space_bits,
         effective_min_bits,
         base_hsp_thresh,
         min_fallback_cov,
@@ -263,6 +266,8 @@ pub fn align_contig_pair_with_config(
         t_start,
     )?;
 
+    let lcb_gate_bits = effective_min_bits.max(search_space_bits);
+
     let mut ext = schedule_and_run_extension(
         seq_x,
         seq_y,
@@ -275,6 +280,7 @@ pub fn align_contig_pair_with_config(
         MAX_GAP_BP,
         MAX_LOCAL_RESCUE_BP,
         effective_min_bits,
+        lcb_gate_bits,
         cfg,
     )?;
 
@@ -334,6 +340,7 @@ fn schedule_and_run_extension(
     max_gap_bp: usize,
     max_local_rescue_bp: usize,
     effective_min_bits: f64,
+    lcb_gate_bits: f64,
     cfg: &AlignConfig,
 ) -> Result<ExtensionOutput, AlignError> {
     let mut pairs_vec: Vec<(usize, usize)> = Vec::new();
@@ -358,7 +365,7 @@ fn schedule_and_run_extension(
             max_gap_bp,
             max_local_rescue_bp,
             cfg.max_ext,
-            effective_min_bits,
+            lcb_gate_bits,
             &mut pairs_vec,
             &mut dp_jobs,
             &mut xdrop_jobs,
