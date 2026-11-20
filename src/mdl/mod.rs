@@ -367,13 +367,33 @@ fn schedule_and_run_extension(
 
     // Estimate divergence-adaptive Pair-HMM parameters empirically from LCB anchors (with Beta prior shrinkage).
     let hmm_params = estimate_hmm_params(seq_x, seq_y, seq_y_rc, lcbs_fwd, lcbs_rc, span);
+    // Calibrate finite-sample Conformal Risk Control floor (n_cal = 15, alpha = 0.07) at observed GC.
+    let mut gc_cnt = 0usize;
+    let mut acgt_cnt = 0usize;
+    for &b in seq_x.iter().take(4096).chain(seq_y.iter().take(4096)) {
+        match b.to_ascii_uppercase() {
+            b'G' | b'C' => {
+                gc_cnt += 1;
+                acgt_cnt += 1;
+            }
+            b'A' | b'T' => acgt_cnt += 1,
+            _ => {}
+        }
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let observed_gc = if acgt_cnt > 0 {
+        gc_cnt as f64 / acgt_cnt as f64
+    } else {
+        0.5
+    };
+    let crc_min_bits = dp::calibrate_null_crc_for_gc(observed_gc, 15, 0.07, effective_min_bits, &hmm_params);
 
     let t_dp_start = std::time::Instant::now();
     let internal_bubbles = execute_dp_and_xdrop(
         seq_x,
         seq_y,
         seq_y_rc,
-        effective_min_bits,
+        crc_min_bits,
         &hmm_params,
         cfg,
         &dp_jobs,

@@ -45,7 +45,7 @@ fn select_central_hinge(species: &[IndexedSpecies]) -> usize {
         .map_or(0, |(_, std::cmp::Reverse(i))| i)
 }
 
-type HalBlock = (usize, usize, usize, bool);
+type HalBlock = (usize, usize, usize, usize, usize, bool);
 type HalBlockList = Vec<HalBlock>;
 
 pub(crate) fn align_species_pair(
@@ -91,13 +91,11 @@ pub(crate) fn align_species_pair(
             let sx = &ref_contigs[xi].1;
             let sy = &qry_contigs[yi].1;
             let maf = format_maf_blocks(nx, sx.len(), ny, sy.len(), sx, sy, &aln);
-            let hblk = if xi == 0
-                && yi == 0
-                && let Some(&(x0, y0)) = aln.aligned_pairs.first()
+            let hblk = if let Some(&(x0, y0)) = aln.aligned_pairs.first()
                 && let Some(&(x1, y1)) = aln.aligned_pairs.last()
                 && x1 > x0
             {
-                Some((x0, y0.min(y1), x1 - x0 + 1, y1 < y0))
+                Some((xi, yi, x0, y0.min(y1), x1 - x0 + 1, y1 < y0))
             } else {
                 None
             };
@@ -240,8 +238,8 @@ fn main() -> Result<()> {
     };
 
     let mut pairwise_mafs: Vec<(String, String)> = Vec::new();
-    let mut hal_queries: Vec<(String, Vec<u8>)> = Vec::new();
-    let mut hal_all_blocks: Vec<(usize, usize, usize, usize, bool)> = Vec::new();
+    let mut hal_queries: Vec<(String, ContigList)> = Vec::new();
+    let mut hal_all_blocks: Vec<(usize, usize, usize, usize, usize, usize, bool)> = Vec::new();
     let mut sp_to_pw_idx: HashMap<usize, usize> = HashMap::new();
 
     for (i, (qry_sp, qry_contigs, qry_indices)) in indexed.iter().enumerate() {
@@ -257,12 +255,9 @@ fn main() -> Result<()> {
             cli.top_k,
         )?;
         let q_idx = hal_queries.len();
-        hal_queries.push((
-            qry_sp.clone(),
-            qry_contigs.first().map_or_else(Vec::new, |c| c.1.clone()),
-        ));
-        for (rs, qs, len, rev) in hblocks {
-            hal_all_blocks.push((q_idx, rs, qs, len, rev));
+        hal_queries.push((qry_sp.clone(), qry_contigs.clone()));
+        for (xi, yi, rs, qs, len, rev) in hblocks {
+            hal_all_blocks.push((q_idx, xi, yi, rs, qs, len, rev));
         }
         sp_to_pw_idx.insert(i, pairwise_mafs.len());
         pairwise_mafs.push((qry_sp.clone(), maf_buf));
@@ -288,9 +283,9 @@ fn main() -> Result<()> {
         )?;
     }
 
-    let hal = HalAlignment::from_star_blocks(
+    let hal = HalAlignment::from_multi_contig_star_blocks(
         hinge_sp,
-        hinge_contigs.first().map_or(&[], |c| c.1.as_slice()),
+        hinge_contigs,
         &hal_queries,
         &hal_all_blocks,
     );

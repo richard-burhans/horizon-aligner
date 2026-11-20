@@ -79,6 +79,90 @@ impl HmmParams {
     }
 }
 
+/// Calibrate a Conformal Risk Control (Angelopoulos et al. 2024) bit-savings
+/// threshold `λ̂ >= base_floor_bits` from `n_cal` null/decoy block bit scores
+/// such that the finite-sample false-positive bound `(count(score >= λ̂) + 1) / (n_cal + 1) <= alpha` holds.
+#[must_use]
+pub fn calibrate_crc_threshold(null_block_bits: &[f64], alpha: f64, base_floor_bits: f64) -> f64 {
+    if null_block_bits.is_empty() || !alpha.is_finite() || alpha <= 0.0 {
+        return base_floor_bits;
+    }
+    let mut scores: Vec<f64> = null_block_bits
+        .iter()
+        .copied()
+        .filter(|s| s.is_finite())
+        .collect();
+    if scores.is_empty() {
+        return base_floor_bits;
+    }
+    scores.sort_by(f64::total_cmp);
+    let n = scores.len();
+    #[allow(clippy::cast_precision_loss)]
+    let denom = (n + 1) as f64;
+    for (idx, &s) in scores.iter().enumerate() {
+        let candidate = s.max(base_floor_bits);
+        // Number of calibration scores >= candidate (strictly speaking, > s if we set λ̂ = s + eps,
+        // or >= s if we include ties). Count scores strictly above s if we add a tiny eps.
+        let n_ge = n - idx - 1;
+        #[allow(clippy::cast_precision_loss)]
+        let upper_risk = (n_ge as f64 + 1.0) / denom;
+        if upper_risk <= alpha {
+            return candidate + if s >= base_floor_bits { 1e-6 } else { 0.0 };
+        }
+    }
+    scores[n - 1].max(base_floor_bits) + 1e-6
+}
+
+/// Calibrate `λ̂` via `n_cal` deterministic decoy windows drawn at composition `gc_frac`
+/// under `params`, ensuring `(n_cal * R_hat + 1) / (n_cal + 1) <= alpha` while never
+/// dropping below `base_floor_bits`.
+#[must_use]
+pub fn calibrate_null_crc_for_gc(
+    gc_frac: f64,
+    n_cal: usize,
+    alpha: f64,
+    base_floor_bits: f64,
+    params: &HmmParams,
+) -> f64 {
+    if n_cal == 0 {
+        return base_floor_bits;
+    }
+    let gc = gc_frac.clamp(0.05, 0.95);
+    let win_len = 64usize;
+    let mut scores = Vec::with_capacity(n_cal);
+    let mut x = vec![b'A'; win_len];
+    let mut y = vec![b'A'; win_len];
+    for draw in 0..n_cal {
+        let mut state = 0x9E37_79B9_7F4A_7C15_u64 ^ ((draw as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9));
+        for buf in [&mut x, &mut y] {
+            for b in buf.iter_mut() {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                #[allow(clippy::cast_precision_loss)]
+                let u = ((state >> 11) as f64) / ((1_u64 << 53) as f64);
+                *b = if u < gc * 0.5 {
+                    b'G'
+                } else if u < gc {
+                    b'C'
+                } else if u < gc + (1.0 - gc) * 0.5 {
+                    b'A'
+                } else {
+                    b'T'
+                };
+            }
+        }
+        let res = banded_mdl_gap_with_min_post(&x, &y, 16, base_floor_bits, params, MIN_POST_PROB);
+        let null_bits = if res.kept_pairs.is_empty() {
+            0.0
+        } else {
+            res.score_bits.max(0.0)
+        };
+        scores.push(null_bits);
+    }
+    calibrate_crc_threshold(&scores, alpha, base_floor_bits)
+}
+
 /// Result of aligning one inter-anchor gap.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GapResult {
@@ -736,5 +820,22 @@ mod tests {
         let empty_res = super::banded_mdl_gap(b"", b"ACGT", 8, 5.0);
         assert_eq!(empty_res.kept_pairs, [] as [(usize, usize); 0]);
         assert_eq!(empty_res.bubbles, 0);
+    }
+
+    #[test]
+    fn crc_threshold_respects_n_cal_15_and_alpha_0_07() {
+        let scores = vec![
+            1.2, 2.5, 3.1, 4.0, 4.5, 5.2, 6.0, 6.8, 7.1, 8.0, 8.5, 9.2, 9.8, 11.4, 12.6,
+        ];
+        // For n_cal = 15, alpha = 0.07: (0 + 1) / 16 = 0.0625 <= 0.07, so lambda_hat > 12.6
+        let lam = super::calibrate_crc_threshold(&scores, 0.07, 10.0);
+        assert!(lam > 12.6 && lam < 12.61, "got {lam}");
+
+        let low_scores = vec![1.0; 15];
+        assert!((super::calibrate_crc_threshold(&low_scores, 0.07, 10.0) - 10.0).abs() < 1e-9);
+
+        let params = super::HmmParams::default();
+        let gc_lam = super::calibrate_null_crc_for_gc(0.18, 15, 0.07, 10.0, &params);
+        assert!(gc_lam >= 10.0 && gc_lam.is_finite());
     }
 }

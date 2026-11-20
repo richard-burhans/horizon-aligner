@@ -683,3 +683,48 @@ fn hdf5_dataspace_v2_and_filter_pipeline_v1_chunked_dataset() {
         Some(b"TGCA".as_slice())
     );
 }
+
+#[test]
+fn multi_contig_hal_hdf5_write_and_seek_roundtrip() {
+    let ref_contigs = vec![
+        ("chr1".to_owned(), b"ACGTACGT".to_vec()),
+        ("chr2".to_owned(), b"GGGGTTTT".to_vec()),
+    ];
+    let q_contigs = vec![
+        ("q_c1".to_owned(), b"ACGTACGT".to_vec()),
+        ("q_c2".to_owned(), b"GGGGTTTT".to_vec()),
+    ];
+    let hal = HalAlignment::from_multi_contig_star_blocks(
+        "hg38",
+        &ref_contigs,
+        &[("mm10".to_owned(), q_contigs)],
+        &[(0, 0, 0, 0, 0, 8, false), (0, 1, 1, 0, 0, 8, false)],
+    );
+    assert_eq!(hal.genomes[0].sequences.len(), 2);
+    assert_eq!(hal.genomes[0].sequences[1].offset, 8);
+    assert_eq!(hal.genomes[0].bottom_segments.len(), 2);
+    assert_eq!(hal.genomes[0].bottom_segments[1].start, 8);
+
+    let bytes = hal.to_hdf5_bytes();
+    let sb = read_hdf5_superblock(&bytes).expect("superblock");
+    let root_addr = sb.root_group_addr.expect("root addr");
+    let mut cursor = std::io::Cursor::new(&bytes);
+    let root_entries = read_hdf5_v0_group_entries_seek(&mut cursor, root_addr)
+        .expect("root entries")
+        .expect("some entries");
+    let hg38 = root_entries.iter().find(|e| e.name == "hg38").expect("hg38");
+    let hg38_ds = read_hdf5_v0_group_entries_seek(&mut cursor, hg38.object_header_addr)
+        .expect("hg38 ds")
+        .expect("some ds");
+    let sn_obj = hg38_ds
+        .iter()
+        .find(|e| e.name == "SEQNAME_ARRAY")
+        .expect("SEQNAME_ARRAY");
+    let sn_stride = read_hdf5_datatype_size_seek(&mut cursor, sn_obj.object_header_addr)
+        .expect("stride")
+        .expect("stride");
+    let sn_raw = read_hdf5_v0_dataset_bytes_seek(&mut cursor, sn_obj.object_header_addr)
+        .expect("bytes")
+        .expect("bytes");
+    assert_eq!(decode_hal_seq_names(&sn_raw, sn_stride), vec!["chr1", "chr2"]);
+}
