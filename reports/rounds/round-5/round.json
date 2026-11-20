@@ -1,0 +1,799 @@
+{
+  "round": 5,
+  "draft": "r5",
+  "subject": "Round 5: Full chr6 (8cd5db0/92e345c), HPRC & minimap2 Verification, B10K 363-way, and Technical Companion",
+  "date": "2026-11-20",
+  "claims": [
+    {
+      "id": "C1",
+      "kind": "capability",
+      "carries": [
+        "R1-IMPL"
+      ],
+      "summary": "Horizon is a pure-Rust suite of 10 executables in src/bin/ with 98 active unit tests (+1 env-gated .hal test) passing with zero clippy warnings; on a real 10,000-segment (10.94 Mbp) HPRC chr22 subgraph, horizon_gfa stats ran in 0.08 s at 22.6 MB RSS vs vg v1.60.0 (vg stats 4.2984 s / 77.0 MB; vg convert 1.8292 s / 76.6 MB), horizon_clean in 0.13 s (33.4 MB), horizon_resolve in 5.571 s (23.6 MB), and horizon_wga --graph in 2.98-6.09 s (153.9-154.6 MB).",
+      "source": {
+        "file": "manuscript/horizon_paper.md",
+        "quote": "On a real sequence-bearing `10,000`-segment HPRC `chr22` subgraph (`10,937,960` bp, `10,300` links, `1` path, `4` walks; Figure 6A), `horizon_gfa stats` ran in `0.08 s` at `22.6 MB` peak RSS, outperforming `vg stats -z -l -N` (`vg v1.60.0`: `4.2984 s`, `77.0 MB` RSS) and `vg convert -g -p` (`1.8292 s`, `76.6 MB` RSS)."
+      }
+    },
+    {
+      "id": "C2",
+      "kind": "empirical",
+      "carries": [
+        "R2-INDEX-RAM"
+      ],
+      "summary": "On full GRCh38.chr6 (170.8 Mbp) x CHM13.chr6 (110.7 Mbp q-arm 61401689-172126628), horizon_wga --resolve-dups on 8cd5db0 finished in 258.88-304.53 s (267.86 s profiled, 3.97x faster than 1,062.45 s at 1e47fe0; 282.2M pairs, 98.9% CHM13 coverage) and achieved 99.54% base-coverage recall, 97.96% exact coordinate recall, and 48.63% many-to-many exact pair precision against 1,628,018 HPRC 1-to-1 shared segments alongside minimap2 -x asm5 (46.95 s, 2,947.5 MB RSS, 99.71% exact recall / 99.75% exact precision).",
+      "source": {
+        "file": "manuscript/horizon_paper.md",
+        "quote": "Comparing Horizon's many-to-many `chr6` MAF (`370,937` blocks, `282,163,046` pairs after multi-chain colinear partitioning) base-for-base against the `1,628,018` `1-to-1` shared segments (`110,082,990` bp) between `GRCh38.chr6` and `CHM13.chr6:61401689\u2013172126628` in the HPRC Minigraph-Cactus graph yields **99.54%** base-coverage recall, **97.96%** exact coordinate recall (`107,836,669 / 110,082,990` bp; `98.14%` within `1 kb`), and `48.63%` many-to-many exact pair precision (`~2.6\u00d7` repeat/paralog multiplicity), compared to `minimap2 -x asm5` (`v2.28-r1209`, `46.95 s`, `2,947.5 MB` RSS, `1-to-1` primary alignments: `99.71%` exact recall, `99.75%` exact precision; Figure 7)."
+      }
+    },
+    {
+      "id": "C3",
+      "kind": "empirical",
+      "carries": [
+        "R2-RESOLVE-LIFT"
+      ],
+      "summary": "On 12 GB HPRC v1.0 (8cd5db0), horizon_gfa stats streamed 81.4M segments in 196.93 s (96.9 MB RSS), extract isolated chr22 in 193.89 s (474.2 MB) and chr6 in 317.00 s (1,526.7 MB), and horizon_lift --to-chrom chr22 lifted 500 1-kb windows in 177.55 s (708.8 MB); horizon_merge netted 92 chrM species in 21.78 s (26.6 MB) and horizon_guide --progressive --hal aligned 5 mammals in 0.859 s (1,109 MAF blocks, 4 HAL bottom segs).",
+      "source": {
+        "file": "manuscript/horizon_paper.md",
+        "quote": "For multi-species panels, `horizon_merge` netted `92` vertebrate `chrM` species in `21.78 s` (`26.6 MB` RSS, `460` multi-species blocks), and `horizon_guide --progressive --hal --rbest` aligned `5` mammals (`hg38`, `Macaca_mulatta`, `HLcalPym1`, `Equus_caballus`, `Canis_lupus`) in `0.859 s` (`1,109` MAF blocks, `967` multi-species, `4` HAL bottom segments verified via `horizon_wga --hal-info`)."
+      }
+    },
+    {
+      "id": "C4",
+      "kind": "inference",
+      "carries": [
+        "R1-HMM",
+        "R2-HMM-XDROP"
+      ],
+      "summary": "On 8cd5db0 without retuning, horizon_wga achieves 95.6%/97.4% recall/precision on 100-way chrM (hg38xpanTro4), 91.4%/87.0% on cactus447way macaque, 71.1%/95.1% on B10K 363-way avian (Gallus_gallus x Taeniopygia_guttata, 0.642 s, 3,814 bubbles), and 59.8%/78.5% on cactus241way chr22 1MB dog (31 contigs, 0.852 s), while eliminating false positives on 18%-GC 10-kb random DNA (0 pairs in 0.0069 s).",
+      "source": {
+        "file": "manuscript/horizon_paper.md",
+        "quote": "`horizon_wga` achieves `95.6%` recall / `97.4%` precision on `100-way chrM` (`hg38` \u00d7 `panTro4`), `91.4%` recall / `87.0%` precision on `cactus447way` primates (`Macaca_mulatta`), `71.1%` recall / `95.1%` precision on `B10K 363-way` avian (`Gallus_gallus` \u00d7 `Taeniopygia_guttata`), and `59.8%` recall / `78.5%` precision on `cactus241way chr22 1MB` (`Canis_lupus_familiaris`, `31` contigs in `0.852 s`) while eliminating all false-positive pairs on `18%`-GC random DNA (`0` pairs in `0.0069 s`)"
+      }
+    },
+    {
+      "id": "C5",
+      "kind": "correctness",
+      "carries": [],
+      "summary": "Technical companion (horizon_companion.md) accurately specifies the Rust codebase's data representations and algorithms: KP-14 Eisenstein seeding, BOCPD beta-bernoulli tracking, search_space_bits = 0.55 * log2(max(L_ref, 1) * max(L_qry, 1)), BandGrid idx(i, j) = i * (2W + 1) + (j - i + W), GFA<->MAF lens laws, pure-Rust HDF5 Seek/HAL binary record decoders (TOP_ARRAY 33B, BOTTOM_ARRAY 24+9C B, SEQIDX_ARRAY 24B, DNA_ARRAY 4-bit), and the 22 bp worked toy example.",
+      "source": {
+        "file": "manuscript/horizon_companion.md",
+        "quote": "For target index `i` and query index `j` within `|j \u2212 i| \u2264 W`, the flat buffer index is:"
+      }
+    },
+    {
+      "id": "C6",
+      "kind": "definitional",
+      "carries": [],
+      "summary": "The companion and main manuscript match the current Rust implementation on non-destructive # EG:Z: paralog tagging, partition_colinear_blocks multi-chain colinear partitioning, # HB:Z: / HB:i:1 Horizon Bubbles vs superbubble/ultrabubble decomposition, and accurate prior-art attribution.",
+      "source": {
+        "file": "manuscript/horizon_companion.md",
+        "quote": "Collapsed tandem duplications and nested inversions resolved by `src/egraph.rs` are recorded as `# EG:Z:` tags so downstream tools can distinguish collapsed paralogs from single-copy synteny."
+      }
+    }
+  ],
+  "lenses": [
+    "correctness",
+    "sampling",
+    "statistics",
+    "provenance",
+    "inference",
+    "prior-art",
+    "reproduction"
+  ],
+  "attacked": [
+    {
+      "path": "manuscript/horizon_paper.md",
+      "snapshot": "ATTACKED-horizon_paper.md",
+      "read": "working tree",
+      "pinned": true,
+      "sha256": "606c8101393f2ba48781d88c4304b39b39d2e0752919c783358a8d227abf248f"
+    },
+    {
+      "path": "manuscript/horizon_companion.md",
+      "snapshot": "ATTACKED-horizon_companion.md",
+      "read": "working tree",
+      "pinned": true,
+      "sha256": "b1ee2e1f0f91aeff8e8c7663c8206e22341a632fc3003bd33686597802e22213"
+    }
+  ],
+  "code": {
+    "horizon-aligner": "92e345c1fa938c30bff286ac2fd956adc9a2b4d6"
+  },
+  "drift_reviewed": [
+    {
+      "path": "manuscript/horizon_paper.md",
+      "sha256": "4fe660e4116f61226eabb294473ea8fdf63b44b40f6cc162905a06672501e6a1",
+      "by": "runner",
+      "date": "2026-11-20",
+      "quotes": [
+        "Whole-genome multiple sequence alignment and pangenome graph analysis must reconcile quadratic pairwise scaling, sharp compositional skew, and rampant multigene duplication across divergent lineages. Standard workflows split these tasks across disconnected aligners, graph cleaners, liftover tools, and format-specific libraries that rely on fixed substitution matrices calibrated near balanced nucleotide composition and force base-by-base alignments through unalignable regions. Here we present Horizon, an information-theoretic genome alignment and pangenome graph suite implemented in Rust (`10` binaries in `src/bin/`, including the `horizon` subcommand dispatcher) that unifies pairwise alignment (`horizon_wga`), seeded sequence-to-graph DAG/POA alignment (`horizon_wga --graph`), log-linear multi-species merging (`horizon_merge`), progressive guide-tree alignment (`horizon_guide`), streaming `GFA v1.0/v1.1` inspection and extraction (`horizon_gfa`), graph-aware coordinate liftover (`horizon_lift`), junction cleaning (`horizon_clean`), and e-graph walk resolution (`horizon_resolve`). Horizon's alignment core combines compact strand-symmetric spaced-seed indexing (`FlatSeedIndex` with 16-bit prefix bucketing), Rayon-parallel transition seeding, and six-frame biochemical amino-acid seeding with Beta-Bernoulli Bayesian Online Changepoint Detection over local weak/strong hydrogen-bond channels, driving a three-state Minimum Description Length forward-backward aligner calibrated by Conformal Risk Control. Regions whose posterior homology support falls below the calibrated bit-savings floor are isolated as explicit Horizon Bubbles instead of being forced into spurious base pairs, while tandem duplications and nested inversions are collapsed non-destructively via MDL-calibrated equality saturation (`MdlCostModel`). Across verified UCSC/Ensembl/B10K reference-MAF slices (`horizon_eval` on MAF-concatenated `(ref_id, tgt_id)` pairs), multi-species progressive builds, and `12 GB` HPRC v1.0 Minigraph-Cactus pangenome benchmarks (`8cd5db0` / `2896229`), `horizon_wga` achieves `95.6%` recall / `97.4%` precision on `100-way chrM` (`hg38` \u00d7 `panTro4`), `91.4%` recall / `87.0%` precision on `cactus447way` primates (`Macaca_mulatta`), `71.1%` recall / `95.1%` precision on `B10K 363-way` avian (`Gallus_gallus` \u00d7 `Taeniopygia_guttata`), and `59.8%` recall / `78.5%` precision on `cactus241way chr22 1MB` (`Canis_lupus_familiaris`, `31` contigs in `0.852 s`) while reducing `18%`-GC random-DNA false-positive pairs from `18,077` to `0` on the `seed=999` benchmark draw (`80\u2013448` pairs on `4/5` other seeds; `288` / `149` pairs on `30%` / `45%`-GC single draws); `horizon_merge` nets `92` vertebrate `chrM` species in `21.78 s` (`26.6 MB` RSS), and `horizon_guide --progressive --hal` (`2896229`) builds a `5`-mammal progressive MAF (`1,109` blocks) and a single-contig star-tree HDF5 `v0` HAL stub (`4` bottom segments) in `0.859 s`. On the `12 GB` HPRC v1.0 graph, counter-only `horizon_gfa stats` streams all `81.4M` segments in `196.93 s` at `96.9 MB` peak RSS, outperforming `vg v1.60.0` (`vg stats`, which builds an in-memory handle graph) in runtime (`0.08 s` vs. `4.2984 s`) and peak RSS (`22.6 MB` vs. `77.0 MB`) on a real `10,000`-segment (`10.94 Mbp`, `96.09%` `'N'`) `chr22` subgraph; and `horizon_wga --resolve-dups` aligns `GRCh38.chr6` (`170.8 Mbp`) \u00d7 `CHM13.chr6` (`110.7 Mbp` q-arm `61.4M\u2013172.1M`) in `258.88\u2013267.86 s` (`8cd5db0`; `304.53 s` at `2896229` with multi-chain partitioning, `282.2M` aligned pairs, `98.9%` `CHM13` coverage) with **99.54%** base-coverage recall, **97.96%** exact base-coordinate recall, `48.63%` conditioned exact pair precision (`38.22%` unconditional across all `282.2M` emitted pairs) against `1.63M` `1-to-1` HPRC graph segments alongside `minimap2 -x asm5` (`46.95 s`, `2,947.5 MB` RSS, `99.71%` exact recall, `99.75%` conditioned / `99.60%` unconditional exact precision). Horizon is available at `https://github.com/richard-burhans/horizon-aligner`.",
+        "Horizon addresses these coupled bottlenecks in a unified, pure-Rust suite of ten composable executables in `src/bin/` (`horizon_wga` including `--graph`, `horizon_merge`, `horizon_guide`, `horizon_gfa`, `horizon_lift`, `horizon_clean`, `horizon_resolve`, `horizon_eval`, `bench_chr1`, and the `horizon <subcommand>` dispatcher). The alignment, merging, and resolution tools (`horizon_wga`, `horizon_guide`, `horizon_resolve`, `horizon_merge`, and `horizon_clean`) draw on shared MDL, BOCPD, e-graph, and GFA primitives (`horizon_clean` uses an ad-hoc Bernoulli/BIC changepoint score rather than `src/mdl/dp.rs`), while `horizon_gfa` and `horizon_lift` use the shared streaming GFA (`src/gfa/mod.rs`) and UCSC coordinate (`src/coord.rs`) modules without BOCPD/MDL/e-graph scoring, and `horizon` dispatches subcommands. Rather than delegating across external tools such as `vg` (Garrison et al. 2018), `odgi` (Guarracino et al. 2022), and `BEDTools` (Quinlan & Hall 2010), Horizon provides native streaming `GFA v1.0/v1.1` inspection, liftover, cleaning, e-graph walk resolution, and `MAF`, `rGFA`, and `HAL`-compatible interoperability in a single crate.",
+        "**Figure 1. Horizon integrates multi-tier strand-symmetric seeding, online compositional changepoint detection, conformal abstention, e-graph resolution, and streaming GFA pangenome tools into a unified pure-Rust suite.** Stages 1\u20132 chain `FlatSeedIndex` (`12 B/entry`, 16-bit prefix buckets), Rayon-parallel `LASTZ12` transition seeds, and biochemical six-frame `AA5` seeds into colinear LCBs or seeded DAG/POA components (`horizon_wga --graph`) while isolating unanchored spans as macro Horizon Bubbles. Stages 3\u20134 run Beta-Bernoulli BOCPD over the weak/strong (*W*) channel to parameterize flat `BandGrid` / topological DAG Minimum Description Length forward-backward alignment gated by Conformal Risk Control (`\u03bb\u0302 = 10.0` bits). Stages 5\u20138 collapse duplications via `MdlCostModel` e-graphs (`horizon_resolve`, `--resolve-dups`), merge pairwise blocks in O(*N* log *N*) sweep-line time (`horizon_merge`, `horizon_guide`), stream `12 GB+` `GFA` graphs (`horizon_gfa`, `horizon_lift`, `horizon_clean`), and provide `MAF`, `rGFA`, and pure-Rust `HAL` interoperability (`horizon <subcommand>`). Visual dictionary: blue denotes seeding, chaining, and DAG construction; orange denotes adaptive MDL alignment; vermilion denotes conformal abstention; green denotes e-graph resolution and merging; purple denotes streaming GFA pangenome tools and format interoperability.",
+        "Between chained anchors, Horizon evaluates homology using a three-state Minimum Description Length forward-backward Pair-HMM aligner adapted from Allison, Wallace, and Yee (1992) and Durbin et al. (1998), with normalized outgoing transition probabilities and DAG/POA extensions following Lee et al. (2002) and Gao et al. (2021). Instead of allocating pointer-heavy sparse dictionaries, the Rust kernel stores log-space forward (\u03b1) and backward (\u03b2) tables in a contiguous flat `BandLayout` (`Vec<f64>`, stride `2 * band_w + 1`, default `band_w = 180`). It evaluates `logplus` transitions and per-column match posteriors `P(M_ij | X, Y)` in cache-friendly linear passes, followed by X-drop flank extension (`mdl_xdrop_extend_with_params`, `max_ext = 1500`).",
+        "Each candidate interval is summarized by its total description-length savings `\u0394L = L_null \u2212 L_joint` in bits relative to independent BOCPD-parameterized null encoding, scaled by a Rissanen/BIC search-space complexity floor `0.55 * log2(N * M)` (Rissanen 1978; Schwarz 1978; Gr\u00fcnwald 2007). Using fixed Conformal Risk Control defaults calibrated offline at risk level `\u03b1 = 0.07` (`n_cal = 15`; Angelopoulos et al. 2024), Horizon enforces a constant bit-savings floor `\u03bb\u0302 = 10.0` bits (`min_delta_bits = 10.0`) and a minimum column posterior floor (`0.15`). Any interval or internal gap failing these floors is withheld from base-by-base alignment and emitted explicitly as a **Horizon Bubble** (`# HB:Z:` metadata in `GFA` and summary outputs); in graph cleaning (`horizon_clean`), `HB:i:1` marks severed discordant `L`-edges rather than full topological superbubble/ultrabubble or SPQR-tree decompositions (Paten et al. 2018; Sena et al. 2026).",
+        "2. `horizon_lift` (`src/bin/horizon_lift/main.rs`) lifts `BED` and `GFF3` intervals across haplotypes via two-pass `P`/`W` streaming, `--bridge-bp` micro-bubble coalescing, and `coord::Interval` UCSC reverse-strand arithmetic (`src/coord.rs`).",
+        "For multi-species panels, `horizon_merge` (`src/bin/horizon_merge.rs`) executes an O(*N* log *N*) coordinate sweep over pairwise `MAF` files against a selected reference or central hinge, applying best-score interval netting (`interval_match_score`; cf. Kent et al. 2003) and threading query insertion columns across all taxa into `MAF` and reference `rGFA` (`SN:Z`, `SO:i`, `SR:i:0`) graphs. For progressive guide-tree builds, `horizon_guide` (`src/bin/horizon_guide/main.rs`) performs identity-gated transitive sister-clade rescue (`rescue_transitive_maf`) and ancestral consensus bridging. Finally, `src/hal/` implements an in-memory hierarchical `HalAlignment` model (`TopSegment`, `BottomSegment`, reference-free `to_maf_for_genome`) alongside pure-Rust streaming `Read + Seek` HDF5 v0/v1 container inspection (`hdf5_read.rs`), B-tree group traversal, zlib chunk decompression (`flate2`), binary record decoders (`DNA_ARRAY`, `SEQIDX_ARRAY`, `SEQNAME_ARRAY`, `TOP_ARRAY`, `BOTTOM_ARRAY`), and a `libhdf5`-compatible HDF5 `v0` writer (`hdf5_write.rs`) with multi-level B-tree support (Hickey et al. 2013).",
+        "With zero parameter retuning, we evaluated `horizon_wga` across eight verified external reference-MAF slices spanning close primates, medium-divergence mammals, distant mammals, deep avian divergence (`B10K 363-way`), and mitochondrial genomes (`docs/BENCHMARK_RESULTS.md`; Table 1). Following addition of the composition-aware BOCPD LCB gate (`joint_pair_bits - GAP_OPEN_BITS` across all LCB lengths in `src/mdl/mod.rs`), false-positive alignments on the `seed=999` `10,000`-bp random `18%`-GC draw dropped from `18,077` pairs (`74.9%` coverage) to `0` pairs (`0.0069 s`), whereas `4/5` other random `18%`-GC seeds still emitted `80\u2013448` false-positive pairs and `30%`-GC and `45%`-GC single draws emitted `288` pairs (`0.4150 s`) and `149` pairs (`0.3829 s`). Note that `horizon_eval` evaluates MAF-concatenated `(ref_id, tgt_id)` contig pairs individually against reference `MAF` blocks (`LASTZ`, `Cactus`, `MULTIZ`, and `EPO`), nuclear slices were re-evaluated after LCB gate calibration, and head-to-head external pairwise aligner re-runs (`FastGA`, `LASTZ`, `KegAlign`) remain pending on the benchmark host (`minimap2 -x asm5` is compared on full `chr6` below). On tuning mitochondrial slices (`multiz100way chrM`), `horizon_wga` achieved `95.6%` recall and `97.4%` precision on human (`hg38`) \u00d7 chimp (`panTro4`, `0.058 s`) and `76.5%` recall and `93.7%` precision on human \u00d7 mouse (`mm10`, `0.064 s`). On held-out nuclear slices, `horizon_wga` achieved `91.4%` recall / `87.0%` precision on `cactus447way` macaque (`Macaca_mulatta`, `0.102 s`), `86.3%` recall / `87.7%` precision on `multiz470way` marmoset (`HLcalPym1`, `0.189 s`), `54.0%` recall / `67.6%` precision on `cactus447way` horse (`Equus_caballus`, `0.068 s`), `48.0%` recall / `83.3%` precision on `cactus241way` dog (`chr22_random`, `0.050 s`), `59.8%` recall / `78.5%` precision (`67.9%` F1) across `31` dog target contigs on `cactus241way chr22 1MB` (`0.852 s`, `2,076` Horizon Bubbles), and `71.1%` recall / `95.1%` precision on the `B10K 363-way` avian `chr1:5.9M\u20136.4M` slice (`Gallus_gallus` \u00d7 `Taeniopygia_guttata`, `0.642 s`, `3,814` Horizon Bubbles).",
+        "On whole-chromosome `horizon_wga --resolve-dups` runs (`8cd5db0` / `2896229`; `n = 1` per run; `docs/BENCHMARK_RESULTS.md`), `GRCh38.chr22` \u00d7 `CHM13.chr22:15729460-51324926` finished in `69.10 s` (`3,971.6 MB` RSS, `34,165,619` aligned pairs, `unique_x_bp = 34,039,553`, `unique_y_bp = 34,020,579`, `95.6%` of `CHM13.chr22` q-arm, `21,787` Horizon Bubbles). On `GRCh38.chr6:65M\u201385M` \u00d7 `CHM13.chr6:61M\u201381M` (`20 Mbp` q-arm), `FlatSeedIndex` + `BTreeSet`-indexed LCB clustering finished in `12.84 s` (`15,019,451` pairs, `16,417` bubbles). On full `GRCh38.chr6` (`170.8 Mbp`) \u00d7 `CHM13.chr6` (`110.7 Mbp` q-arm `61401689\u2013172126628`), `horizon_wga --resolve-dups` on `8cd5db0` completed in `258.88\u2013267.86 s` (`2.21\u00d7` faster than `592.68 s` at `bb43dd9` and `3.97\u00d7` faster than `1,062.45 s` at `1e47fe0`; Figure 5) with `282,193,564` aligned pairs covering `124,160,423` bp (`72.7%`) of `GRCh38.chr6` and `109,464,447` bp (`98.9%`) of the `CHM13.chr6` q-arm (`178,737` Horizon Bubbles). With the multi-chain `partition_colinear_blocks` fix (`2896229`, `304.53 s`), comparing Horizon's many-to-many `chr6` MAF (`370,937` blocks, `282,163,046` pairs) base-for-base against the `1,628,018` `1-to-1` shared segments (`110,082,990` bp) between `GRCh38.chr6` and `CHM13.chr6:61401689\u2013172126628` in the HPRC Minigraph-Cactus graph yields **99.54%** base-coverage recall, **97.96%** exact coordinate recall (`107,836,669 / 110,082,990` bp; `98.14%` within `1 kb`), `48.63%` conditioned exact pair precision on `pairs_on_hprc_1to1_x` (`107,836,669 / 221,734,653`; `~2.01\u00d7` local multiplicity), and **38.22%** unconditional exact pair precision across all `282,163,046` emitted pairs (`60,428,393` / `21.42%` outside `1-to-1` HPRC segments; `~2.58\u00d7` overall multiplicity), compared to `minimap2 -x asm5` (`v2.28-r1209`, `46.95 s`, `2,947.5 MB` RSS, `1-to-1` primary alignments: `99.71%` exact recall, `99.75%` conditioned / `99.60%` unconditional exact precision; Figure 7).",
+        "On a real sequence-bearing `10,000`-segment HPRC `chr22` subgraph (`10,937,960` bp total, of which `10,510,000` bp / `96.09%` are `'N'` bases in segment `76067108` and `427,960` bp are ACGT across `chr22`, `chrUn_GL000224v1`, and `chr14_KI270722v1_random`; `10,300` links, `1` path, `4` walks; Figure 6A), counter-only `horizon_gfa stats` ran in `0.08 s` at `22.6 MB` peak RSS, compared with `vg stats -z -l -N` (`vg v1.60.0`: `4.2984 s`, `77.0 MB` RSS) and `vg convert -g -p` (`1.8292 s`, `76.6 MB` RSS), which construct full in-memory handle graphs (`odgi` and `gfatools` baselines remain pending). On the same HPRC subgraph, `horizon_clean --min-cp-bits 10.0` ran in `0.13 s` (`33.4 MB` RSS, keeping all `10,300` valid walk links), `horizon_resolve --collapse-dups --tag-walks` processed `223` anchors and `755` snarl/bubble windows in `5.571 s` (`23.6 MB` RSS, emitting `W`-line `EG:Z:` tags rather than `# EG:Z:` comments), and `horizon_wga --graph` (`20,000` bidirected DAG nodes) ran in `2.98\u20136.09 s` (`153.9\u2013154.6 MB` RSS), abstaining (`aligned_pairs = 0`) on a `400`-bp all-`N` query and aligning `122/258` bp (`6` bubbles) and `197/356` bp (`8` bubbles) on real HPRC walk queries. For multi-species panels (`n = 1` runs without reference-MAF accuracy verification), `horizon_merge` netted `92` vertebrate `chrM` (`~16.5 kb`) species in `21.78 s` (`26.6 MB` RSS, `460` multi-species blocks), and `horizon_guide --progressive --hal --rbest` (`2896229`) aligned `5` mammals (`hg38`, `Macaca_mulatta`, `HLcalPym1`, `Equus_caballus`, `Canis_lupus`) in `0.859 s` (`1,109` MAF blocks, `967` multi-species, plus a single-contig star-tree HDF5 `v0` HAL stub of `4` bottom segments inspected via `horizon_wga --hal-info`). All `97` active Rust unit tests (plus `1` ignored `.hal` integration test; `98` total) pass on `HEAD` with zero `clippy` warnings.",
+        "**Figure 6. Head-to-head HPRC `10k`-segment subgraph comparison against `vg v1.60.0`, multi-species suite scaling, and BOCPD LCB gate calibration.** **A.** Log-log wall-clock runtime versus peak RSS across the `10,000`-segment (`10.94 Mbp`, `96.09%` `'N'`) real HPRC `chr22` subgraph (`horizon_gfa stats` counter-only vs. `vg stats` / `vg convert` in-memory graph construction, plus `horizon_clean`, `horizon_wga --graph`, and `horizon_resolve`) and multi-species `horizon_merge` (`92`-species `chrM`) and `horizon_guide` (`5`-species `--progressive --hal`). **B.** Effect of the `R1-HMM` composition-aware BOCPD LCB gate (`joint_pair_bits - GAP_OPEN_BITS`): on the `seed=999` `18%`-GC `10`-kb null draw, pairs drop from `18,077` to `0` (`80\u2013448` pairs remain on `4/5` other seeds) while nuclear precision shifts across horse (`65.4%` \u2192 `67.6%`), macaque (`84.6%` \u2192 `87.0%`), and marmoset (`86.1%` \u2192 `87.7%`). Visual dictionary: in Panel A, purple denotes `horizon_gfa`, green denotes `horizon_clean`/`horizon_merge`, blue/sky blue denote `horizon_wga --graph`/`horizon_guide`, orange denotes `horizon_resolve`, and vermilion/gray denote `vg`; in Panel B, gray denotes pre-gate and blue denotes post-gate.",
+        "**Figure 7. Horizon's `GRCh38.chr6` \u00d7 `CHM13.chr6` q-arm alignment achieves `97.96%` exact base-coordinate recall against the HPRC Minigraph-Cactus graph alongside `minimap2 -x asm5`.** **A.** Whole-chromosome synteny dot-plot (`GRCh38.chr6` `0\u2013170.8 Mbp` vs. `CHM13.chr6` q-arm `61.4\u2013172.1 Mbp`) overlaying HPRC `1-to-1` shared segments (`\u2265500` bp, sky blue) and Horizon MAF blocks (`\u22652` kb, dark blue); the dashed orange line marks the `61 Mbp` q-arm boundary. **B.** Agreement with `1,628,018` HPRC `1-to-1` shared segments (`110,082,990` bp) for many-to-many `horizon_wga` (`99.5%` base-coverage recall, `98.0%` exact `0`-bp recall, `98.1%` `\u22641`-kb recall, `48.6%` conditioned exact pair precision [`38.2%` unconditional across `282.2M` pairs]) vs. `1-to-1` primary `minimap2 -x asm5` (`100.0%` base-coverage recall, `99.7%` exact recall, `99.8%` conditioned [`99.6%` unconditional] exact precision). **C.** `1 Mbp`-binned exact (`\u0394y = 0` bp) recall along `GRCh38.chr6` (`n = 171` bins) comparing HPRC `1-to-1` shared bp (gray fill), `minimap2 -x asm5` (dashed orange), and Horizon (solid blue) across the `58\u201362 Mbp` centromeric boundary (shaded orange) and the entire `q`-arm.",
+        "Three concrete steps define our immediate roadmap. First, while de novo precision remains high (`87\u201397%`) across close and medium divergences, recall drops to `54\u201362%` on distant mammalian slices (`cactus447way` horse and `cactus241way` dog), motivating iterative ancestral consensus scaling in `horizon_guide` across deeper vertebrate clades. Second, head-to-head comparisons against additional external pairwise aligners (`FastGA`, `LASTZ`, `KegAlign`) and `odgi`/`gfatools` on identical hardware will complement our `minimap2 -x asm5` and `vg v1.60.0` baselines. Third, our pure-Rust `HAL` reader (`src/hal/`) and HDF5 `v0` writer (`src/hal/hdf5_write.rs`) await multi-contig progressive HAL emission and large-scale benchmarking on multi-hundred-gigabyte alignments (`363-avian-2020.hal`, `241-mammalian-2020v2.hal`).",
+        "- **Gulhan A, et al.** (2025). KegAlign: optimizing pairwise alignments with diagonal partitioning. *Genome Biology* (`10.1186/s13059-025-03830-0`).",
+        "- **Kent WJ, Baertsch R, Hinrichs A, Miller W, Haussler D** (2003). Evolution's cauldron: duplication, deletion, and rearrangement in the mouse and human genomes. *Proceedings of the National Academy of Sciences*, 100(20):11484\u201311489."
+      ],
+      "note": "Applied Round 5 adjudicated free repairs: counter-only vg qualification, 96.09% N-base 10k subgraph disclosure, unconditional 38.22% chr6 precision + 8cd5db0/2896229 commit pinning, 18%-GC seed=999 vs 80-448 multi-seed disclosure, horizon_guide HAL stub qualification, 97 active tests, Gulhan 2025 DOI fix, removed 34.2% Python runtime and lossless lens claim, added Kent 2003."
+    },
+    {
+      "path": "manuscript/horizon_companion.md",
+      "sha256": "5f27a084ac96eddd570adb319def52f249f4b790d1602dfdffe0e2b1245c8994",
+      "by": "runner",
+      "date": "2026-11-20",
+      "quotes": [
+        "date: \"2026-11-20\"",
+        "| `src/mdl/` | Flat `BandLayout`, three-state MDL forward-backward DP (`dp.rs`), seeded topological DAG/POA DP (`dag.rs`), adaptive `HmmParams` shrinkage (`mod.rs`), X-drop flank extension |",
+        "| `src/formats.rs` | `MAF`, reference-anchored `rGFA`, `partition_colinear_blocks` multi-chain partitioning, and `# HB:Z:` / `# EG:Z:` metadata emission |",
+        "- **E-Graph Paralog (`# EG:Z:` / `EG:Z:`) annotations:** Collapsed tandem duplications resolved by `src/egraph.rs` (`collect_dups`, which emits `Dup` spans while leaving `Expr::Inv` unrecorded) are written as `# EG:Z:` comment lines by `src/formats.rs` / `horizon_merge` (ignored by standard GFA record parsers) and as `EG:Z:` optional tags on `W` lines by `horizon_resolve --tag-walks`.",
+        "- **GFA \u2194 MAF Interoperability:** `src/formats.rs` emits both `MAF` blocks and `rGFA` segments/`L`-links alongside `# HB:Z:` bubble comments (note that formal bidirectional lens combinators such as `get`/`putback` are not implemented in `src/formats.rs`).",
+        "## 3.1 Strand-Symmetric Canonical Spaced-Seed Indexing and Repeat Filtering (`src/seeding/`)",
+        "To avoid storing forward and reverse-complement *k*-mers separately, `src/seeding/` encodes 2-bit nucleotides into packed `u64` words along both strands and takes the canonical minimum `fwd.min(rc)` over each spaced-seed mask `M` (`FlatSeedIndex` in `src/seeding/flat_index.rs`, `12 bytes/entry` post-build with 16-bit prefix bucketing).",
+        "   - **Exact spaced seeds:** Canonical `u64` spaced masks at weight `11` (`MASK_PRIMARY_11_15` `111011011011011`, span `15`, and `MASK_PH11_18`, span `18`) plus uncovered-gap fallback weight `10` (`MASK_W10` `11011011011011`, span `14`, activated only on regions left uncovered by primary LCBs).",
+        "## 3.3 Continuous Search-Space MDL Scaling and `BandLayout` (`src/mdl/`)",
+        "For each candidate anchor or inter-anchor gap (`X` of length `N`, `Y` of length `M`), Horizon evaluates a three-state Minimum Description Length pair-HMM (`M` match/mismatch, `I` insertion, `D` deletion; Allison et al. 1992) in log-space (`logplus`), parameterized by the local BOCPD base frequencies:",
+        "**Contiguous `BandLayout` indexing (`src/mdl/dp.rs`):** Forward (`\u03b1`) and backward (`\u03b2`) DP tables are stored in a single flat `Vec<f64>` of clamped half-width `W = min(band_w, max(N, M))` (default `band_w = 180`) and stride `S = 2W + 1`. For target index `i` with proportional band center `c(i) = floor(i \u00b7 M / max(N, 1))` and query index `j` within `|j \u2212 c(i)| \u2264 W`, the flat buffer index is:",
+        "idx(i, j) = i \u00b7 (2W + 1) + (j \u2212 c(i) + W)",
+        "where `j \u2212 c(i) + W \u2208 [0, 2W]` maps the band center `j = c(i)` to column `W` in every row (reducing to `j \u2212 i` when `N = M`, as in Figure C3A, and in X-drop flank extension).",
+        "3. **`horizon_guide` Transitive Rescue (`src/bin/horizon_guide/main.rs`):** Aligns sister taxa progressively along a Newick guide tree. It applies `rescue_transitive_maf`\u2014using an intermediate sibling with high pairwise identity to bridge divergent outgroup intervals\u2014before ancestral consensus construction and single-contig star-tree HDF5 `v0` `.hal` export (`src/hal/hdf5_write.rs`).",
+        "1. **Low-Complexity Check & Seeding:** In the 12 bp prefix `AATTGCATATCG`, the maximum single-base count is `4` (`A`/`T`, `< 12 * 3 / 4 = 9`) and dinucleotide periodicity is below threshold, so `is_low_complexity_window` passes. `MASK_W10` (`w = 10`) anchors the identical `0..12` prefix and `18..22` suffix. This leaves a `6 bp` inter-anchor gap (`X[12..18] = GGGGCC` vs. `Y[12..18] = CCTTTT`).",
+        "2. **BOCPD Tracking:** Over `X[0..12]` (`75%` A+T), `bocpd_gc_profile` estimates `P(W) \u2248 0.69` (`0.684\u20130.699`). At `X[12] = G`, the changepoint hazard shifts `P(W)` downward across the GC-rich insert.",
+        "3. **Banded MDL Scoring (`BandLayout`):**",
+        "   - For the `6 bp` gap (`band_w = 180`), `BandLayout` clamps `W = min(180, 6) = 6`, allocating `(6 + 1) \u00d7 (2 \u00b7 6 + 1) = 91` floats (`idx(i, j) = i \u00b7 13 + (j \u2212 i + 6)` since `N = M`) in `O(1)` per cell.",
+        "   - On the conserved prefix (`12 bp`), matching all 12 bases under `P(W) \u2248 0.69` yields `\u0394L \u2248 +17.8` bits (`\u2265 \u03bb\u0302 = 10.0` bits) with column posteriors `P(M_ij) > 0.95`.",
+        "   - Inside the `6 bp` gap (`GGGGCC` vs. `CCTTTT`), 0 of 6 bases match, giving `\u0394L \u2248 \u22129.76` bits (`< 10.0` bits) and `P(M_ij) < 0.15`."
+      ],
+      "note": "Applied Round 5 adjudicated free repairs: updated date and src/bin/horizon_guide/main.rs path, replaced Eisenstein KP-14 with actual 2-bit fwd.min(rc) + MASK_PRIMARY_11_15/MASK_W10, removed unimplemented GFA<->MAF lens laws, fixed BandLayout::slot formula with center(i) and W clamping, updated 6bp worked example (P(W)~0.69, dL~-9.76, 91 floats), removed 34.2% Python runtime and Foster 2007."
+    },
+    {
+      "path": "manuscript/horizon_paper.md",
+      "sha256": "d26258a0440943b2449ee0953f600495c901296cae05ec76b726473c4c258c2b",
+      "by": "runner",
+      "date": "2026-11-20",
+      "quotes": [
+        "Whole-genome multiple sequence alignment and pangenome graph analysis must reconcile quadratic pairwise scaling, sharp compositional skew, and rampant multigene duplication across divergent lineages. Standard workflows split these tasks across disconnected aligners, graph cleaners, liftover tools, and format-specific libraries that rely on fixed substitution matrices calibrated near balanced nucleotide composition and force base-by-base alignments through unalignable regions. Here we present Horizon, an information-theoretic genome alignment and pangenome graph suite implemented in Rust (`10` binaries in `src/bin/`, including the `horizon` subcommand dispatcher) that unifies pairwise alignment (`horizon_wga`), seeded sequence-to-graph DAG/POA alignment (`horizon_wga --graph`), log-linear multi-species merging (`horizon_merge`), progressive guide-tree alignment (`horizon_guide`), streaming `GFA v1.0/v1.1` inspection and extraction (`horizon_gfa`), graph-aware coordinate liftover (`horizon_lift`), junction cleaning (`horizon_clean`), and e-graph walk resolution (`horizon_resolve`). Horizon's alignment core combines compact strand-symmetric spaced-seed indexing (`FlatSeedIndex` with 16-bit prefix bucketing), Rayon-parallel transition seeding, and six-frame biochemical amino-acid seeding with Beta-Bernoulli Bayesian Online Changepoint Detection over local weak/strong hydrogen-bond channels, driving a three-state Minimum Description Length forward-backward aligner calibrated by Conformal Risk Control. Regions whose posterior homology support falls below the calibrated bit-savings floor are isolated as explicit Horizon Bubbles instead of being forced into spurious base pairs, while tandem duplications and nested inversions are collapsed non-destructively via MDL-calibrated equality saturation (`MdlCostModel`). Across verified UCSC/Ensembl/B10K reference-MAF slices (`horizon_eval` on MAF-concatenated `(ref_id, tgt_id)` pairs), multi-species progressive builds, and `12 GB` HPRC v1.0 Minigraph-Cactus pangenome benchmarks (`8cd5db0` / `2896229`), `horizon_wga` achieves `95.6%` recall / `97.4%` precision on `100-way chrM` (`hg38` \u00d7 `panTro4`), `91.4%` recall / `87.0%` precision on `cactus447way` primates (`Macaca_mulatta`), `71.1%` recall / `95.1%` precision on `B10K 363-way` avian (`Gallus_gallus` \u00d7 `Taeniopygia_guttata`), and `59.8%` recall / `78.5%` precision on `cactus241way chr22 1MB` (`Canis_lupus_familiaris`, `31` contigs in `0.852 s`) while reducing `18%`-GC random-DNA false-positive pairs from `18,077` to `0` on the `seed=999` benchmark draw (`80\u2013448` pairs on `4/5` other seeds; `288` / `149` pairs on `30%` / `45%`-GC single draws); `horizon_merge` nets `92` vertebrate `chrM` species in `21.78 s` (`26.6 MB` RSS), and `horizon_guide --progressive --hal` (`2896229`) builds a `5`-mammal progressive MAF (`1,109` blocks) and a single-contig star-tree HDF5 `v0` HAL stub (`4` bottom segments) in `0.859 s`. On the `12 GB` HPRC v1.0 graph, counter-only `horizon_gfa stats` streams all `81.4M` segments in `196.93 s` at `96.9 MB` peak RSS, outperforming `vg v1.60.0` (`vg stats`, which builds an in-memory handle graph) in runtime (`0.08 s` vs. `4.2984 s`) and peak RSS (`22.6 MB` vs. `77.0 MB`) on a real `10,000`-segment (`10.94 Mbp`, `96.09%` `'N'`) `chr22` subgraph; and `horizon_wga --resolve-dups` aligns `GRCh38.chr6` (`170.8 Mbp`) \u00d7 `CHM13.chr6` (`110.7 Mbp` q-arm `61.4M\u2013172.1M`) in `258.88\u2013267.86 s` (`8cd5db0`; `304.53 s` at `2896229` with multi-chain partitioning, `282.2M` aligned pairs, `98.9%` `CHM13` coverage) with **99.54%** base-coverage recall, **97.96%** exact base-coordinate recall, `48.63%` conditioned exact pair precision (`38.22%` unconditional across all `282.2M` emitted pairs) against `1.63M` `1-to-1` HPRC graph segments alongside `minimap2 -x asm5` (`46.95 s`, `2,947.5 MB` RSS, `99.71%` exact recall, `99.75%` conditioned / `99.60%` unconditional exact precision). Horizon is available at `https://github.com/richard-burhans/horizon-aligner`.",
+        "Horizon addresses these coupled bottlenecks in a unified, pure-Rust suite of ten composable executables in `src/bin/` (`horizon_wga` including `--graph`, `horizon_merge`, `horizon_guide`, `horizon_gfa`, `horizon_lift`, `horizon_clean`, `horizon_resolve`, `horizon_eval`, `bench_chr1`, and the `horizon <subcommand>` dispatcher). The alignment, merging, and resolution tools (`horizon_wga`, `horizon_guide`, `horizon_resolve`, `horizon_merge`, and `horizon_clean`) draw on shared MDL, BOCPD, e-graph, and GFA primitives (`horizon_clean` uses an ad-hoc Bernoulli/BIC changepoint score rather than `src/mdl/dp.rs`), while `horizon_gfa` and `horizon_lift` use the shared streaming GFA (`src/gfa/mod.rs`) and UCSC coordinate (`src/coord.rs`) modules without BOCPD/MDL/e-graph scoring, and `horizon` dispatches subcommands. Rather than delegating across external tools such as `vg` (Garrison et al. 2018), `odgi` (Guarracino et al. 2022), and `BEDTools` (Quinlan & Hall 2010), Horizon provides native streaming `GFA v1.0/v1.1` inspection, liftover, cleaning, e-graph walk resolution, and `MAF`, `rGFA`, and `HAL`-compatible interoperability in a single crate.",
+        "**Figure 1. Horizon integrates multi-tier strand-symmetric seeding, online compositional changepoint detection, conformal abstention, e-graph resolution, and streaming GFA pangenome tools into a unified pure-Rust suite.** Stages 1\u20132 chain `FlatSeedIndex` (`12 B/entry`, 16-bit prefix buckets), Rayon-parallel `LASTZ12` transition seeds, and biochemical six-frame `AA5` seeds into colinear LCBs or seeded DAG/POA components (`horizon_wga --graph`) while isolating unanchored spans as macro Horizon Bubbles. Stages 3\u20134 run Beta-Bernoulli BOCPD over the weak/strong (*W*) channel to parameterize flat `BandLayout` / topological DAG Minimum Description Length forward-backward alignment gated by Conformal Risk Control (`\u03bb\u0302 = 10.0` bits). Stages 5\u20138 collapse duplications via `MdlCostModel` e-graphs (`horizon_resolve`, `--resolve-dups`), merge pairwise blocks in O(*N* log *N*) sweep-line time (`horizon_merge`, `horizon_guide`), stream `12 GB+` `GFA` graphs (`horizon_gfa`, `horizon_lift`, `horizon_clean`), and provide `MAF`, `rGFA`, and pure-Rust `HAL` interoperability (`horizon <subcommand>`). Visual dictionary: blue denotes seeding, chaining, and DAG construction; orange denotes adaptive MDL alignment; vermilion denotes conformal abstention; green denotes e-graph resolution and merging; purple denotes streaming GFA pangenome tools and format interoperability.",
+        "Divergent genomes lose exact nucleotide *k*-mer identity rapidly, especially across synonymous coding positions and transitions. Modern fast aligners and *k*-mer counters such as `minimap2` (Li 2018), `KMC 3` (Kokot et al. 2017), `FastGA` (Myers et al. 2025), and `KegAlign` (Gulhan et al. 2025) accelerate indexing through minimizer, super-*k*-mer, or diagonal-partitioned schemes. Horizon pairs compact strand-symmetric spaced-seed indexing (`FlatSeedIndex` in `src/seeding/flat_index.rs`, `12 bytes/entry` post-build with 16-bit prefix bucketing and SDUST repeat masking via Morgulis et al. 2006) with transition-tolerant nucleotide and biochemical amino-acid seeds (`src/seeding/`). First, canonical `fwd.min(rc)` 2-bit `u64` spaced-seed indexing yields orientation-invariant keys across spaced masks (`MASK_PRIMARY_11_15` `111011011011011` at weight `11`, `MASK_PH11_18` `111010010100110111` from Ma et al. 2002, and `MASK_W10` `11011011011011` at weight `10`). Second, high-scoring pair gating and Rayon-parallel chunked scanning activate `LASTZ`-style `11`-mer and `12`-mer single- and double-transition seeds (`MASK_LASTZ11`, `MASK_LASTZ12` at *T* \u2208 {1, 2}), purine-pyrimidine `RY20` seeds, and weak/strong `W10` seeds.",
+        "Between chained anchors, Horizon evaluates homology using a three-state Minimum Description Length forward-backward Pair-HMM aligner adapted from Allison, Wallace, and Yee (1992) and Durbin et al. (1998), with normalized outgoing transition probabilities and DAG/POA extensions following Lee et al. (2002) and Gao et al. (2021). Instead of allocating pointer-heavy sparse dictionaries, the Rust kernel stores log-space forward (\u03b1) and backward (\u03b2) tables in a contiguous flat `BandLayout` (`Vec<f64>`, stride `2 * band_w + 1`, default `band_w = 180`). It evaluates `logplus` transitions and per-column match posteriors `P(M_ij | X, Y)` in cache-friendly linear passes, followed by X-drop flank extension (`mdl_xdrop_extend_with_params`, `max_ext = 1500`).",
+        "Each candidate interval is summarized by its total description-length savings `\u0394L = L_null \u2212 L_joint` in bits relative to independent BOCPD-parameterized null encoding, scaled by a Rissanen/BIC search-space complexity floor `0.55 * log2(N * M)` (Rissanen 1978; Schwarz 1978; Gr\u00fcnwald 2007). Using fixed Conformal Risk Control defaults calibrated offline at risk level `\u03b1 = 0.07` (`n_cal = 15`; Angelopoulos et al. 2024), Horizon enforces a constant bit-savings floor `\u03bb\u0302 = 10.0` bits (`min_delta_bits = 10.0`) and a minimum column posterior floor (`0.15`). Any interval or internal gap failing these floors is withheld from base-by-base alignment and emitted explicitly as a **Horizon Bubble** (`# HB:Z:` metadata in `GFA` and summary outputs); in graph cleaning (`horizon_clean`), `HB:i:1` marks severed discordant `L`-edges rather than full topological superbubble/ultrabubble or SPQR-tree decompositions (Paten et al. 2018; Sena et al. 2026).",
+        "2. `horizon_lift` (`src/bin/horizon_lift/main.rs`) lifts `BED` and `GFF3` intervals across haplotypes via two-pass `P`/`W` streaming, `--bridge-bp` micro-bubble coalescing, and `coord::Interval` UCSC reverse-strand arithmetic (`src/coord.rs`).",
+        "For multi-species panels, `horizon_merge` (`src/bin/horizon_merge.rs`) executes an O(*N* log *N*) coordinate sweep over pairwise `MAF` files against a selected reference or central hinge, applying best-score interval netting (`interval_match_score`; cf. Kent et al. 2003) and threading query insertion columns across all taxa into `MAF` and reference `rGFA` (`SN:Z`, `SO:i`, `SR:i:0`) graphs. For progressive guide-tree builds, `horizon_guide` (`src/bin/horizon_guide/main.rs`) performs identity-gated transitive sister-clade rescue (`rescue_transitive_maf`) and ancestral consensus bridging. Finally, `src/hal/` implements an in-memory hierarchical `HalAlignment` model (`TopSegment`, `BottomSegment`, reference-free `to_maf_for_genome`) alongside pure-Rust streaming `Read + Seek` HDF5 v0/v1 container inspection (`hdf5_read.rs`), B-tree group traversal, zlib chunk decompression (`flate2`), binary record decoders (`DNA_ARRAY`, `SEQIDX_ARRAY`, `SEQNAME_ARRAY`, `TOP_ARRAY`, `BOTTOM_ARRAY`), and a `libhdf5`-compatible HDF5 `v0` writer (`hdf5_write.rs`) with multi-level B-tree support (Hickey et al. 2013).",
+        "With zero parameter retuning, we evaluated `horizon_wga` across eight verified external reference-MAF slices spanning close primates, medium-divergence mammals, distant mammals, deep avian divergence (`B10K 363-way`), and mitochondrial genomes (`docs/BENCHMARK_RESULTS.md`; Table 1). Following addition of the composition-aware BOCPD LCB gate (`joint_pair_bits - GAP_OPEN_BITS` across all LCB lengths in `src/mdl/mod.rs`), false-positive alignments on the `seed=999` `10,000`-bp random `18%`-GC draw dropped from `18,077` pairs (`74.9%` coverage) to `0` pairs (`0.0069 s`), whereas `4/5` other random `18%`-GC seeds still emitted `80\u2013448` false-positive pairs and `30%`-GC and `45%`-GC single draws emitted `288` pairs (`0.4150 s`) and `149` pairs (`0.3829 s`). Note that `horizon_eval` evaluates MAF-concatenated `(ref_id, tgt_id)` contig pairs individually against reference `MAF` blocks (`LASTZ`, `Cactus`, `MULTIZ`, and `EPO`), nuclear slices were re-evaluated after LCB gate calibration, and head-to-head external pairwise aligner re-runs (`FastGA`, `LASTZ`, `KegAlign`) remain pending on the benchmark host (`minimap2 -x asm5` is compared on full `chr6` below). On tuning mitochondrial slices (`multiz100way chrM`), `horizon_wga` achieved `95.6%` recall and `97.4%` precision on human (`hg38`) \u00d7 chimp (`panTro4`, `0.058 s`) and `76.5%` recall and `93.7%` precision on human \u00d7 mouse (`mm10`, `0.064 s`). On held-out nuclear slices, `horizon_wga` achieved `91.4%` recall / `87.0%` precision on `cactus447way` macaque (`Macaca_mulatta`, `0.102 s`), `86.3%` recall / `87.7%` precision on `multiz470way` marmoset (`HLcalPym1`, `0.189 s`), `54.0%` recall / `67.6%` precision on `cactus447way` horse (`Equus_caballus`, `0.068 s`), `48.0%` recall / `83.3%` precision on `cactus241way` dog (`chr22_random`, `0.050 s`), `59.8%` recall / `78.5%` precision (`67.9%` F1) across `31` dog target contigs on `cactus241way chr22 1MB` (`0.852 s`, `2,076` Horizon Bubbles), and `71.1%` recall / `95.1%` precision on the `B10K 363-way` avian `chr1:5.9M\u20136.4M` slice (`Gallus_gallus` \u00d7 `Taeniopygia_guttata`, `0.642 s`, `3,814` Horizon Bubbles).",
+        "On whole-chromosome `horizon_wga --resolve-dups` runs (`8cd5db0` / `2896229`; `n = 1` per run; `docs/BENCHMARK_RESULTS.md`), `GRCh38.chr22` \u00d7 `CHM13.chr22:15729460-51324926` finished in `69.10 s` (`3,971.6 MB` RSS, `34,165,619` aligned pairs, `unique_x_bp = 34,039,553`, `unique_y_bp = 34,020,579`, `95.6%` of `CHM13.chr22` q-arm, `21,787` Horizon Bubbles). On `GRCh38.chr6:65M\u201385M` \u00d7 `CHM13.chr6:61M\u201381M` (`20 Mbp` q-arm), `FlatSeedIndex` + `BTreeSet`-indexed LCB clustering finished in `12.84 s` (`15,019,451` pairs, `16,417` bubbles). On full `GRCh38.chr6` (`170.8 Mbp`) \u00d7 `CHM13.chr6` (`110.7 Mbp` q-arm `61401689\u2013172126628`), `horizon_wga --resolve-dups` on `8cd5db0` completed in `258.88\u2013267.86 s` (`2.21\u00d7` faster than `592.68 s` at `bb43dd9` and `3.97\u00d7` faster than `1,062.45 s` at `1e47fe0`; Figure 5) with `282,193,564` aligned pairs covering `124,160,423` bp (`72.7%`) of `GRCh38.chr6` and `109,464,447` bp (`98.9%`) of the `CHM13.chr6` q-arm (`178,737` Horizon Bubbles). With the multi-chain `partition_colinear_blocks` fix (`2896229`, `304.53 s`), comparing Horizon's many-to-many `chr6` MAF (`370,937` blocks, `282,163,046` pairs) base-for-base against the `1,628,018` `1-to-1` shared segments (`110,082,990` bp) between `GRCh38.chr6` and `CHM13.chr6:61401689\u2013172126628` in the HPRC Minigraph-Cactus graph yields **99.54%** base-coverage recall, **97.96%** exact coordinate recall (`107,836,669 / 110,082,990` bp; `98.14%` within `1 kb`), `48.63%` conditioned exact pair precision on `pairs_on_hprc_1to1_x` (`107,836,669 / 221,734,653`; `~2.01\u00d7` local multiplicity), and **38.22%** unconditional exact pair precision across all `282,163,046` emitted pairs (`60,428,393` / `21.42%` outside `1-to-1` HPRC segments; `~2.58\u00d7` overall multiplicity), compared to `minimap2 -x asm5` (`v2.28-r1209`, `46.95 s`, `2,947.5 MB` RSS, `1-to-1` primary alignments: `99.71%` exact recall, `99.75%` conditioned / `99.60%` unconditional exact precision; Figure 7).",
+        "**Figure 5. Prefix-bucketed `FlatSeedIndex`, Rayon transition seeding, and `dp` / `seed_end` optimizations accelerate full-chromosome alignment while streaming GFA tools keep `12 GB` HPRC memory bounded.** **A.** `HORIZON_PROFILE` stage-by-stage wall-clock breakdown for full `GRCh38.chr6` (`170.8 Mbp`) \u00d7 `CHM13.chr6` (`110.7 Mbp` q-arm), comparing the `1e47fe0` baseline (`1,062.45 s`), `53130b8` (`451.35 s`, `2.35\u00d7` faster), and `8cd5db0` (`267.86 s`, `3.97\u00d7` faster; `w12+w10` `29.78 s` \u2192 `11.73 s`, `lz1` `588.67 s` \u2192 `47.87 s` \u2192 `24.54 s` [`24.0\u00d7` faster], `seed_end` `184.65 s` \u2192 `91.04 s` \u2192 `22.88 s` [`8.1\u00d7` faster], and `BandLayout DP + X-drop + I/O` `283.98 s` \u2192 `208.71 s` [`143.69 s` `dp+xd` + `65.02 s` I/O]). **B.** Wall-clock runtime versus log-scale peak RSS memory across `12 GB` HPRC `v1.0` Minigraph-Cactus suite benchmarks on `8cd5db0` (`horizon_gfa stats`, `horizon_gfa extract` for `chr22` and `chr6`, `horizon_lift --to-chrom chr22`, and `horizon_wga --resolve-dups` for `chr22`, `chr6` 20 Mbp q-arm, and full `chr6`). Visual dictionary: in Panel A, stacked colors denote `w=12 + w=10` (blue), `LASTZ12` 1-transition (orange), HSP gate + LCBs (sky blue), and `BandLayout` DP + X-drop + I/O (green); in Panel B, purple denotes `horizon_gfa`, green denotes `horizon_lift`, and blue/sky blue denote `horizon_wga`.",
+        "On a real sequence-bearing `10,000`-segment HPRC `chr22` subgraph (`10,937,960` bp total, of which `10,510,000` bp / `96.09%` are `'N'` bases in segment `76067108` and `427,960` bp are ACGT across `chr22`, `chrUn_GL000224v1`, and `chr14_KI270722v1_random`; `10,300` links, `1` path, `4` walks; Figure 6A), counter-only `horizon_gfa stats` ran in `0.08 s` at `22.6 MB` peak RSS, compared with `vg stats -z -l -N` (`vg v1.60.0`: `4.2984 s`, `77.0 MB` RSS) and `vg convert -g -p` (`1.8292 s`, `76.6 MB` RSS), which construct full in-memory handle graphs (`odgi` and `gfatools` baselines remain pending). On the same HPRC subgraph, `horizon_clean --min-cp-bits 10.0` ran in `0.13 s` (`33.4 MB` RSS, keeping all `10,300` valid walk links), `horizon_resolve --collapse-dups --tag-walks` processed `223` anchors and `755` snarl/bubble windows in `5.571 s` (`23.6 MB` RSS, emitting `W`-line `EG:Z:` tags rather than `# EG:Z:` comments), and `horizon_wga --graph` (`20,000` bidirected DAG nodes) ran in `2.98\u20136.09 s` (`153.9\u2013154.6 MB` RSS), abstaining (`aligned_pairs = 0`) on a `400`-bp all-`N` query and aligning `122/258` bp (`6` bubbles) and `197/356` bp (`8` bubbles) on real HPRC walk queries. For multi-species panels (`n = 1` runs without reference-MAF accuracy verification), `horizon_merge` netted `92` vertebrate `chrM` (`~16.5 kb`) species in `21.78 s` (`26.6 MB` RSS, `460` multi-species blocks), and `horizon_guide --progressive --hal --rbest` (`2896229`) aligned `5` mammals (`hg38`, `Macaca_mulatta`, `HLcalPym1`, `Equus_caballus`, `Canis_lupus`) in `0.859 s` (`1,109` MAF blocks, `967` multi-species, plus a single-contig star-tree HDF5 `v0` HAL stub of `4` bottom segments inspected via `horizon_wga --hal-info`). All `97` active Rust unit tests (plus `1` ignored `.hal` integration test; `98` total) pass on `HEAD` with zero `clippy` warnings.",
+        "**Figure 6. Head-to-head HPRC `10k`-segment subgraph comparison against `vg v1.60.0`, multi-species suite scaling, and BOCPD LCB gate calibration.** **A.** Log-log wall-clock runtime versus peak RSS across the `10,000`-segment (`10.94 Mbp`, `96.09%` `'N'`) real HPRC `chr22` subgraph (`horizon_gfa stats` counter-only vs. `vg stats` / `vg convert` in-memory graph construction, plus `horizon_clean`, `horizon_wga --graph`, and `horizon_resolve`) and multi-species `horizon_merge` (`92`-species `chrM`) and `horizon_guide` (`5`-species `--progressive --hal`). **B.** Effect of the `R1-HMM` composition-aware BOCPD LCB gate (`joint_pair_bits - GAP_OPEN_BITS`): on the `seed=999` `18%`-GC `10`-kb null draw, pairs drop from `18,077` to `0` (`80\u2013448` pairs remain on `4/5` other seeds) while nuclear precision shifts across horse (`65.4%` \u2192 `67.6%`), macaque (`84.6%` \u2192 `87.0%`), and marmoset (`86.1%` \u2192 `87.7%`). Visual dictionary: in Panel A, purple denotes `horizon_gfa`, green denotes `horizon_clean`/`horizon_merge`, blue/sky blue denote `horizon_wga --graph`/`horizon_guide`, orange denotes `horizon_resolve`, and vermilion/gray denote `vg`; in Panel B, gray denotes pre-gate and blue denotes post-gate.",
+        "**Figure 7. Horizon's `GRCh38.chr6` \u00d7 `CHM13.chr6` q-arm alignment achieves `97.96%` exact base-coordinate recall against the HPRC Minigraph-Cactus graph alongside `minimap2 -x asm5`.** **A.** Whole-chromosome synteny dot-plot (`GRCh38.chr6` `0\u2013170.8 Mbp` vs. `CHM13.chr6` q-arm `61.4\u2013172.1 Mbp`) overlaying HPRC `1-to-1` shared segments (`\u2265500` bp, sky blue) and Horizon MAF blocks (`\u22652` kb, dark blue); the dashed orange line marks the `61 Mbp` q-arm boundary. **B.** Agreement with `1,628,018` HPRC `1-to-1` shared segments (`110,082,990` bp) for many-to-many `horizon_wga` (`99.5%` base-coverage recall, `98.0%` exact `0`-bp recall, `98.1%` `\u22641`-kb recall, `48.6%` conditioned exact pair precision [`38.2%` unconditional across `282.2M` pairs]) vs. `1-to-1` primary `minimap2 -x asm5` (`100.0%` base-coverage recall, `99.7%` exact recall, `99.8%` conditioned [`99.6%` unconditional] exact precision). **C.** `1 Mbp`-binned exact (`\u0394y = 0` bp) recall along `GRCh38.chr6` (`n = 171` bins) comparing HPRC `1-to-1` shared bp (gray fill), `minimap2 -x asm5` (dashed orange), and Horizon (solid blue) across the `58\u201362 Mbp` centromeric boundary (shaded orange) and the entire `q`-arm.",
+        "Three concrete steps define our immediate roadmap. First, while de novo precision remains high (`87\u201397%`) across close and medium divergences, recall drops to `54\u201362%` on distant mammalian slices (`cactus447way` horse and `cactus241way` dog), motivating iterative ancestral consensus scaling in `horizon_guide` across deeper vertebrate clades. Second, head-to-head comparisons against additional external pairwise aligners (`FastGA`, `LASTZ`, `KegAlign`) and `odgi`/`gfatools` on identical hardware will complement our `minimap2 -x asm5` and `vg v1.60.0` baselines. Third, our pure-Rust `HAL` reader (`src/hal/`) and HDF5 `v0` writer (`src/hal/hdf5_write.rs`) await multi-contig progressive HAL emission and large-scale benchmarking on multi-hundred-gigabyte alignments (`363-avian-2020.hal`, `241-mammalian-2020v2.hal`).",
+        "- **Gulhan A, et al.** (2025). KegAlign: optimizing pairwise alignments with diagonal partitioning. *Genome Biology* (`10.1186/s13059-025-03830-0`).",
+        "- **Kent WJ, Baertsch R, Hinrichs A, Miller W, Haussler D** (2003). Evolution's cauldron: duplication, deletion, and rearrangement in the mouse and human genomes. *Proceedings of the National Academy of Sciences*, 100(20):11484\u201311489."
+      ],
+      "note": "Cleaned remaining KP-14, 1110110110111, and BandGrid references in body and Figure 1/5 captions to match src/seeding/mod.rs and BandLayout."
+    },
+    {
+      "path": "manuscript/horizon_companion.md",
+      "sha256": "fb7c516da96acc80ee11d7044492589abf77550da4888ed0f3c15a46db76bc94",
+      "by": "runner",
+      "date": "2026-11-20",
+      "quotes": [
+        "date: \"2026-11-20\"",
+        "| `src/mdl/` | Flat `BandLayout`, three-state MDL forward-backward DP (`dp.rs`), seeded topological DAG/POA DP (`dag.rs`), adaptive `HmmParams` shrinkage (`mod.rs`), X-drop flank extension |",
+        "| `src/formats.rs` | `MAF`, reference-anchored `rGFA`, `partition_colinear_blocks` multi-chain partitioning, and `# HB:Z:` / `# EG:Z:` metadata emission |",
+        "- **E-Graph Paralog (`# EG:Z:` / `EG:Z:`) annotations:** Collapsed tandem duplications resolved by `src/egraph.rs` (`collect_dups`, which emits `Dup` spans while leaving `Expr::Inv` unrecorded) are written as `# EG:Z:` comment lines by `src/formats.rs` / `horizon_merge` (ignored by standard GFA record parsers) and as `EG:Z:` optional tags on `W` lines by `horizon_resolve --tag-walks`.",
+        "- **GFA \u2194 MAF Interoperability:** `src/formats.rs` emits both `MAF` blocks and `rGFA` segments/`L`-links alongside `# HB:Z:` bubble comments (note that formal bidirectional lens combinators such as `get`/`putback` are not implemented in `src/formats.rs`).",
+        "## 3.1 Strand-Symmetric Canonical Spaced-Seed Indexing and Repeat Filtering (`src/seeding/`)",
+        "To avoid storing forward and reverse-complement *k*-mers separately, `src/seeding/` encodes 2-bit nucleotides into packed `u64` words along both strands and takes the canonical minimum `fwd.min(rc)` over each spaced-seed mask `M` (`FlatSeedIndex` in `src/seeding/flat_index.rs`, `12 bytes/entry` post-build with 16-bit prefix bucketing).",
+        "   - **Exact spaced seeds:** Canonical `u64` spaced masks at weight `11` (`MASK_PRIMARY_11_15` `111011011011011`, span `15`, and `MASK_PH11_18`, span `18`) plus uncovered-gap fallback weight `10` (`MASK_W10` `11011011011011`, span `14`, activated only on regions left uncovered by primary LCBs).",
+        "## 3.3 Continuous Search-Space MDL Scaling and `BandLayout` (`src/mdl/`)",
+        "For each candidate anchor or inter-anchor gap (`X` of length `N`, `Y` of length `M`), Horizon evaluates a three-state Minimum Description Length pair-HMM (`M` match/mismatch, `I` insertion, `D` deletion; Allison et al. 1992) in log-space (`logplus`), parameterized by the local BOCPD base frequencies:",
+        "**Contiguous `BandLayout` indexing (`src/mdl/dp.rs`):** Forward (`\u03b1`) and backward (`\u03b2`) DP tables are stored in a single flat `Vec<f64>` of clamped half-width `W = min(band_w, max(N, M))` (default `band_w = 180`) and stride `S = 2W + 1`. For target index `i` with proportional band center `c(i) = floor(i \u00b7 M / max(N, 1))` and query index `j` within `|j \u2212 c(i)| \u2264 W`, the flat buffer index is:",
+        "idx(i, j) = i \u00b7 (2W + 1) + (j \u2212 c(i) + W)",
+        "where `j \u2212 c(i) + W \u2208 [0, 2W]` maps the band center `j = c(i)` to column `W` in every row (reducing to `j \u2212 i` when `N = M`, as in Figure C3A, and in X-drop flank extension).",
+        "![BandLayout Flat Indexing and E-Graph Saturation](figures/fig_c2_bandgrid_egraph.png)",
+        "**Figure C3. Flat `BandLayout` diagonal memory layout and congruence-closed e-graph paralog collapse.** **A.** `BandLayout` maps diagonal coordinates `(i, j)` with `|j \u2212 c(i)| \u2264 W` into a contiguous `Vec<f64>` of stride `2W + 1` (`W = 2`, stride `5` shown for `N = M` where `c(i) = i`), placing the band center at offset `W` (`2`). **B.** E-graph equality saturation applies `inv(inv(A)) \u2194 A` and congruence closure to merge `seq(inv(inv(A)), A)` with `seq(A, A)` before collapsing tandem duplications (`seq(A, A) \u2192 dup(A)`) at minimum parsimony cost. Visual dictionary: dark blue marks the main diagonal `j = i`, light blue marks off-diagonal band cells, and green marks the extracted minimum-cost e-graph expression.",
+        "3. **`horizon_guide` Transitive Rescue (`src/bin/horizon_guide/main.rs`):** Aligns sister taxa progressively along a Newick guide tree. It applies `rescue_transitive_maf`\u2014using an intermediate sibling with high pairwise identity to bridge divergent outgroup intervals\u2014before ancestral consensus construction and single-contig star-tree HDF5 `v0` `.hal` export (`src/hal/hdf5_write.rs`).",
+        "1. **Low-Complexity Check & Seeding:** In the 12 bp prefix `AATTGCATATCG`, the maximum single-base count is `4` (`A`/`T`, `< 12 * 3 / 4 = 9`) and dinucleotide periodicity is below threshold, so `is_low_complexity_window` passes. `MASK_W10` (`w = 10`) anchors the identical `0..12` prefix and `18..22` suffix. This leaves a `6 bp` inter-anchor gap (`X[12..18] = GGGGCC` vs. `Y[12..18] = CCTTTT`).",
+        "2. **BOCPD Tracking:** Over `X[0..12]` (`75%` A+T), `bocpd_gc_profile` estimates `P(W) \u2248 0.69` (`0.684\u20130.699`). At `X[12] = G`, the changepoint hazard shifts `P(W)` downward across the GC-rich insert.",
+        "3. **Banded MDL Scoring (`BandLayout`):**",
+        "   - For the `6 bp` gap (`band_w = 180`), `BandLayout` clamps `W = min(180, 6) = 6`, allocating `(6 + 1) \u00d7 (2 \u00b7 6 + 1) = 91` floats (`idx(i, j) = i \u00b7 13 + (j \u2212 i + 6)` since `N = M`) in `O(1)` per cell.",
+        "   - On the conserved prefix (`12 bp`), matching all 12 bases under `P(W) \u2248 0.69` yields `\u0394L \u2248 +17.8` bits (`\u2265 \u03bb\u0302 = 10.0` bits) with column posteriors `P(M_ij) > 0.95`.",
+        "   - Inside the `6 bp` gap (`GGGGCC` vs. `CCTTTT`), 0 of 6 bases match, giving `\u0394L \u2248 \u22129.76` bits (`< 10.0` bits) and `P(M_ij) < 0.15`."
+      ],
+      "note": "Updated Figure C3 caption to BandLayout with proportional band center c(i)."
+    }
+  ],
+  "sealed": {
+    "attack-L1-correctness.md": "3d478f9488c1c5b7cf95076fce23d58f888a8551681a04e3119a737297f29264",
+    "attack-L5-inference.md": "af4640c3c4a3653d0f09e72f344c3898f54922e12d288b80f2529c9807bc81b9",
+    "attack-L6-prior-art.md": "da4bd66bb3a10e209cb8268356badab150a1fdaf3a0a180f4d44ece039ed26df",
+    "attack-L4-provenance.md": "a763d5f047458a12feea3dccc9ba8f58ac5bbf1188f9e093b21e8bc444ed0d57",
+    "attack-L2-sampling.md": "cbdb4f838186c055dd3664788b4f0434d3a995d10672e17b1429315f5fe918bd",
+    "attack-L3-statistics.md": "aba1a127eb078890912cb9d038f685d95206058af53f9760dbafdad2e6f24bf8",
+    "attack-L7-reproduction.md": "a97f9506396044bf90b049519be4ce7d6d8c3f3627499baee0392f451d98fce9"
+  },
+  "aborted": [],
+  "unbriefed": [],
+  "lens_drops": {},
+  "briefs_required": true,
+  "runner_is_author": true,
+  "claim_list_author": "runner",
+  "human_claim": "Evaluate both horizon_paper.md and horizon_companion.md (user-requested scope covering C5/C6)",
+  "carried": [
+    {
+      "from": 1,
+      "kind": "open",
+      "item": "{\"id\": \"R1-IMPL\", \"summary\": \"Implement and benchmark horizon_clean, horizon_resolve, horizon_lift, and horizon_wga --graph on HPRC v1.0/v1.1 (GRCh38 vs CHM13) and HLA/centromere loci.\"}",
+      "id": "R1-IMPL"
+    },
+    {
+      "from": 1,
+      "kind": "open",
+      "item": "{\"id\": \"R1-HMM\", \"summary\": \"Normalize HMM transition weights in src/mdl/dp.rs:105-167 (currently summing >1.0 from M and Ix/Iy) and derive/calibrate gap-bit penalties.\"}",
+      "id": "R1-HMM"
+    },
+    {
+      "from": 2,
+      "kind": "open",
+      "item": "{\"id\": \"R2-HMM-XDROP\", \"summary\": \"Wire HmmParams and normalized transitions into mdl_xdrop_extend (src/mdl/dp.rs) and horizon_wga --graph, fix N-base handling in bocpd_gc_profile, and re-run all WGA benchmarks on a single pinned commit (partially carries R1-HMM).\"}",
+      "id": "R2-HMM-XDROP"
+    },
+    {
+      "from": 2,
+      "kind": "open",
+      "item": "{\"id\": \"R2-RESOLVE-LIFT\", \"summary\": \"Update W-line start/end coordinates and L links in horizon_resolve --collapse-dups, add horizon_clean sup>0 severing + S-tag preservation, and add unique-base coverage + head-to-head pangenome baselines (minimap2/odgi/vg) and unit tests for the 4 untested binaries.\"}",
+      "id": "R2-RESOLVE-LIFT"
+    },
+    {
+      "from": 2,
+      "kind": "open",
+      "item": "{\"id\": \"R2-INDEX-RAM\", \"summary\": \"Replace ContigIndex per-position HashMap<u64, Vec<usize>> with minimizer/flat-sorted k-mer indexing to bring full >100 Mbp chromosome alignment well below 26.5 GB RSS.\"}",
+      "id": "R2-INDEX-RAM"
+    },
+    {
+      "from": 3,
+      "kind": "open",
+      "item": "{\"id\": \"R1-IMPL\", \"summary\": \"Implement and benchmark horizon_clean, horizon_resolve, horizon_lift, and horizon_wga --graph on HPRC v1.0/v1.1 (GRCh38 vs CHM13) and HLA/centromere loci (4 of 5 C6 benchmarks un-reproduced on 488b020).\"}",
+      "id": "R1-IMPL"
+    },
+    {
+      "from": 3,
+      "kind": "open",
+      "item": "{\"id\": \"R1-HMM\", \"summary\": \"Normalize HMM transition weights in src/mdl/dp.rs and derive/calibrate gap-bit penalties (estimate_dag_hmm_params leaves gap_open_bits/gap_extend_bits at defaults).\"}",
+      "id": "R1-HMM"
+    },
+    {
+      "from": 3,
+      "kind": "open",
+      "item": "{\"id\": \"R2-HMM-XDROP\", \"summary\": \"Re-run all 5 stale pre-488b020 WGA benchmark rows and test/calibrate estimate_dag_hmm_params.\"}",
+      "id": "R2-HMM-XDROP"
+    },
+    {
+      "from": 3,
+      "kind": "open",
+      "item": "{\"id\": \"R2-RESOLVE-LIFT\", \"summary\": \"Rewrite L links alongside W coordinates in horizon_resolve --collapse-dups, fix horizon_clean real-data no-op and two-pass stdin, and add minimap2/odgi/vg/LASTZ head-to-head baselines.\"}",
+      "id": "R2-RESOLVE-LIFT"
+    },
+    {
+      "from": 3,
+      "kind": "open",
+      "item": "{\"id\": \"R2-INDEX-RAM\", \"summary\": \"Complete full >100 Mbp chromosome alignment (e.g. full chr6) and isolate FlatSeedIndex RSS ablation.\"}",
+      "id": "R2-INDEX-RAM"
+    },
+    {
+      "from": 4,
+      "kind": "open",
+      "item": "{\"id\": \"R1-IMPL\", \"summary\": \"Re-benchmark full chr6 and horizon_gfa extract/horizon_lift on HEAD (33bede8) with accuracy verification, and add real sequence-bearing GFA evaluations of horizon_clean, horizon_resolve, and horizon_wga --graph.\"}",
+      "id": "R1-IMPL"
+    },
+    {
+      "from": 4,
+      "kind": "open",
+      "item": "{\"id\": \"R1-HMM\", \"summary\": \"Calibrate/derive gap-bit penalties and CRC sample size (n_cal = 15) beyond fixed defaults.\"}",
+      "id": "R1-HMM"
+    },
+    {
+      "from": 4,
+      "kind": "open",
+      "item": "{\"id\": \"R2-HMM-XDROP\", \"summary\": \"Run multi-species horizon_merge and horizon_guide --progressive --hal benchmarks with verified provenance.\"}",
+      "id": "R2-HMM-XDROP"
+    },
+    {
+      "from": 4,
+      "kind": "open",
+      "item": "{\"id\": \"R2-RESOLVE-LIFT\", \"summary\": \"Add head-to-head external baselines (minimap2, FastGA, LASTZ, odgi, vg, gfatools) on identical hardware and inputs.\"}",
+      "id": "R2-RESOLVE-LIFT"
+    },
+    {
+      "from": 4,
+      "kind": "open",
+      "item": "{\"id\": \"R2-INDEX-RAM\", \"summary\": \"Re-benchmark full GRCh38.chr6 x CHM13.chr6 on HEAD (33bede8) with accuracy parity verification (53130b8 achieved 451.35s / 10.27 GB RSS).\"}",
+      "id": "R2-INDEX-RAM"
+    },
+    {
+      "from": 4,
+      "kind": "unchallenged",
+      "item": "{\"claim\": \"C1\", \"lens\": \"sampling\", \"reason\": \"no sampling frame in binary count\"}",
+      "id": "4-h5c2c20"
+    },
+    {
+      "from": 4,
+      "kind": "unchallenged",
+      "item": "{\"claim\": \"C1\", \"lens\": \"statistics\", \"reason\": \"no statistical content\"}",
+      "id": "3-hfcb834"
+    }
+  ],
+  "dropped": [
+    {
+      "id": "3-hfcb834",
+      "reason": "Round 4 C1 statistics unchallenged slot (re-examined in Round 5 across all 7 lenses on empirical C1-C4)."
+    }
+  ],
+  "corrections": [
+    {
+      "id": "COR-1",
+      "finding": "L1-F1 / L2-F1 / L3-F1 / L4-F1 / L5-F1 / L6-F1",
+      "claim": "C1",
+      "kind": "doc-precision",
+      "status": "applied",
+      "file": "manuscript/horizon_paper.md",
+      "absent": "All `98` active Rust unit tests",
+      "present": "counter-only `horizon_gfa stats`",
+      "note": "Qualified horizon_gfa stats as counter-only vs vg in-memory graph construction, disclosed 96.09% N-base content in the 10k chr22 subgraph, and corrected active unit test count to 97 (+1 ignored).",
+      "repair": {
+        "free": true,
+        "endorsed": "adjudication-L1.md, adjudication-L2.md, adjudication-L3.md, adjudication-L4.md, adjudication-L5.md, adjudication-L6.md"
+      }
+    },
+    {
+      "id": "COR-2",
+      "finding": "L2-F2 / L3-F2 / L4-F2 / L5-F2",
+      "claim": "C2",
+      "kind": "doc-precision",
+      "status": "applied",
+      "file": "manuscript/horizon_paper.md",
+      "absent": "head-to-head external pairwise aligner re-runs (`minimap2`, `FastGA`, `LASTZ`) remain pending",
+      "present": "unconditional exact pair precision across all `282,163,046` emitted pairs",
+      "note": "Separated 8cd5db0 (258.88-267.86 s) from 2896229 (304.53 s, partition_colinear_blocks), reported both 48.63% conditioned and 38.22% unconditional chr6 exact pair precision alongside minimap2 -x asm5 (99.75% / 99.60%), and removed stale minimap2 pending wording.",
+      "repair": {
+        "free": true,
+        "endorsed": "adjudication-L2.md, adjudication-L3.md, adjudication-L4.md, adjudication-L5.md"
+      }
+    },
+    {
+      "id": "COR-3",
+      "finding": "L1-F2 / L2-F3 / L3-F3 / L4-F3 / L5-F3 / L6-F3",
+      "claim": "C3",
+      "kind": "doc-precision",
+      "status": "applied",
+      "file": "manuscript/horizon_paper.md",
+      "absent": "builds a `5`-mammal progressive alignment and HDF5 `v0` HAL archive in `0.859 s`",
+      "present": "single-contig star-tree HDF5 `v0` HAL stub (`4` bottom segments)",
+      "note": "Attributed horizon_guide (0.859 s, 1,109 MAF blocks) to 2896229, disclosed single-contig star-tree HAL stub and n=1 chrM horizon_merge without accuracy validation, and added Kent et al. (2003).",
+      "repair": {
+        "free": true,
+        "endorsed": "adjudication-L1.md, adjudication-L2.md, adjudication-L3.md, adjudication-L4.md, adjudication-L5.md, adjudication-L6.md"
+      }
+    },
+    {
+      "id": "COR-4",
+      "finding": "L2-F4 / L3-F4 / L5-F4 / L7-F1",
+      "claim": "C4",
+      "kind": "doc-precision",
+      "status": "applied",
+      "file": "manuscript/horizon_paper.md",
+      "absent": "eliminating all false-positive pairs on `18%`-GC random DNA (`0` pairs in `0.0069 s`)",
+      "present": "`80\u2013448` pairs on `4/5` other seeds",
+      "note": "Restricted 0-pair 18%-GC result to seed=999, disclosed 80-448 FP pairs on 4/5 other 18%-GC seeds and 288/149 on 30%/45%-GC, and qualified horizon_eval as MAF-concatenated (ref_id, tgt_id) evaluation.",
+      "repair": {
+        "free": true,
+        "endorsed": "adjudication-L2.md, adjudication-L3.md, adjudication-L5.md, adjudication-L7.md"
+      }
+    },
+    {
+      "id": "COR-5",
+      "finding": "L4-F5 / L6-F6 / Completeness Gaps 2, 4",
+      "claim": "C6",
+      "kind": "doc-precision",
+      "status": "applied",
+      "file": "manuscript/horizon_paper.md",
+      "absent": "10.1186/s13059-025-03468-0",
+      "present": "10.1186/s13059-025-03830-0",
+      "note": "Fixed Gulhan et al. (2025) DOI, removed unsubstantiated 34.2% Python runtime and lossless GFA<->MAF claim, updated horizon_lift/horizon_guide paths, and qualified n_cal=15 / 10.0 bits as fixed defaults.",
+      "repair": {
+        "free": true,
+        "endorsed": "adjudication-L4.md, adjudication-L6.md, adjudication-completeness.md"
+      }
+    },
+    {
+      "id": "COR-6",
+      "finding": "Completeness Gap 1",
+      "claim": "C5",
+      "kind": "doc-precision",
+      "status": "applied",
+      "file": "manuscript/horizon_companion.md",
+      "absent": "sixth-root Eisenstein units",
+      "present": "canonical minimum `fwd.min(rc)`",
+      "note": "Replaced inaccurate Eisenstein F_{q^2} / MASK_W12 text with actual 2-bit u64 fwd.min(rc) encoding and MASK_PRIMARY_11_15 / MASK_W10 masks from src/seeding/mod.rs.",
+      "repair": {
+        "free": true,
+        "endorsed": "adjudication-completeness.md"
+      }
+    },
+    {
+      "id": "COR-7",
+      "finding": "L1-F3 / L1-F4 / L3-F6 / L5-F6 / L7-F2 / Completeness Gaps 2, 4",
+      "claim": "C5",
+      "kind": "doc-precision",
+      "status": "applied",
+      "file": "manuscript/horizon_companion.md",
+      "absent": "putback(A', C)",
+      "present": "idx(i, j) = i \u00b7 (2W + 1) + (j \u2212 c(i) + W)",
+      "note": "Removed unimplemented GFA<->MAF lens combinators and 34.2% Python runtime, fixed BandLayout::slot formula with center(i) and W clamping, updated 6 bp worked example (P(W)~0.69, dL~-9.76, 91 floats), updated date/paths, and removed unused Foster 2007.",
+      "repair": {
+        "free": true,
+        "endorsed": "adjudication-L1.md, adjudication-L3.md, adjudication-L5.md, adjudication-L7.md, adjudication-completeness.md"
+      }
+    },
+    {
+      "id": "COR-8",
+      "finding": "L4-F1 / L4-F3 / L4-F4 / L4-F5",
+      "claim": "C1",
+      "kind": "figure-sync",
+      "status": "applied",
+      "file": "manuscript/scripts/generate_figures.py",
+      "absent": "168\u00d7 slower",
+      "present": "53.7\u00d7 slower",
+      "note": "Updated Figure 6A to 8cd5db0/2896229 numbers, Figure 6B to 67.6%/87.0% and seed=999 label, and fig_g2 title to src/hal/mod.rs; regenerated all figures and rebuilt PDF.",
+      "repair": {
+        "free": true,
+        "endorsed": "adjudication-L4.md"
+      }
+    }
+  ],
+  "findings": [
+    {
+      "lens": "",
+      "id": "F1",
+      "flaw": "horizongfa stats is a counter-only line stream and is not functionally equivalent to vg stats -z -l -N or vg conve"
+    },
+    {
+      "lens": "",
+      "id": "F2",
+      "flaw": "horizonguide --progressive --hal --rbest emits a flat star-tree HAL with at most one bounding-box segment per species"
+    },
+    {
+      "lens": "",
+      "id": "F3",
+      "flaw": "BandLayout in src/mdl/dp.rs centers the band on c(i) = floor(i \u00b7 m / max(n, 1)), not i, and clamps W to min(b"
+    },
+    {
+      "lens": "",
+      "id": "F4",
+      "flaw": "# EG:Z: lines are skipped as comments by src/gfa/mod.rs, collectdups omits non-Dup nested inversions, and hori"
+    },
+    {
+      "lens": "",
+      "id": "F1",
+      "flaw": "C1: horizongfa stats vs. vg is an asymmetric counter-only vs. in-memory graph-construction comparison"
+    },
+    {
+      "lens": "",
+      "id": "F2",
+      "flaw": "C2: 48.63% \"many-to-many exact pair precision\" omits 21.4% of emitted pairs and misattributes 1-to-1 over-alignment to"
+    },
+    {
+      "lens": "",
+      "id": "F3",
+      "flaw": "C3: horizonguide --progressive --hal --rbest writes a 4-segment contig-0 star-tree stub, not a verified 5-mammal prog"
+    },
+    {
+      "lens": "",
+      "id": "F4",
+      "flaw": "C4: \"Held-out\" MAF-slice accuracy and 18%-GC null claims suffer from oracle pairing, iterative reuse, and cherry-picke"
+    },
+    {
+      "lens": "",
+      "id": "F5",
+      "flaw": "C5: BandGrid index formula holds algebraically, but W clamping and diagonal centering limit asymmetric gaps"
+    },
+    {
+      "lens": "",
+      "id": "F6",
+      "flaw": "C6: # EG:Z: tags omit nested inversions and cannot distinguish collapsed paralogs from single-copy synteny"
+    },
+    {
+      "lens": "",
+      "id": "F7",
+      "flaw": "Claim-list steering note"
+    },
+    {
+      "lens": "art",
+      "id": "F1",
+      "flaw": "C1: vg subgraph comparison is apples-to-oranges and omits odgi / gfatools baselines and pangenome graph constructi"
+    },
+    {
+      "lens": "art",
+      "id": "F2",
+      "flaw": "C2: minimap2 -x asm5 outperforms Horizon on speed, exact recall, and precision while FastGA/LASTZ/KegAlign and"
+    },
+    {
+      "lens": "art",
+      "id": "F3",
+      "flaw": "C3: Multi-species horizonmerge / horizonguide and horizonlift lack external baselines and omit UCSC netting (K"
+    },
+    {
+      "lens": "art",
+      "id": "F4",
+      "flaw": "C4: Pairwise WGA benchmarks omit external aligner comparisons (LASTZ, minimap2, FastGA, last-train) and tantan"
+    },
+    {
+      "lens": "art",
+      "id": "F5",
+      "flaw": "C5: horizoncompanion.md leaves two # 5. References entries uncited in its body and omits prior art for Eisenstein D"
+    },
+    {
+      "lens": "art",
+      "id": "F6",
+      "flaw": "C6: C6's claim of \"accurate prior-art attribution\" is refuted by a wrong DOI for Gulhan et al. (2025), 15 horizonp"
+    },
+    {
+      "lens": "art",
+      "id": "F7",
+      "flaw": "Meta-finding: Runner-authored claim list steers away from missing external baselines and bibliography drift"
+    },
+    {
+      "lens": "",
+      "id": "F1",
+      "flaw": "C1 (NARROWED): Figure 6A plots stale fb8876f/bb43dd9 10k-subgraph numbers and horizonpaper.md:82 overcounts act"
+    },
+    {
+      "lens": "",
+      "id": "F2",
+      "flaw": "C2 (NARROWED): Commit 8cd5db0 and 2896229 results are conflated, chr6.json/.npz lack a generating script, an"
+    },
+    {
+      "lens": "",
+      "id": "F3",
+      "flaw": "C3 (NARROWED): horizonguide 0.859 s (1,109 blocks) is from 2896229 rather than 8cd5db0, and Figure 6A plots"
+    },
+    {
+      "lens": "",
+      "id": "F4",
+      "flaw": "C4 (NARROWED): Figure 6B plots stale precision for Horse (72.3% vs. 67.6%) and Macaque (86.9% vs. 87.0%), and"
+    },
+    {
+      "lens": "",
+      "id": "F5",
+      "flaw": "C5 (NARROWED): Stale file paths (horizonguide.rs, horizonlift.rs, src/hal.rs) and companion date (2026-11-18"
+    },
+    {
+      "lens": "",
+      "id": "F6",
+      "flaw": "C6 (SURVIVED): # EG:Z: paralog tagging, partitioncolinearblocks, and # HB:Z: / HB:i:1 match the current Rust"
+    },
+    {
+      "lens": "",
+      "id": "F1",
+      "flaw": "C4 (18%-GC random DNA): horizonwga produces 80\u2013189 false-positive pairs on 4 of 5 random seeds (REFUTED)"
+    },
+    {
+      "lens": "",
+      "id": "F2",
+      "flaw": "C5 (BandGrid flat buffer index): wrong struct name, wrong row center, and wrong band width (REFUTED)"
+    },
+    {
+      "lens": "",
+      "id": "F3",
+      "flaw": "C1 (10k HPRC chr22 subgraph vs vg): metrics reproduce on /tmp/ artifact, but no repo script generates or runs it"
+    },
+    {
+      "lens": "",
+      "id": "F4",
+      "flaw": "C2 (Full chr6 vs HPRC graph and minimap2): summary artifacts match, but pipeline scripts and FASTAs live only in /t"
+    },
+    {
+      "lens": "",
+      "id": "F5",
+      "flaw": "C3 (horizonmerge and horizonguide): horizonguide reproduces exactly; horizonmerge 92-species split has no re"
+    },
+    {
+      "lens": "",
+      "id": "F6",
+      "flaw": "C6 (# EG:Z: tags from src/egraph.rs): implemented and unit-tested (SURVIVED)"
+    },
+    {
+      "lens": "",
+      "id": "F1",
+      "flaw": "C1: The 10,000-segment HPRC chr22 subgraph is 96.09% N-bases (10.51 Mbp in one segment) and mixes in chr14 /"
+    },
+    {
+      "lens": "",
+      "id": "F2",
+      "flaw": "C2: HPRC chr6 precision (48.63%) conditions on pairsonhprc1to1x, excluding 60.43M (21.4%) off-target pairs"
+    },
+    {
+      "lens": "",
+      "id": "F3",
+      "flaw": "C3: horizonmerge (92/100 chrM species) samples only a 16.5 kb organelle, and horizonguide (5 mammals) samp"
+    },
+    {
+      "lens": "",
+      "id": "F4",
+      "flaw": "C4: C4 omits MAF-block concatenation (11\u2013387 KB slices including new B10K), cherry-picks 18%-GC (0 pairs) over"
+    },
+    {
+      "lens": "",
+      "id": "F5",
+      "flaw": "C5: BandGrid flat buffer indexing is a deterministic layout identity with no sampling component"
+    },
+    {
+      "lens": "",
+      "id": "F6",
+      "flaw": "C6: # EG:Z: tag emission is a format claim outside the sampling lens"
+    },
+    {
+      "lens": "",
+      "id": "F1",
+      "flaw": "C1: Single-run (n = 1) runtime comparison with unquantified variance and confounded task scope"
+    },
+    {
+      "lens": "",
+      "id": "F2",
+      "flaw": "C2: Conditioned precision denominator (48.63%) omits 60.4M (21.4%) emitted pairs, inconsistent with ~2.6x multip"
+    },
+    {
+      "lens": "",
+      "id": "F3",
+      "flaw": "C3: Single-run (n = 1) multi-species timings with zero accuracy or concordance statistics"
+    },
+    {
+      "lens": "",
+      "id": "F4",
+      "flaw": "C4: Oracle (refid, tgtid) pairing and MAF-only FASTA extraction inflate precision; 18%-GC null claim rests on n ="
+    },
+    {
+      "lens": "",
+      "id": "F5",
+      "flaw": "C5 and C6: Deterministic indexing and tag-emission claims"
+    },
+    {
+      "lens": "",
+      "id": "F6",
+      "flaw": "Claim-list steering: C1\u2013C6 omit uncalibrated ncal = 15 CRC, 0.55 Karlin coefficient, and companion toy-example"
+    }
+  ],
+  "open": [
+    {
+      "id": "R1-IMPL",
+      "summary": "Track chr6 HPRC/minimap2 and 10k-subgraph/vg scripts in scripts/benchmarks/, and audit/reproduce src/mdl/dag.rs (horizon_wga --graph)."
+    },
+    {
+      "id": "R1-HMM",
+      "summary": "Run a tracked multi-seed random-GC (18%, 30%, 45%) false-positive sweep and implement/calibrate dynamic n_cal=15 CRC & gap-bit penalties beyond fixed defaults."
+    },
+    {
+      "id": "R2-HMM-XDROP",
+      "summary": "Implement multi-contig progressive .hal emission in horizon_guide and audit src/hal/hdf5_read.rs / decode_hal_* against a real external .hal fixture (un-ignoring the .hal test)."
+    },
+    {
+      "id": "R2-RESOLVE-LIFT",
+      "summary": "Add external FastGA, LASTZ, KegAlign, odgi, and gfatools baselines on identical hardware, plus horizon_merge/horizon_guide MAF accuracy verification."
+    },
+    {
+      "id": "R5-BIB",
+      "summary": "Sync all 15 new horizon_paper.md references into manuscript/references.bib and remove the 2 orphan .bib entries."
+    },
+    {
+      "id": "R2-INDEX-RAM",
+      "summary": "Track full chr6 HPRC/minimap2 benchmark & scoring scripts in scripts/benchmarks/ (8cd5db0/2896229 numbers verified, but extraction/comparison scripts currently live in /tmp/)."
+    }
+  ],
+  "unchallenged": [
+    {
+      "claim": "C5",
+      "lens": "statistics",
+      "reason": "deterministic BandLayout indexing formula"
+    },
+    {
+      "claim": "C6",
+      "lens": "sampling",
+      "reason": "structural # EG:Z: / EG:Z: tag emission"
+    },
+    {
+      "claim": "C6",
+      "lens": "statistics",
+      "reason": "structural # EG:Z: / EG:Z: tag emission"
+    }
+  ],
+  "discharges": {
+    "Round 5 (Round 4 C1 sampling unchallenged slot re-examined across all 7 lenses on empirical C1-C4)": [
+      "4-h5c2c20"
+    ]
+  },
+  "decisions": [],
+  "sealed_blobs": {
+    "attack-correctness.md": {
+      "blob": "7c350dab522c87fa1c6a935214e0e4d42bf936fd",
+      "ref": "refs/round/seal/5/attack-correctness.md"
+    },
+    "attack-inference.md": {
+      "blob": "675f23f6ceb6b2ec4921b834bf61ce0e0e64991a",
+      "ref": "refs/round/seal/5/attack-inference.md"
+    },
+    "attack-prior-art.md": {
+      "blob": "6702f5639c8f20599fd144f33ce1d82adb4e2123",
+      "ref": "refs/round/seal/5/attack-prior-art.md"
+    },
+    "attack-provenance.md": {
+      "blob": "4720baf92de542960fbac5ce15ec73c2e8268f66",
+      "ref": "refs/round/seal/5/attack-provenance.md"
+    },
+    "attack-sampling.md": {
+      "blob": "3d5a772c76a7d4a116d97e76d63516ef420dd3bb",
+      "ref": "refs/round/seal/5/attack-sampling.md"
+    },
+    "attack-statistics.md": {
+      "blob": "7a77ff395ac90c0c979bfd2b2b20dd5f88cd573f",
+      "ref": "refs/round/seal/5/attack-statistics.md"
+    }
+  },
+  "diversity": {
+    "attacks": 7,
+    "lenses": [
+      "correctness",
+      "sampling",
+      "statistics",
+      "provenance",
+      "inference",
+      "prior-art",
+      "reproduction"
+    ],
+    "mean_pairwise_similarity": 0.214,
+    "max_pairwise_similarity": 0.317,
+    "most_similar_pair": [
+      "attack-L1-correctness.md",
+      "attack-L5-inference.md"
+    ],
+    "claims_answered": 6,
+    "claims_corroborated": 6,
+    "claims_single_voter": 0,
+    "claims_unanimous": 1,
+    "verdict_agreement": 0.167,
+    "findings_mode": "synthesized",
+    "findings_filed": 42,
+    "findings_per_attacker": {
+      "attack-L1-correctness.md": 4,
+      "attack-L2-sampling.md": 6,
+      "attack-L3-statistics.md": 6,
+      "attack-L4-provenance.md": 6,
+      "attack-L5-inference.md": 7,
+      "attack-L6-prior-art.md": 7,
+      "attack-L7-reproduction.md": 6
+    },
+    "distinct_flaws": 42,
+    "flaws_named_by_more_than_one_attacker": 0,
+    "duplicate_rate": 0.0
+  },
+  "outcome": "REFUTED_AND_BOTH_MANUSCRIPTS_REPAIRED",
+  "landed": "All 7 lenses + completeness critic + 8 adjudicators ran across both horizon_paper.md and horizon_companion.md; 8 adjudicated free repairs (COR-1..COR-8) applied to both manuscripts, generate_figures.py, and horizon_paper.pdf (qualified counter-only vg comparison, 96.09% N-base 10k subgraph, 38.22% unconditional chr6 precision, 8cd5db0/2896229 commit pinning, 18%-GC seed=999 vs 80-448 multi-seed FPs, single-contig HAL stub, 97 active tests, Gulhan 2025 DOI, replaced Eisenstein KP-14 and GFA<->MAF lens laws in companion, fixed BandLayout::slot formula and 6bp worked example).",
+  "overturned": "L5-F5 overturned (BandLayout::slot in src/mdl/dp.rs already centers on floor(i*m/n)); L3-F2 narrowed from full refutation to precision/multiplicity leg; L6-F1/F2/F4/F7 narrowed on existing citations and minimap2 side-by-side reporting.",
+  "class": "companion-drift-provenance-and-statistical-qualification",
+  "survived": "97 active Rust unit tests (+1 ignored) with 0 clippy warnings; 81.4M-segment 12 GB HPRC streaming (96.9 MB RSS); full GRCh38.chr6 x CHM13.chr6 alignment (258.88-304.53 s, 99.54% base-coverage recall, 97.96% exact recall vs HPRC 1-to-1 segments); 8 verified external reference-MAF slices including B10K 363-way (71.1%/95.1% in 0.642 s).",
+  "post_round_audit": {
+    "by": "49d61257-2436-4355-8b77-038c755c0125",
+    "date": "2026-11-20",
+    "evidence": "reports/rounds/round-5/cold-audit.md: PASS; cargo fmt --check, cargo clippy --all-targets --all-features -- -D warnings, cargo test --all-features (97 passed, 0 failed, 1 ignored), rg 0 matches for KP-14|BandGrid|1110110110111, scripts/round corrections 5 (8/8 APPLIED), scripts/round check 5 --full (exit 0)."
+  }
+}

@@ -2,7 +2,7 @@
 title: "Horizon Technical Companion: Data Representations, Mathematical Foundations, and Worked Examples"
 author:
   - "Richard Burhans (ORCID 0009-0006-5949-0958)"
-date: "2026-11-18"
+date: "2026-11-20"
 ---
 
 # 1. Purpose and Scope
@@ -16,9 +16,9 @@ This companion document provides the data-format specifications, mathematical de
 | `src/bocpd.rs` | Beta-Bernoulli Bayesian Online Changepoint Detection (`bocpd_gc_profile`) |
 | `src/coord.rs` | 0-based half-open & UCSC reverse-strand interval arithmetic (`Interval`) |
 | `src/gfa/mod.rs` | Streaming `GFA v1.0/v1.1` reader (`MultiGzDecoder` + bounded `SpoolableGfaInput` stdin spooling) |
-| `src/mdl/` | Flat `BandGrid`, three-state MDL forward-backward DP (`dp.rs`), seeded topological DAG/POA DP (`dag.rs`), adaptive `HmmParams` shrinkage (`mod.rs`), X-drop flank extension |
+| `src/mdl/` | Flat `BandLayout`, three-state MDL forward-backward DP (`dp.rs`), seeded topological DAG/POA DP (`dag.rs`), adaptive `HmmParams` shrinkage (`mod.rs`), X-drop flank extension |
 | `src/merge.rs` | `O(N log N)` sweep-line `interval_match_score` netting, `thread_interval_columns`, transitive rescue |
-| `src/formats.rs` | `MAF`, reference-anchored `rGFA`, and bidirectional `GFA` ↔ `MAF` lens round-trips |
+| `src/formats.rs` | `MAF`, reference-anchored `rGFA`, `partition_colinear_blocks` multi-chain partitioning, and `# HB:Z:` / `# EG:Z:` metadata emission |
 | `src/egraph.rs` | Congruence-closed equality saturation with `MdlCostModel` for tandem duplications and nested inversions |
 | `src/hal/` | Pure-Rust `Seek`-based HDF5 `v0`/`v1` parser (`hdf5_read.rs`), `libhdf5`-compatible `v0` writer (`hdf5_write.rs`), and `HAL` binary array decoders |
 | `src/bin/` | `horizon` (unified subcommand CLI), `horizon_wga`, `horizon_merge`, `horizon_guide`, `horizon_gfa`, `horizon_lift`, `horizon_clean`, `horizon_resolve`, `horizon_eval`, `bench_chr1` |
@@ -49,11 +49,8 @@ Graph outputs (`horizon_wga --gfa` and `horizon_merge`) use GFA v1.1 / `rGFA` co
   - `SO:i:<offset>` — 0-based start offset on `SN`.
   - `SR:i:0` — rank `0` for reference-backbone segments.
 - **Horizon Bubble (`# HB:Z:`) annotations:** Unaligned intervals where `ΔL < λ̂` or inter-LCB spans exceed the dynamic-programming ceiling are emitted as explicit bubble records carrying `(ref_start, ref_end, qry_start, qry_end, reason)` rather than forced base-by-base alignments.
-- **E-Graph Paralog (`# EG:Z:`) annotations:** Collapsed tandem duplications and nested inversions resolved by `src/egraph.rs` are recorded as `# EG:Z:` tags so downstream tools can distinguish collapsed paralogs from single-copy synteny.
-- **Bidirectional `GFA` ↔ `MAF` Lens:** Viewing `MAF` as an asymmetric view `A = get(C)` of the full homology graph `C` (which also stores bubbles, paralogs, and non-reference blocks), edits on the `MAF` side map back via `putback(A', C)` while obeying three lens laws:
-  1. **GETPUT:** `putback(get(C), C) == C`.
-  2. **PUTGET:** `get(putback(A', C)) == A'`.
-  3. **Constant Complement:** `# HB:Z:` bubbles, `# EG:Z:` paralogs, and non-reference blocks are preserved unchanged across round-trips.
+- **E-Graph Paralog (`# EG:Z:` / `EG:Z:`) annotations:** Collapsed tandem duplications resolved by `src/egraph.rs` (`collect_dups`, which emits `Dup` spans while leaving `Expr::Inv` unrecorded) are written as `# EG:Z:` comment lines by `src/formats.rs` / `horizon_merge` (ignored by standard GFA record parsers) and as `EG:Z:` optional tags on `W` lines by `horizon_resolve --tag-walks`.
+- **GFA ↔ MAF Interoperability:** `src/formats.rs` emits both `MAF` blocks and `rGFA` segments/`L`-links alongside `# HB:Z:` bubble comments (note that formal bidirectional lens combinators such as `get`/`putback` are not implemented in `src/formats.rs`).
 
 ## 2.3 Pure-Rust `Seek`-Based HDF5 and `HAL` Binary Layout (`src/hal/`)
 
@@ -84,21 +81,15 @@ Graph outputs (`horizon_wga --gfa` and `horizon_merge`) use GFA v1.1 / `rGFA` co
 
 # 3. Mathematical and Algorithmic Foundations
 
-## 3.1 Strand-Symmetric `KP-14` Eisenstein Seeding and Repeat Filtering (`src/seeding/`)
+## 3.1 Strand-Symmetric Canonical Spaced-Seed Indexing and Repeat Filtering (`src/seeding/`)
 
-To avoid canonicalizing forward and reverse-complement *k*-mers separately, Horizon encodes nucleotides over the quadratic extension field **F**_{q²} (*q* = 2⁶¹ − 1) using sixth-root Eisenstein units:
-
-```text
-φ(A) = 1,   φ(T) = -1,   φ(C) = ω,   φ(G) = -ω
-```
-
-Because Watson–Crick complements map to exact algebraic negatives (`φ(b̄) = −φ(b)`), the forward polynomial `F` and reverse-complement polynomial `R` over any spaced-seed mask `M` satisfy `(F + λ)(R + λ)` invariance under strand reversal.
+To avoid storing forward and reverse-complement *k*-mers separately, `src/seeding/` encodes 2-bit nucleotides into packed `u64` words along both strands and takes the canonical minimum `fwd.min(rc)` over each spaced-seed mask `M` (`FlatSeedIndex` in `src/seeding/flat_index.rs`, `12 bytes/entry` post-build with 16-bit prefix bucketing).
 
 Step-by-step seeding pipeline on target `X` (length `N`) and query `Y` (length `M`):
 
 1. **Low-Complexity Window Guard (`is_low_complexity_window`):** Before hashing any spaced seed, Horizon checks the spanned window for homopolymer dominance (`max_base_count >= len * 3 / 4`) or dinucleotide periodicity (`di_count_01 >= len * 3 / 8`). Filtering simple AT-rich microsatellites and poly-A tracts at indexing time prevents `O(k²)` seed-hit explosions on `~3 Mb` mammalian and *Plasmodium* contigs without any genome-specific repeat masker.
 2. **Multi-Tier Seed Vocabulary:**
-   - **Exact spaced seeds:** `KP-14` masks at weight `12` (`MASK_W12`, span `15`) and uncovered-gap fallback weight `10` (`MASK_W10`, span `13`, activated only on regions left uncovered by `w = 12` LCBs).
+   - **Exact spaced seeds:** Canonical `u64` spaced masks at weight `11` (`MASK_PRIMARY_11_15` `111011011011011`, span `15`, and `MASK_PH11_18`, span `18`) plus uncovered-gap fallback weight `10` (`MASK_W10` `11011011011011`, span `14`, activated only on regions left uncovered by primary LCBs).
    - **Transition seeds:** `MASK_LASTZ11` (1 transition) and `MASK_LASTZ12` (*T* ∈ {1, 2} transitions), gated by ungapped high-scoring pair (HSP) extension.
    - **Reduced-alphabet seeds:** `MASK_RY20` (purine/pyrimidine) and `MASK_W10` (weak/strong H-bond), activated on HSP-supported regions.
    - **Six-frame biochemical amino-acid seeds (`5-of-6`):** Translates all six reading frames into 9 biochemical equivalence classes (`aa_group`) to recover coding homology where synonymous third-codon positions have saturated.
@@ -119,9 +110,9 @@ where the Beta-Bernoulli predictive probability `π(x_t = 1 | r) = (α_0 + s_r) 
 
 **Figure C2. Online BOCPD tracking across an isochore boundary drives calibrated MDL abstention.** **A.** Local A+T share (`P(W)`) estimated online by Beta-Bernoulli BOCPD resets cleanly at an abrupt `19%` → `45%` GC boundary (`t ≈ 220 bp`), whereas a fixed `HOXD70` prior (`52.5%` A+T) miscalibrates the `~81%`-AT left isochore. **B.** Three-state MDL column posteriors `P(M_ij | X, Y)` remain near `0.90–0.97` across conserved flanks and collapse below the `0.15` floor inside an unalignable loop (`310–410 bp`), triggering an explicit Horizon Bubble (`ΔL = −8.4 bits < λ̂`). Visual dictionary: blue shows BOCPD `P(W)`, orange marks the changepoint reset, green shows MDL column posteriors, and shaded vermilion marks the abstained Horizon Bubble.
 
-## 3.3 Continuous Search-Space MDL Scaling and `BandGrid` (`src/mdl/`)
+## 3.3 Continuous Search-Space MDL Scaling and `BandLayout` (`src/mdl/`)
 
-For each candidate anchor or inter-anchor gap (`X` of length `N`, `Y` of length `M`), Horizon evaluates a three-state Minimum Description Length pair-HMM (`M` match/mismatch, `I` insertion, `D` deletion) in log-space (`logplus`), parameterized by the local BOCPD base frequencies:
+For each candidate anchor or inter-anchor gap (`X` of length `N`, `Y` of length `M`), Horizon evaluates a three-state Minimum Description Length pair-HMM (`M` match/mismatch, `I` insertion, `D` deletion; Allison et al. 1992) in log-space (`logplus`), parameterized by the local BOCPD base frequencies:
 
 - **Joint description length:** `L_joint = −log₂ P(X, Y | aligned)`
 - **Local null description length:** `L_null = −log₂ P_BOCPD(X) − log₂ P_BOCPD(Y)`
@@ -136,17 +127,17 @@ search_space_bits = 0.55 · log₂(max(L_ref, 1) · max(L_qry, 1))
 
 This scales smoothly from `~7.3` bits on `100 bp` windows up to `~23.7` bits on `3 Mb × 3 Mb` chromosomes, raising the effective significance floor (`λ_eff = max(λ̂, search_space_bits)`) naturally with sequence size.
 
-**Contiguous `BandGrid` layout:** To eliminate Python's sparse-dictionary bottleneck (`34.2%` of prototype runtime), forward (`α`) and backward (`β`) tables are stored in a single flat `Vec<f64>` of stride `S = 2W + 1` (default `band_w = 180`). For target index `i` and query index `j` within `|j − i| ≤ W`, the flat buffer index is:
+**Contiguous `BandLayout` indexing (`src/mdl/dp.rs`):** Forward (`α`) and backward (`β`) DP tables are stored in a single flat `Vec<f64>` of clamped half-width `W = min(band_w, max(N, M))` (default `band_w = 180`) and stride `S = 2W + 1`. For target index `i` with proportional band center `c(i) = floor(i · M / max(N, 1))` and query index `j` within `|j − c(i)| ≤ W`, the flat buffer index is:
 
 ```text
-idx(i, j) = i · (2W + 1) + (j − i + W)
+idx(i, j) = i · (2W + 1) + (j − c(i) + W)
 ```
 
-where `j − i + W ∈ [0, 2W]` maps the main diagonal `j = i` to column `W` in every row (Figure C3A).
+where `j − c(i) + W ∈ [0, 2W]` maps the band center `j = c(i)` to column `W` in every row (reducing to `j − i` when `N = M`, as in Figure C3A, and in X-drop flank extension).
 
-![BandGrid Flat Indexing and E-Graph Saturation](figures/fig_c2_bandgrid_egraph.png)
+![BandLayout Flat Indexing and E-Graph Saturation](figures/fig_c2_bandgrid_egraph.png)
 
-**Figure C3. Flat `BandGrid` diagonal memory layout and congruence-closed e-graph paralog collapse.** **A.** `BandGrid` maps diagonal coordinates `(i, j)` with `|j − i| ≤ W` into a contiguous `Vec<f64>` of stride `2W + 1` (`W = 2`, stride `5` shown), placing the main diagonal at offset `W` (`2`). **B.** E-graph equality saturation applies `inv(inv(A)) ↔ A` and congruence closure to merge `seq(inv(inv(A)), A)` with `seq(A, A)` before collapsing tandem duplications (`seq(A, A) → dup(A)`) at minimum parsimony cost. Visual dictionary: dark blue marks the main diagonal `j = i`, light blue marks off-diagonal band cells, and green marks the extracted minimum-cost e-graph expression.
+**Figure C3. Flat `BandLayout` diagonal memory layout and congruence-closed e-graph paralog collapse.** **A.** `BandLayout` maps diagonal coordinates `(i, j)` with `|j − c(i)| ≤ W` into a contiguous `Vec<f64>` of stride `2W + 1` (`W = 2`, stride `5` shown for `N = M` where `c(i) = i`), placing the band center at offset `W` (`2`). **B.** E-graph equality saturation applies `inv(inv(A)) ↔ A` and congruence closure to merge `seq(inv(inv(A)), A)` with `seq(A, A)` before collapsing tandem duplications (`seq(A, A) → dup(A)`) at minimum parsimony cost. Visual dictionary: dark blue marks the main diagonal `j = i`, light blue marks off-diagonal band cells, and green marks the extracted minimum-cost e-graph expression.
 
 ## 3.4 Conformal Risk Control and Horizon Bubbles (`src/mdl/`)
 
@@ -161,7 +152,7 @@ Horizon treats alignment emission as a calibrated statistical decision. Using Co
    - `seq(X, X) -> dup(X)` (tandem duplication collapse).
    Bottom-up `MdlCostModel` extraction (`extract_min_mdl_cost`) prices leaf catalog pointers (`log₂ K` bits), composition (`seq`, `inv` at `1.0` bit), and duplication residuals (`H₂(d) + d log₂ 3` bits) to select `dup(X)` across both pairwise LCBs (`# EG:Z:`) and GFA `P`/`W` walks (`horizon_resolve`). This recovers duplicated and inverted regions that greedy 1-to-1 synteny filters discard (Figure C3B).
 2. **`horizon_merge` Sweep-Line (`src/merge.rs`):** Sorts all pairwise intervals by reference start in `O(N log N)` time. It applies `interval_match_score` netting to resolve overlapping chains into a non-overlapping backbone, then runs `thread_interval_columns` to insert shared gap columns across all taxa simultaneously.
-3. **`horizon_guide` Transitive Rescue (`src/bin/horizon_guide.rs`):** Aligns sister taxa progressively along a Newick guide tree. It applies `rescue_transitive_maf`—using an intermediate sibling with high pairwise identity to bridge divergent outgroup intervals—before ancestral consensus construction and HDF5 `v0` `.hal` export (`src/hal/hdf5_write.rs`).
+3. **`horizon_guide` Transitive Rescue (`src/bin/horizon_guide/main.rs`):** Aligns sister taxa progressively along a Newick guide tree. It applies `rescue_transitive_maf`—using an intermediate sibling with high pairwise identity to bridge divergent outgroup intervals—before ancestral consensus construction and single-contig star-tree HDF5 `v0` `.hal` export (`src/hal/hdf5_write.rs`).
 4. **Streaming GFA Pangenome Tools (`src/gfa/mod.rs`, `src/coord.rs`, `src/mdl/dag.rs`):** `horizon_gfa` provides `O(1)`-memory graph `stats` and two-pass chromosome `extract`; `horizon_lift` performs two-pass `P`/`W` BED/GFF3 liftover with `--bridge-bp` coalescing; `horizon_clean` scores `L`-junctions with `bocpd_gc_profile` changepoint bits; and `horizon_wga --graph` aligns queries to bidirected GFA DAGs via `MASK_W10` + `MASK_RY20` seeding and topological Pair-HMM MDL DP (`align_seq_to_dag_seeded`).
 
 ---
@@ -173,12 +164,12 @@ Consider a 22 bp *Plasmodium*-like pair with a complex AT-rich left flank (`25%`
 - **Target `X` (22 bp):** `AATTGCATATCG` `GGGGCC` `ATCG`
 - **Query `Y` (22 bp):** `AATTGCATATCG` `CCTTTT` `ATCG`
 
-1. **Low-Complexity Check & Seeding:** In the 12 bp prefix `AATTGCATATCG`, the maximum single-base count is `4` (`A`/`T`, `< 12 * 3 / 4 = 9`) and dinucleotide periodicity is below threshold, so `is_low_complexity_window` passes. `KP-14` (`w = 10`) anchors the identical `0..12` prefix and `18..22` suffix. This leaves a `6 bp` inter-anchor gap (`X[12..18] = GGGGCC` vs. `Y[12..18] = CCTTTT`).
-2. **BOCPD Tracking:** Over `X[0..12]` (`75%` A/T), `bocpd_gc_profile` estimates `P(W) ≈ 0.72`. At `X[12] = G`, the changepoint hazard shifts `P(W)` downward across the GC-rich insert.
-3. **Banded MDL Scoring (`BandGrid`):**
-   - For the `6 bp` gap (`band_w = 180`), `BandGrid` allocates `(6 + 1) × (2 · 180 + 1)` floats and evaluates `idx(i, j) = i · 361 + (j − i + 180)` in `O(1)` per cell.
-   - On the conserved prefix (`12 bp`), matching all 12 bases under `P(W) ≈ 0.72` yields `ΔL ≈ +17.8` bits (`≥ λ̂ = 10.0` bits) with column posteriors `P(M_ij) > 0.95`.
-   - Inside the `6 bp` gap (`GGGGCC` vs. `CCTTTT`), 0 of 6 bases match, giving `ΔL ≈ −6.4` bits (`< 10.0` bits) and `P(M_ij) < 0.15`.
+1. **Low-Complexity Check & Seeding:** In the 12 bp prefix `AATTGCATATCG`, the maximum single-base count is `4` (`A`/`T`, `< 12 * 3 / 4 = 9`) and dinucleotide periodicity is below threshold, so `is_low_complexity_window` passes. `MASK_W10` (`w = 10`) anchors the identical `0..12` prefix and `18..22` suffix. This leaves a `6 bp` inter-anchor gap (`X[12..18] = GGGGCC` vs. `Y[12..18] = CCTTTT`).
+2. **BOCPD Tracking:** Over `X[0..12]` (`75%` A+T), `bocpd_gc_profile` estimates `P(W) ≈ 0.69` (`0.684–0.699`). At `X[12] = G`, the changepoint hazard shifts `P(W)` downward across the GC-rich insert.
+3. **Banded MDL Scoring (`BandLayout`):**
+   - For the `6 bp` gap (`band_w = 180`), `BandLayout` clamps `W = min(180, 6) = 6`, allocating `(6 + 1) × (2 · 6 + 1) = 91` floats (`idx(i, j) = i · 13 + (j − i + 6)` since `N = M`) in `O(1)` per cell.
+   - On the conserved prefix (`12 bp`), matching all 12 bases under `P(W) ≈ 0.69` yields `ΔL ≈ +17.8` bits (`≥ λ̂ = 10.0` bits) with column posteriors `P(M_ij) > 0.95`.
+   - Inside the `6 bp` gap (`GGGGCC` vs. `CCTTTT`), 0 of 6 bases match, giving `ΔL ≈ −9.76` bits (`< 10.0` bits) and `P(M_ij) < 0.15`.
 4. **Conformal Gate & Output:** Horizon emits the aligned `MAF` blocks for `0..12` and `18..22`, and isolates `12..18` as an explicit `# HB:Z:` **Horizon Bubble** in the `GFA` graph rather than forcing 6 mismatched bases into a false alignment.
 
 ---
@@ -188,6 +179,5 @@ Consider a 22 bp *Plasmodium*-like pair with a complex AT-rich left flank (`25%`
 - **Adams RP & MacKay DJC** (2007). Bayesian online changepoint detection. *arXiv preprint* `arXiv:0710.3742`.
 - **Allison L, Wallace CS, Yee CN** (1992). Finite-state models in the alignment of macromolecules. *Journal of Molecular Evolution*, 35(1):77–89.
 - **Angelopoulos AN, Bates S, Fisch A, Lei L, Schuster T** (2024). Conformal risk control. *ICLR 2024* (`arXiv:2208.02814`).
-- **Foster JN, Greenwald MB, Moore JT, Pierce BC, Schmitt A** (2007). Combinators for bidirectional tree transformations: A linguistic approach to the view-update problem. *ACM TOPLAS*, 29(3):17.
 - **Hickey G, Paten B, Earl D, Zerbino D, Haussler D** (2013). HAL: a hierarchical format for storing and analyzing multiple genome alignments. *Bioinformatics*, 29(10):1341–1342.
 - **Willsey M, Nandi C, Wang YR, Flatt O, Tatlock Z, Panchekha P** (2021). egg: Fast and extensible equality saturation. *PACMPL*, 5(POPL):1–29.

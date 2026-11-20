@@ -4,10 +4,10 @@ A pure-Rust **information-theoretic genome alignment and pangenome suite** combi
 
 ## Key Capabilities
 
-- **Pairwise & DAG/POA MDL alignment (`horizon_wga`):** Strand-symmetric `KP-14` (`11-of-15`) indexing in `FlatSeedIndex` (`12 bytes/entry` + 16-bit prefix buckets) with SDUST repeat masking, Rayon-parallel `LASTZ12`/`LASTZ11` transition seeding, `w=10`/`w=9`, 1-bit `R/Y`, and 6-frame `AA5` fallback seeding, driving flat `BandGrid` Pair-HMM forward-backward alignment (`src/mdl/dp.rs`) and seeded DAG/POA alignment (`horizon_wga --graph`, `src/mdl/dag.rs`).
-- **Calibrated epistemic abstention (Horizon Bubbles):** Intervals falling below the search-space-scaled MDL floor (`0.55 log2(N*M)` + conformal `10.0`-bit floor) or `min_post_prob` abstain explicitly as `# HB:Z:` / `HB:i:1` Horizon Bubbles rather than forcing spurious base pairs.
+- **Pairwise & DAG/POA MDL alignment (`horizon_wga`):** Canonical `fwd.min(rc)` spaced-seed (`11-of-15`) indexing in `FlatSeedIndex` (`12 bytes/entry` + 16-bit prefix buckets) with SDUST repeat masking, Rayon-parallel `LASTZ12`/`LASTZ11` transition seeding, `w=10`/`w=9`, 1-bit `R/Y`, and 6-frame `AA5` fallback seeding, driving flat `BandLayout` Pair-HMM forward-backward alignment (`src/mdl/dp.rs`) and seeded DAG/POA alignment (`horizon_wga --graph`, `src/mdl/dag.rs`).
+- **Calibrated epistemic abstention (Horizon Bubbles):** Intervals falling below the search-space-scaled MDL floor (`0.55 log2(N*M)` + fixed `10.0`-bit conformal floor) or `min_post_prob` abstain explicitly as `# HB:Z:` / `HB:i:1` Horizon Bubbles rather than forcing spurious base pairs.
 - **Streaming `12 GB+` GFA pangenome toolkit (`src/gfa/mod.rs`, `src/coord.rs`):**
-  - `horizon_gfa`: Single-pass BGZF/gzip (`MultiGzDecoder`) `stats` (`196.93 s`, `96.9 MB` RSS across `81.4M` segments / `3.29 Gbp`) and two-pass chromosome `extract`.
+  - `horizon_gfa`: Single-pass counter-only BGZF/gzip (`MultiGzDecoder`) `stats` (`196.93 s`, `96.9 MB` RSS across `81.4M` segments / `3.29 Gbp`) and two-pass chromosome `extract`.
   - `horizon_lift`: Graph-aware BED/GFF3 coordinate liftover with `--bridge-bp` micro-bubble coalescing and UCSC reverse-strand arithmetic.
   - `horizon_clean`: Two-pass `S`-flank-indexed BOCPD+MDL junction scoring that severs unsupported (`sup=0`) discordant links into Horizon Bubbles.
   - `horizon_resolve`: Standalone MDL-calibrated e-graph resolution (`MdlCostModel`) over GFA `P`/`W` walks (`--collapse-dups`, `--tag-walks`).
@@ -32,18 +32,19 @@ src/
 │   └── translated.rs   # 6-frame biochemical AA5 seeding & HSP-gated LASTZ12
 ├── mdl/
 │   ├── mod.rs          # Contig-pair alignment pipeline & adaptive HmmParams shrinkage
-│   ├── dp.rs           # Flat BandGrid Pair-HMM Forward-Backward & X-drop extension
+│   ├── dp.rs           # Flat BandLayout Pair-HMM Forward-Backward & X-drop extension
 │   └── dag.rs          # Seeded topological DAG/POA MDL alignment (--graph)
 ├── hal/
 │   ├── mod.rs          # In-memory HalAlignment model, paralog chaining, MAF export
 │   ├── hdf5_read.rs    # Streaming Read+Seek HDF5 v0/v1 & HAL binary array decoder
 │   └── hdf5_write.rs   # Pure-Rust HDF5 v0 writer (multi-level B-trees)
 └── bin/
+    ├── horizon.rs          # Unified `horizon <subcommand>` dispatcher
     ├── horizon_wga.rs      # Pairwise WGA, DAG/POA (--graph), and --hal-info CLI
     ├── horizon_merge.rs    # Multi-species pairwise MAF -> MAF + rGFA merger
-    ├── horizon_guide.rs    # Progressive guide-tree / central-hinge WGA + HAL export
+    ├── horizon_guide/      # Progressive guide-tree / central-hinge WGA + HAL export
     ├── horizon_gfa.rs      # Streaming GFA stats & two-pass chromosome extract
-    ├── horizon_lift.rs     # Graph-aware BED/GFF3 coordinate liftover
+    ├── horizon_lift/       # Graph-aware BED/GFF3 coordinate liftover
     ├── horizon_clean.rs    # BOCPD+MDL GFA junction scorer & bubble cutter
     ├── horizon_resolve.rs  # Standalone GFA walk e-graph duplication resolver
     ├── horizon_eval.rs     # Pairwise MAF recall/precision evaluator
@@ -105,7 +106,7 @@ target/release/horizon_guide --progressive --rbest --hal out.hal tree.nwk genome
   - Full-graph `horizon_gfa stats` (`81.4M` segments, `3.29 Gbp`, `113.0M` links): **196.93 s**, **96.9 MB** peak RSS.
   - `horizon_lift --bridge-bp 10` (`500` `GRCh38.chr22` 1-kb windows → `CHM13.chr22`): **177.55 s**, **708.8 MB** peak RSS (`472` exact, `5` partial, `15` split, `8` unmapped).
   - `horizon_wga --resolve-dups` (`GRCh38.chr22` vs `CHM13.chr22`): **69.10 s**, **3,971.6 MB** peak RSS (`95.6%` of `CHM13.chr22` q-arm).
-  - `horizon_wga --resolve-dups` (`GRCh38.chr6` `170.8 Mbp` vs `CHM13.chr6` `110.7 Mbp`): **258.88s–304.53s** (`282.2M` pairs, `98.9%` of `CHM13.chr6` q-arm), **99.54%** base-coverage recall and **97.96%** exact base-coordinate recall against `1,628,018` `1-to-1` HPRC graph segments (vs `minimap2 -x asm5`: `46.95s`, `2,947.5 MB` RSS, `99.71%` exact recall / `99.75%` exact precision).
+  - `horizon_wga --resolve-dups` (`GRCh38.chr6` `170.8 Mbp` vs `CHM13.chr6` `110.7 Mbp`): **258.88s–267.86s** on `8cd5db0` (`304.53s` on `2896229` with multi-chain `partition_colinear_blocks`, `282.2M` pairs, `98.9%` of `CHM13.chr6` q-arm), **99.54%** base-coverage recall, **97.96%** exact base-coordinate recall, **48.63%** conditioned exact pair precision (**38.22%** unconditional across all emitted pairs) against `1,628,018` `1-to-1` HPRC graph segments (vs `minimap2 -x asm5`: `46.95s`, `2,947.5 MB` RSS, `99.71%` exact recall, `99.75%` conditioned / `99.60%` unconditional exact precision).
 
 ## Documentation
 

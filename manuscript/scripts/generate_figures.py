@@ -88,7 +88,7 @@ def make_fig1_architecture() -> None:
 
     # Stage 3: BOCPD + Banded MDL
     box(5.15, 2.35, 2.35, 1.45, "3. BOCPD + Banded MDL",
-        "Beta-Bernoulli BOCPD\n3-state logplus BandGrid\nTopological DAG MDL DP\n+ X-drop flank extension",
+        "Beta-Bernoulli BOCPD\n3-state logplus BandLayout\nTopological DAG MDL DP\n+ X-drop flank extension",
         "#FFF7E6", OI_ORANGE)
 
     # Stage 4: Conformal Abstention
@@ -300,11 +300,11 @@ def make_fig4_ablation_profile() -> None:
 
     y = np.arange(len(pairs))
     stages = [
-        ("KP-14 w=12", w12, OI_BLUE),
+        ("Canonical w=11/12", w12, OI_BLUE),
         ("w=10 fallback", w10, OI_SKY),
         ("LASTZ12 1-trans", lz1, OI_ORANGE),
         ("LASTZ11 + AA5", multi, OI_VERMILION),
-        ("BandGrid MDL DP", dp, OI_GREEN),
+        ("BandLayout MDL DP", dp, OI_GREEN),
         ("X-drop + I/O", other, OI_GRAY),
     ]
     left = np.zeros(len(pairs))
@@ -376,7 +376,7 @@ def make_fig_c1_bocpd_mdl_trace() -> None:
 def make_fig_c2_bandgrid_egraph() -> None:
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11.0, 4.3), gridspec_kw={"width_ratios": [1.0, 1.2]})
 
-    # Left: BandGrid diagonal band vs flat Vec<f64>
+    # Left: BandLayout diagonal band vs flat Vec<f64>
     ax1.set_xlim(0, 10)
     ax1.set_ylim(0, 10)
     ax1.invert_yaxis()
@@ -384,7 +384,7 @@ def make_fig_c2_bandgrid_egraph() -> None:
     ax1.set_yticks(range(11))
     ax1.set_xlabel("Query coordinate j")
     ax1.set_ylabel("Target coordinate i")
-    ax1.set_title("A. BandGrid Diagonal Band (W = 2, stride = 2W + 1 = 5)", loc="left")
+    ax1.set_title("A. BandLayout Diagonal Band (W = 2, N = M, stride = 5)", loc="left")
     ax1.grid(True, linestyle=":", alpha=0.35)
 
     for i in range(10):
@@ -672,10 +672,10 @@ def make_fig5_pangenome_suite() -> None:
         "DP + seed_end +\nw=10 (8cd5db0)",
     ]
     stages = [
-        ("KP-14 + w=10", [29.78, 28.46, 11.73], OI_BLUE),
+        ("w=12 + w=10", [29.78, 28.46, 11.73], OI_BLUE),
         ("LASTZ12 1-trans (lz1)", [588.67, 47.87, 24.54], OI_ORANGE),
         ("HSP gate + LCBs (seed_end)", [184.65, 91.04, 22.88], OI_SKY),
-        ("BandGrid DP + X-drop + I/O", [259.35, 283.98, 208.71], OI_GREEN),
+        ("BandLayout DP + X-drop + I/O", [259.35, 283.98, 208.71], OI_GREEN),
     ]
     x = np.arange(len(configs))
     bottom = np.zeros(len(configs))
@@ -762,14 +762,14 @@ def make_fig6_suite_and_vg() -> None:
 
     # Panel A: 10,000-segment HPRC chr22 subgraph + multi-species suite (Runtime vs RSS)
     tools = [
-        ("horizon_gfa stats", 0.0256, 22.7, OI_PURPLE, (10, -2), "left"),
-        ("horizon_clean", 0.0525, 36.9, OI_GREEN, (10, 8), "left"),
-        ("horizon_wga --graph\n(20k DAG nodes)", 0.821, 404.4, OI_BLUE, (-10, -8), "right"),
+        ("horizon_gfa stats\n(counter-only)", 0.08, 22.6, OI_PURPLE, (10, -2), "left"),
+        ("horizon_clean", 0.13, 33.4, OI_GREEN, (10, 8), "left"),
+        ("horizon_wga --graph\n(20k DAG nodes)", 2.98, 153.9, OI_BLUE, (10, 14), "left"),
         ("vg convert -g -p\n(vg v1.60.0)", 1.8292, 76.6, OI_GRAY, (-10, 6), "right"),
-        ("vg stats -z -l -N\n(vg v1.60.0, 168× slower)", 4.2984, 77.0, OI_VERMILION, (4, 24), "center"),
-        ("horizon_guide\n(5-sp HAL)", 2.527, 610.1, OI_SKY, (10, 4), "left"),
-        ("horizon_merge\n(92-sp chrM)", 4.451, 26.8, OI_GREEN, (0, -20), "center"),
-        ("horizon_resolve\n(e-graph walks)", 8.106, 36.9, OI_ORANGE, (-10, 12), "right"),
+        ("vg stats -z -l -N\n(vg v1.60.0, 53.7× slower)", 4.2984, 77.0, OI_VERMILION, (10, -4), "left"),
+        ("horizon_guide\n(5-sp HAL stub)", 0.859, 610.1, OI_SKY, (10, 4), "left"),
+        ("horizon_merge\n(92-sp chrM)", 21.78, 26.6, OI_GREEN, (-8, -18), "right"),
+        ("horizon_resolve\n(e-graph walks)", 5.571, 23.6, OI_ORANGE, (-10, 12), "right"),
     ]
     for label, wt, rss, col, (dx, dy), ha in tools:
         ax1.scatter(wt, rss, color=col, s=68, edgecolor="white", linewidth=0.9, zorder=4)
@@ -786,7 +786,7 @@ def make_fig6_suite_and_vg() -> None:
         )
     ax1.set_xscale("log")
     ax1.set_yscale("log")
-    ax1.set_xlim(0.014, 26)
+    ax1.set_xlim(0.03, 45)
     ax1.set_ylim(12, 1200)
     ax1.set_xlabel("Wall-Clock Runtime (s, log scale)", fontsize=9.0)
     ax1.set_ylabel("Peak RSS Memory (MB, log scale)", fontsize=9.0)
@@ -795,10 +795,10 @@ def make_fig6_suite_and_vg() -> None:
     despine(ax1)
     ax1.text(-0.15, 1.07, "A", transform=ax1.transAxes, fontsize=11.5, fontweight="bold", va="top")
 
-    # Panel B: R1-HMM BOCPD LCB gate precision gain & 18%-GC null suppression
-    cats = ["Random 18% GC\n(10 kb, ÷100)", "Horse\n(Precision %)", "Macaque\n(Precision %)", "Marmoset\n(Precision %)"]
+    # Panel B: R1-HMM BOCPD LCB gate precision gain & 18%-GC null suppression (seed=999)
+    cats = ["18%-GC Null\n(÷100, s=999)", "Horse\n(Precision %)", "Macaque\n(Precision %)", "Marmoset\n(Precision %)"]
     before = [180.77, 65.4, 84.6, 86.1]
-    after = [0.0, 72.3, 86.9, 87.7]
+    after = [0.0, 67.6, 87.0, 87.7]
     x = np.arange(len(cats))
     w = 0.38
     b1 = ax2.bar(x - w / 2, before, width=w, color=OI_GRAY, edgecolor="white", label="Before BOCPD LCB Gate")
