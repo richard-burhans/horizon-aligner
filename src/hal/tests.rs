@@ -251,7 +251,7 @@ fn real_hal_decode_from_env() {
     assert_ne!(root.len(), 0);
     let first_genome = root
         .iter()
-        .find(|e| e.name != "Meta" && e.name != "Phylogeny")
+        .find(|e| !matches!(e.name.as_str(), "Meta" | "Phylogeny" | "Genomes" | "Verison"))
         .expect("genome group");
     let g_entries = read_hdf5_v0_group_entries_seek(&mut f, first_genome.object_header_addr)
         .expect("seek genome")
