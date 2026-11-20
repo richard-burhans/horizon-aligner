@@ -124,9 +124,12 @@ fn open_reader_path(path: &Path) -> Result<Box<dyn BufRead>> {
         .and_then(|e| e.to_str())
         .is_some_and(|e| e.eq_ignore_ascii_case("gz") || e.eq_ignore_ascii_case("bgz"));
     if is_gz {
-        Ok(Box::new(BufReader::new(MultiGzDecoder::new(file))))
+        Ok(Box::new(BufReader::with_capacity(
+            256 * 1024,
+            MultiGzDecoder::new(file),
+        )))
     } else {
-        Ok(Box::new(BufReader::new(file)))
+        Ok(Box::new(BufReader::with_capacity(256 * 1024, file)))
     }
 }
 
@@ -258,7 +261,7 @@ where
     stream_gfa_records_reader(reader, on_record)
 }
 
-fn parse_walk_record(mut parts: std::str::Split<'_, char>) -> std::io::Result<GfaWalk> {
+fn parse_walk_record<'a>(mut parts: impl Iterator<Item = &'a str>) -> std::io::Result<GfaWalk> {
     let parse_coord = |tok: Option<&str>, field: &str| -> std::io::Result<usize> {
         match tok {
             Some("*") | None => Ok(0),
@@ -276,8 +279,13 @@ fn parse_walk_record(mut parts: std::str::Split<'_, char>) -> std::io::Result<Gf
     let start = parse_coord(parts.next(), "start")?;
     let end = parse_coord(parts.next(), "end")?;
     let walk = parts.next().unwrap_or("").to_string();
-    let rest: Vec<&str> = parts.collect();
-    let tags = (!rest.is_empty()).then(|| rest.join("\t"));
+    let tags = parts.next().and_then(|rest| {
+        if rest.is_empty() {
+            None
+        } else {
+            Some(rest.to_string())
+        }
+    });
     Ok(GfaWalk {
         sample,
         haplotype,
@@ -306,7 +314,7 @@ where
         if n == 0 {
             break;
         }
-        if line.len() > MAX_GFA_LINE_BYTES && !line.ends_with('\n') {
+        if line.len() > MAX_GFA_LINE_BYTES {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "GFA line exceeds 256 MiB safety limit",
@@ -365,7 +373,11 @@ where
                 segment_names: parts.next().unwrap_or("").to_string(),
                 overlaps: parts.next().unwrap_or("").to_string(),
             }))?,
-            "W" => on_record(GfaRecord::Walk(parse_walk_record(parts)?))?,
+            "W" => {
+                let mut w_parts = trimmed.splitn(8, '\t');
+                let _ = w_parts.next();
+                on_record(GfaRecord::Walk(parse_walk_record(w_parts)?))?
+            }
             _ => std::ops::ControlFlow::Continue(()),
         };
         if flow.is_break() {

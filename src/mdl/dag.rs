@@ -54,17 +54,20 @@ fn build_node_bounds(
     nu: usize,
     s_min: usize,
     s_max: usize,
-    total_max: usize,
+    rem_min: usize,
+    rem_max: usize,
     m: usize,
 ) -> Option<NodeBounds> {
     let mut bounds = Vec::with_capacity(nu + 1);
     let mut off = 0usize;
-    let use_band = m > 128 && total_max > 0;
+    let lo_denom = s_min + rem_max;
+    let hi_denom = s_max + rem_min;
+    let use_band = m > 128 && lo_denom > 0 && hi_denom > 0;
     let band_w = (m / 8).clamp(64, 512);
     for i in 0..=nu {
         let (j_lo, j_hi) = if use_band {
-            let lo_est = super::dp::band_center(s_min + i, m, total_max);
-            let hi_est = super::dp::band_center(s_max + i, m, total_max);
+            let lo_est = super::dp::band_center(s_min + i, m, lo_denom);
+            let hi_est = super::dp::band_center(s_max + i, m, hi_denom);
             (lo_est.saturating_sub(band_w), (hi_est + band_w).min(m))
         } else {
             (0, m)
@@ -179,31 +182,47 @@ pub fn align_seq_to_dag_mdl(
         let mut mx = 0usize;
         let mut has_pred = false;
         for &p in &nodes[u].preds {
-            if p < u {
-                has_pred = true;
-                mn = mn.min(start_min[p] + nodes[p].seq.len());
-                mx = mx.max(start_max[p] + nodes[p].seq.len());
-            }
+            has_pred = true;
+            mn = mn.min(start_min[p] + nodes[p].seq.len());
+            mx = mx.max(start_max[p] + nodes[p].seq.len());
         }
         if has_pred {
             start_min[u] = mn;
             start_max[u] = mx;
         }
     }
-    let total_max = (0..num_nodes)
-        .filter(|&u| succs[u].is_empty())
-        .map(|u| start_max[u] + nodes[u].seq.len())
-        .max()
-        .unwrap_or(0);
+    let mut rem_min = vec![0usize; num_nodes];
+    let mut rem_max = vec![0usize; num_nodes];
+    for u in (0..num_nodes).rev() {
+        let nu = nodes[u].seq.len();
+        if succs[u].is_empty() {
+            rem_min[u] = nu;
+            rem_max[u] = nu;
+        } else {
+            let mut mn = usize::MAX;
+            let mut mx = 0usize;
+            for &s in &succs[u] {
+                mn = mn.min(rem_min[s]);
+                mx = mx.max(rem_max[s]);
+            }
+            rem_min[u] = nu + mn;
+            rem_max[u] = nu + mx;
+        }
+    }
 
     let mut fm: Vec<DagBandGrid> = Vec::with_capacity(num_nodes);
     let mut fix: Vec<DagBandGrid> = Vec::with_capacity(num_nodes);
     let mut fiy: Vec<DagBandGrid> = Vec::with_capacity(num_nodes);
 
     for (u, nd) in nodes.iter().enumerate() {
-        let Some((bounds, cells)) =
-            build_node_bounds(nd.seq.len(), start_min[u], start_max[u], total_max, m)
-        else {
+        let Some((bounds, cells)) = build_node_bounds(
+            nd.seq.len(),
+            start_min[u],
+            start_max[u],
+            rem_min[u],
+            rem_max[u],
+            m,
+        ) else {
             return GraphAlignment {
                 path_nodes: Vec::new(),
                 kept_pairs: Vec::new(),
@@ -426,9 +445,7 @@ pub fn align_seq_to_dag_mdl(
             for j in j0_lo..=j0_hi {
                 let mut best_p = NEG_INF;
                 for &p in &unique_preds[u] {
-                    if p < u {
-                        best_p = best_p.max(fm[p].get(nodes[p].seq.len(), j));
-                    }
+                    best_p = best_p.max(fm[p].get(nodes[p].seq.len(), j));
                 }
                 fm[u].set(0, j, best_p);
             }
@@ -495,7 +512,7 @@ pub fn align_seq_to_dag_mdl(
             let cur = fm[u].get(0, j);
             let mut switched_pred = None;
             for &p in &unique_preds[u] {
-                if p < u && (fm[p].get(nodes[p].seq.len(), j) - cur).abs() < 1e-9 {
+                if (fm[p].get(nodes[p].seq.len(), j) - cur).abs() < 1e-9 {
                     switched_pred = Some(p);
                     break;
                 }
@@ -620,5 +637,41 @@ mod tests {
         let bad_topo = align_seq_to_dag_mdl(&nodes, b"ACGTACGTACGT", &params, 10.0);
         assert_eq!(bad_topo.kept_pairs, [] as [(usize, usize, usize); 0]);
         assert_eq!(bad_topo.bubbles, 1);
+    }
+
+    #[test]
+    fn dag_mdl_banded_aligns_shorter_branch_when_m_gt_128() {
+        let n0 = b"ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT".to_vec();
+        let long_branch = vec![b'G'; 1000];
+        let short_branch = b"ATATATATATATATATATATATATATATATATATATATATATATATATATAT".to_vec();
+        let n3 = b"TGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCA".to_vec();
+        let mut query = n0.clone();
+        query.extend_from_slice(&short_branch);
+        query.extend_from_slice(&n3);
+        let nodes = vec![
+            GraphNode {
+                name: "n0".into(),
+                seq: n0,
+                preds: vec![],
+            },
+            GraphNode {
+                name: "long".into(),
+                seq: long_branch,
+                preds: vec![0],
+            },
+            GraphNode {
+                name: "short".into(),
+                seq: short_branch,
+                preds: vec![0],
+            },
+            GraphNode {
+                name: "n3".into(),
+                seq: n3,
+                preds: vec![1, 2],
+            },
+        ];
+        let aln = align_seq_to_dag_mdl(&nodes, &query, &HmmParams::default(), 10.0);
+        assert_eq!(aln.path_nodes, vec![0, 2, 3]);
+        assert_eq!(aln.kept_pairs.len(), query.len());
     }
 }

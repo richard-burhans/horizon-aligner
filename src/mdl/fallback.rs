@@ -33,6 +33,46 @@ fn record_spans(map: &mut HashMap<(usize, usize), usize>, lcbs: &[Vec<(usize, us
     }
 }
 
+struct FallbackCtx<'a, F: Fn(&mut AnchorPairs)> {
+    idx_x: &'a ContigIndex,
+    idx_y: &'a ContigIndex,
+    filter_uncovered: &'a F,
+    combined_fwd: &'a mut LcbList,
+    combined_rc: &'a mut LcbList,
+    spans_fwd: &'a mut HashMap<(usize, usize), usize>,
+    spans_rc: &'a mut HashMap<(usize, usize), usize>,
+    cfg: &'a AlignConfig,
+}
+
+impl<F: Fn(&mut AnchorPairs)> FallbackCtx<'_, F> {
+    fn append_hsp_pair_lcbs(
+        &mut self,
+        hits_fwd: &[(usize, usize)],
+        hits_rc: &[(usize, usize)],
+        thresh: i32,
+        span_len: usize,
+    ) {
+        let prev_fwd = self.combined_fwd.len();
+        append_hsp_gated_lastz12_lcbs(
+            self.combined_fwd,
+            &self.idx_x.seq,
+            &self.idx_y.seq,
+            hits_fwd,
+            thresh,
+        );
+        record_spans(self.spans_fwd, &self.combined_fwd[prev_fwd..], span_len);
+        let prev_rc = self.combined_rc.len();
+        append_hsp_gated_lastz12_lcbs(
+            self.combined_rc,
+            &self.idx_x.seq,
+            &self.idx_y.seq_rc,
+            hits_rc,
+            thresh,
+        );
+        record_spans(self.spans_rc, &self.combined_rc[prev_rc..], span_len);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn collect_fallback_lcbs(
     idx_x: &ContigIndex,
@@ -62,19 +102,21 @@ pub(super) fn collect_fallback_lcbs(
     let mut spans_fwd: HashMap<(usize, usize), usize> = HashMap::new();
     let mut spans_rc: HashMap<(usize, usize), usize> = HashMap::new();
 
+    let mut ctx = FallbackCtx {
+        idx_x,
+        idx_y,
+        filter_uncovered: &filter_uncovered,
+        combined_fwd: &mut combined_fwd,
+        combined_rc: &mut combined_rc,
+        spans_fwd: &mut spans_fwd,
+        spans_rc: &mut spans_rc,
+        cfg,
+    };
+
     // Sparse-exon fallback: w=10 exact seeds in intervals not covered by w=12 LCBs
     // (skip when w=12 already covers >= min_fallback_cov of the reference contig).
     let y10_idx_opt = if primary_cov < min_fallback_cov {
-        Some(collect_w10_lcbs(
-            idx_x,
-            idx_y,
-            &filter_uncovered,
-            &mut combined_fwd,
-            &mut combined_rc,
-            &mut spans_fwd,
-            &mut spans_rc,
-            cfg,
-        )?)
+        Some(collect_w10_lcbs(&mut ctx)?)
     } else {
         None
     };
@@ -83,17 +125,7 @@ pub(super) fn collect_fallback_lcbs(
     // LASTZ-style 12-of-19 + 1-transition hits gated by ungapped X-drop HSP score
     // (skip when w=12 already covers >= min_fallback_cov of the reference contig).
     let y_lz12 = if primary_cov < min_fallback_cov {
-        Some(collect_lz12_lcbs(
-            idx_x,
-            idx_y,
-            &filter_uncovered,
-            &mut combined_fwd,
-            &mut combined_rc,
-            &mut spans_fwd,
-            &mut spans_rc,
-            base_hsp_thresh + hsp_bonus,
-            cfg,
-        )?)
+        Some(collect_lz12_lcbs(&mut ctx, base_hsp_thresh + hsp_bonus)?)
     } else {
         None
     };
@@ -102,34 +134,18 @@ pub(super) fn collect_fallback_lcbs(
     let mut cached_ry_hits = None;
     if cfg.use_multi_shape_seeds && primary_cov < min_fallback_cov {
         cached_ry_hits = collect_multi_shape_lcbs(
-            idx_x,
-            idx_y,
+            &mut ctx,
             y_lz12.as_ref(),
             y10_idx_opt.as_ref(),
-            &filter_uncovered,
-            &mut combined_fwd,
-            &mut combined_rc,
-            &mut spans_fwd,
-            &mut spans_rc,
             base_hsp_thresh,
             hsp_bonus,
             aa_bonus,
-            cfg,
         )?;
     }
 
     // Transition-tolerant R/Y (1-bit purine/pyrimidine) fallback for divergent homologs.
     if cfg.use_ry_seeds {
-        collect_ry_lcbs(
-            idx_x,
-            idx_y,
-            cached_ry_hits,
-            &mut combined_fwd,
-            &mut combined_rc,
-            &mut spans_fwd,
-            &mut spans_rc,
-            cfg,
-        )?;
+        collect_ry_lcbs(&mut ctx, cached_ry_hits)?;
     }
 
     let lcbs_fwd = merge_colinear_lcbs(&combined_fwd, max_local_rescue_bp);
@@ -147,430 +163,283 @@ pub(super) fn collect_fallback_lcbs(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 fn collect_w10_lcbs<F: Fn(&mut AnchorPairs)>(
-    idx_x: &ContigIndex,
-    idx_y: &ContigIndex,
-    filter_uncovered: &F,
-    combined_fwd: &mut LcbList,
-    combined_rc: &mut LcbList,
-    spans_fwd: &mut HashMap<(usize, usize), usize>,
-    spans_rc: &mut HashMap<(usize, usize), usize>,
-    cfg: &AlignConfig,
+    ctx: &mut FallbackCtx<'_, F>,
 ) -> Result<FlatSeedIndex, AlignError> {
     let x10_idx = FlatSeedIndex::build_with_sdust(
-        &idx_x.seq,
+        &ctx.idx_x.seq,
         MASK_W10,
-        cfg.fallback_max_occ,
-        cfg.skip_softmasked,
+        ctx.cfg.fallback_max_occ,
+        ctx.cfg.skip_softmasked,
         false,
-        Some(&idx_x.sdust),
+        Some(&ctx.idx_x.sdust),
     )?;
     let y10_idx = FlatSeedIndex::build_with_sdust(
-        &idx_y.seq,
+        &ctx.idx_y.seq,
         MASK_W10,
-        cfg.fallback_max_occ,
-        cfg.skip_softmasked,
+        ctx.cfg.fallback_max_occ,
+        ctx.cfg.skip_softmasked,
         false,
-        Some(&idx_y.sdust),
+        Some(&ctx.idx_y.sdust),
     )?;
     let (mut hits10_fwd, mut hits10_rc) = x10_idx.intersect(&y10_idx);
-    filter_uncovered(&mut hits10_fwd);
-    filter_uncovered(&mut hits10_rc);
-    let prev_fwd = combined_fwd.len();
+    (ctx.filter_uncovered)(&mut hits10_fwd);
+    (ctx.filter_uncovered)(&mut hits10_rc);
+    let prev_fwd = ctx.combined_fwd.len();
     append_nonoverlapping_lcbs(
-        combined_fwd,
+        ctx.combined_fwd,
         &[],
         &hits10_fwd,
-        cfg.fallback_min_anchors,
-        cfg.fallback_min_span,
+        ctx.cfg.fallback_min_anchors,
+        ctx.cfg.fallback_min_span,
     );
-    record_spans(spans_fwd, &combined_fwd[prev_fwd..], MASK_W10.len());
-    let prev_rc = combined_rc.len();
+    record_spans(ctx.spans_fwd, &ctx.combined_fwd[prev_fwd..], MASK_W10.len());
+    let prev_rc = ctx.combined_rc.len();
     append_nonoverlapping_lcbs(
-        combined_rc,
+        ctx.combined_rc,
         &[],
         &hits10_rc,
-        cfg.fallback_min_anchors,
-        cfg.fallback_min_span,
+        ctx.cfg.fallback_min_anchors,
+        ctx.cfg.fallback_min_span,
     );
-    record_spans(spans_rc, &combined_rc[prev_rc..], MASK_W10.len());
+    record_spans(ctx.spans_rc, &ctx.combined_rc[prev_rc..], MASK_W10.len());
     Ok(y10_idx)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn collect_lz12_lcbs<F: Fn(&mut AnchorPairs)>(
-    idx_x: &ContigIndex,
-    idx_y: &ContigIndex,
-    filter_uncovered: &F,
-    combined_fwd: &mut LcbList,
-    combined_rc: &mut LcbList,
-    spans_fwd: &mut HashMap<(usize, usize), usize>,
-    spans_rc: &mut HashMap<(usize, usize), usize>,
+    ctx: &mut FallbackCtx<'_, F>,
     thresh: i32,
-    cfg: &AlignConfig,
 ) -> Result<FlatSeedIndex, AlignError> {
     let idx = FlatSeedIndex::build_with_sdust(
-        &idx_y.seq,
+        &ctx.idx_y.seq,
         MASK_LASTZ12,
-        cfg.fallback_max_occ,
-        cfg.skip_softmasked,
+        ctx.cfg.fallback_max_occ,
+        ctx.cfg.skip_softmasked,
         false,
-        Some(&idx_y.sdust),
+        Some(&ctx.idx_y.sdust),
     )?;
     let (mut hits_lz_fwd, mut hits_lz_rc) = find_lastz12_1transition_hits_flat(
-        &idx_x.seq,
-        Some(&idx_x.sdust),
+        &ctx.idx_x.seq,
+        Some(&ctx.idx_x.sdust),
         &idx,
-        cfg.skip_softmasked,
+        ctx.cfg.skip_softmasked,
     );
-    filter_uncovered(&mut hits_lz_fwd);
-    filter_uncovered(&mut hits_lz_rc);
-    append_hsp_pair_lcbs(
-        &idx_x.seq,
-        &idx_y.seq,
-        &idx_y.seq_rc,
-        &hits_lz_fwd,
-        &hits_lz_rc,
-        thresh,
-        MASK_LASTZ12.len(),
-        combined_fwd,
-        combined_rc,
-        spans_fwd,
-        spans_rc,
-    );
+    (ctx.filter_uncovered)(&mut hits_lz_fwd);
+    (ctx.filter_uncovered)(&mut hits_lz_rc);
+    ctx.append_hsp_pair_lcbs(&hits_lz_fwd, &hits_lz_rc, thresh, MASK_LASTZ12.len());
     Ok(idx)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn append_hsp_pair_lcbs(
-    seq_x: &[u8],
-    seq_y: &[u8],
-    seq_y_rc: &[u8],
-    hits_fwd: &[(usize, usize)],
-    hits_rc: &[(usize, usize)],
-    thresh: i32,
-    span_len: usize,
-    combined_fwd: &mut LcbList,
-    combined_rc: &mut LcbList,
-    spans_fwd: &mut HashMap<(usize, usize), usize>,
-    spans_rc: &mut HashMap<(usize, usize), usize>,
-) {
-    let prev_fwd = combined_fwd.len();
-    append_hsp_gated_lastz12_lcbs(combined_fwd, seq_x, seq_y, hits_fwd, thresh);
-    record_spans(spans_fwd, &combined_fwd[prev_fwd..], span_len);
-    let prev_rc = combined_rc.len();
-    append_hsp_gated_lastz12_lcbs(combined_rc, seq_x, seq_y_rc, hits_rc, thresh);
-    record_spans(spans_rc, &combined_rc[prev_rc..], span_len);
-}
-
-#[allow(clippy::too_many_arguments)]
 fn collect_multi_shape_lcbs<F: Fn(&mut AnchorPairs)>(
-    idx_x: &ContigIndex,
-    idx_y: &ContigIndex,
+    ctx: &mut FallbackCtx<'_, F>,
     y_lz12: Option<&FlatSeedIndex>,
     y10_idx_opt: Option<&FlatSeedIndex>,
-    filter_uncovered: &F,
-    combined_fwd: &mut LcbList,
-    combined_rc: &mut LcbList,
-    spans_fwd: &mut HashMap<(usize, usize), usize>,
-    spans_rc: &mut HashMap<(usize, usize), usize>,
     base_hsp_thresh: i32,
     hsp_bonus: i32,
     aa_bonus: i32,
-    cfg: &AlignConfig,
 ) -> Result<Option<HitPair>, AlignError> {
-    let seq_x = &idx_x.seq;
-    let seq_y = &idx_y.seq;
-    let seq_y_rc = &idx_y.seq_rc;
-    let search_cells = (seq_x.len() as u128) * (seq_y.len() as u128);
+    let search_cells = (ctx.idx_x.seq.len() as u128) * (ctx.idx_y.seq.len() as u128);
     if search_cells < 1_000_000_000
         && let Some(lz_idx) = y_lz12
     {
         let (mut f, mut r) = find_lastz12_2transition_hits_flat(
-            seq_x,
-            Some(&idx_x.sdust),
+            &ctx.idx_x.seq,
+            Some(&ctx.idx_x.sdust),
             lz_idx,
-            cfg.skip_softmasked,
+            ctx.cfg.skip_softmasked,
         );
-        filter_uncovered(&mut f);
-        filter_uncovered(&mut r);
-        append_hsp_pair_lcbs(
-            seq_x,
-            seq_y,
-            seq_y_rc,
+        (ctx.filter_uncovered)(&mut f);
+        (ctx.filter_uncovered)(&mut r);
+        ctx.append_hsp_pair_lcbs(
             &f,
             &r,
             base_hsp_thresh + 30 + hsp_bonus,
             MASK_LASTZ12.len(),
-            combined_fwd,
-            combined_rc,
-            spans_fwd,
-            spans_rc,
         );
     }
 
     let y_lz11 = FlatSeedIndex::build_with_sdust(
-        seq_y,
+        &ctx.idx_y.seq,
         MASK_LASTZ11,
-        cfg.fallback_max_occ,
-        cfg.skip_softmasked,
+        ctx.cfg.fallback_max_occ,
+        ctx.cfg.skip_softmasked,
         false,
-        Some(&idx_y.sdust),
+        Some(&ctx.idx_y.sdust),
     )?;
-    let (mut f11, mut r11) =
-        find_lastz11_1transition_hits_flat(seq_x, Some(&idx_x.sdust), &y_lz11, cfg.skip_softmasked);
-    filter_uncovered(&mut f11);
-    filter_uncovered(&mut r11);
-    append_hsp_pair_lcbs(
-        seq_x,
-        seq_y,
-        seq_y_rc,
+    let (mut f11, mut r11) = find_lastz11_1transition_hits_flat(
+        &ctx.idx_x.seq,
+        Some(&ctx.idx_x.sdust),
+        &y_lz11,
+        ctx.cfg.skip_softmasked,
+    );
+    (ctx.filter_uncovered)(&mut f11);
+    (ctx.filter_uncovered)(&mut r11);
+    ctx.append_hsp_pair_lcbs(
         &f11,
         &r11,
         base_hsp_thresh + 30 + hsp_bonus,
         MASK_LASTZ11.len(),
-        combined_fwd,
-        combined_rc,
-        spans_fwd,
-        spans_rc,
     );
 
-    collect_ph11_lcbs(
-        idx_x,
-        idx_y,
-        filter_uncovered,
-        combined_fwd,
-        combined_rc,
-        spans_fwd,
-        spans_rc,
-        cfg,
-    )?;
+    collect_ph11_lcbs(ctx)?;
 
     let cached_ry_hits = if search_cells < 1_000_000_000 {
-        collect_ry_and_w10_1trans_lcbs(
-            idx_x,
-            idx_y,
-            y10_idx_opt,
-            filter_uncovered,
-            combined_fwd,
-            combined_rc,
-            spans_fwd,
-            spans_rc,
-            base_hsp_thresh + 40 + hsp_bonus,
-            cfg,
-        )?
+        collect_ry_and_w10_1trans_lcbs(ctx, y10_idx_opt, base_hsp_thresh + 40 + hsp_bonus)?
     } else {
         None
     };
 
-    collect_aa5_lcbs(
-        idx_x,
-        idx_y,
-        filter_uncovered,
-        combined_fwd,
-        combined_rc,
-        spans_fwd,
-        spans_rc,
-        (base_hsp_thresh / 2) + aa_bonus,
-        cfg,
-    );
+    collect_aa5_lcbs(ctx, (base_hsp_thresh / 2) + aa_bonus);
 
     Ok(cached_ry_hits)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn collect_ph11_lcbs<F: Fn(&mut AnchorPairs)>(
-    idx_x: &ContigIndex,
-    idx_y: &ContigIndex,
-    filter_uncovered: &F,
-    combined_fwd: &mut LcbList,
-    combined_rc: &mut LcbList,
-    spans_fwd: &mut HashMap<(usize, usize), usize>,
-    spans_rc: &mut HashMap<(usize, usize), usize>,
-    cfg: &AlignConfig,
+    ctx: &mut FallbackCtx<'_, F>,
 ) -> Result<(), AlignError> {
     let x_ph = FlatSeedIndex::build_with_sdust(
-        &idx_x.seq,
+        &ctx.idx_x.seq,
         MASK_PH11_18,
-        cfg.fallback_max_occ,
-        cfg.skip_softmasked,
+        ctx.cfg.fallback_max_occ,
+        ctx.cfg.skip_softmasked,
         false,
-        Some(&idx_x.sdust),
+        Some(&ctx.idx_x.sdust),
     )?;
     let y_ph = FlatSeedIndex::build_with_sdust(
-        &idx_y.seq,
+        &ctx.idx_y.seq,
         MASK_PH11_18,
-        cfg.fallback_max_occ,
-        cfg.skip_softmasked,
+        ctx.cfg.fallback_max_occ,
+        ctx.cfg.skip_softmasked,
         false,
-        Some(&idx_y.sdust),
+        Some(&ctx.idx_y.sdust),
     )?;
     let (mut ph_fwd, mut ph_rc) = x_ph.intersect(&y_ph);
-    filter_uncovered(&mut ph_fwd);
-    filter_uncovered(&mut ph_rc);
-    let pf = combined_fwd.len();
-    append_two_hit_diagonal_lcbs(combined_fwd, &ph_fwd, 64, 4);
-    record_spans(spans_fwd, &combined_fwd[pf..], MASK_PH11_18.len());
-    let pr = combined_rc.len();
-    append_two_hit_diagonal_lcbs(combined_rc, &ph_rc, 64, 4);
-    record_spans(spans_rc, &combined_rc[pr..], MASK_PH11_18.len());
+    (ctx.filter_uncovered)(&mut ph_fwd);
+    (ctx.filter_uncovered)(&mut ph_rc);
+    let pf = ctx.combined_fwd.len();
+    append_two_hit_diagonal_lcbs(ctx.combined_fwd, &ph_fwd, 64, 4);
+    record_spans(ctx.spans_fwd, &ctx.combined_fwd[pf..], MASK_PH11_18.len());
+    let pr = ctx.combined_rc.len();
+    append_two_hit_diagonal_lcbs(ctx.combined_rc, &ph_rc, 64, 4);
+    record_spans(ctx.spans_rc, &ctx.combined_rc[pr..], MASK_PH11_18.len());
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn collect_ry_and_w10_1trans_lcbs<F: Fn(&mut AnchorPairs)>(
-    idx_x: &ContigIndex,
-    idx_y: &ContigIndex,
+    ctx: &mut FallbackCtx<'_, F>,
     y10_idx_opt: Option<&FlatSeedIndex>,
-    filter_uncovered: &F,
-    combined_fwd: &mut LcbList,
-    combined_rc: &mut LcbList,
-    spans_fwd: &mut HashMap<(usize, usize), usize>,
-    spans_rc: &mut HashMap<(usize, usize), usize>,
     thresh: i32,
-    cfg: &AlignConfig,
 ) -> Result<Option<HitPair>, AlignError> {
     let x_ry = FlatSeedIndex::build_with_sdust(
-        &idx_x.seq,
+        &ctx.idx_x.seq,
         MASK_RY20,
         2,
-        cfg.skip_softmasked,
+        ctx.cfg.skip_softmasked,
         true,
-        Some(&idx_x.sdust),
+        Some(&ctx.idx_x.sdust),
     )?;
     let y_ry = FlatSeedIndex::build_with_sdust(
-        &idx_y.seq,
+        &ctx.idx_y.seq,
         MASK_RY20,
         2,
-        cfg.skip_softmasked,
+        ctx.cfg.skip_softmasked,
         true,
-        Some(&idx_y.sdust),
+        Some(&ctx.idx_y.sdust),
     )?;
     let (mut fry, mut rry) = x_ry.intersect(&y_ry);
-    filter_uncovered(&mut fry);
-    filter_uncovered(&mut rry);
-    let cached = cfg.use_ry_seeds.then(|| (fry.clone(), rry.clone()));
-    append_hsp_pair_lcbs(
-        &idx_x.seq,
-        &idx_y.seq,
-        &idx_y.seq_rc,
-        &fry,
-        &rry,
-        thresh,
-        MASK_RY20.len(),
-        combined_fwd,
-        combined_rc,
-        spans_fwd,
-        spans_rc,
-    );
+    (ctx.filter_uncovered)(&mut fry);
+    (ctx.filter_uncovered)(&mut rry);
+    let cached = ctx.cfg.use_ry_seeds.then(|| (fry.clone(), rry.clone()));
+    ctx.append_hsp_pair_lcbs(&fry, &rry, thresh, MASK_RY20.len());
     if let Some(y10_idx) = y10_idx_opt {
         let (mut fw10, mut rw10) = find_w10_1transition_hits_flat(
-            &idx_x.seq,
-            Some(&idx_x.sdust),
+            &ctx.idx_x.seq,
+            Some(&ctx.idx_x.sdust),
             y10_idx,
-            cfg.skip_softmasked,
+            ctx.cfg.skip_softmasked,
         );
-        filter_uncovered(&mut fw10);
-        filter_uncovered(&mut rw10);
-        append_hsp_pair_lcbs(
-            &idx_x.seq,
-            &idx_y.seq,
-            &idx_y.seq_rc,
-            &fw10,
-            &rw10,
-            thresh,
-            MASK_W10.len(),
-            combined_fwd,
-            combined_rc,
-            spans_fwd,
-            spans_rc,
-        );
+        (ctx.filter_uncovered)(&mut fw10);
+        (ctx.filter_uncovered)(&mut rw10);
+        ctx.append_hsp_pair_lcbs(&fw10, &rw10, thresh, MASK_W10.len());
     }
     Ok(cached)
 }
 
 const AA5_ANCHOR_SPAN_BP: usize = 18;
 
-#[allow(clippy::too_many_arguments)]
-fn collect_aa5_lcbs<F: Fn(&mut AnchorPairs)>(
-    idx_x: &ContigIndex,
-    idx_y: &ContigIndex,
-    filter_uncovered: &F,
-    combined_fwd: &mut LcbList,
-    combined_rc: &mut LcbList,
-    spans_fwd: &mut HashMap<(usize, usize), usize>,
-    spans_rc: &mut HashMap<(usize, usize), usize>,
-    thresh: i32,
-    cfg: &AlignConfig,
-) {
+fn collect_aa5_lcbs<F: Fn(&mut AnchorPairs)>(ctx: &mut FallbackCtx<'_, F>, thresh: i32) {
     let (mut aa_fwd, mut aa_rc) = find_translated_aa5_hits_both(
-        &idx_x.seq,
-        &idx_y.seq,
-        &idx_y.seq_rc,
+        &ctx.idx_x.seq,
+        &ctx.idx_y.seq,
+        &ctx.idx_y.seq_rc,
         4,
-        cfg.skip_softmasked,
+        ctx.cfg.skip_softmasked,
     );
-    filter_uncovered(&mut aa_fwd);
-    filter_uncovered(&mut aa_rc);
-    let pf = combined_fwd.len();
-    append_hsp_gated_aa_lcbs(combined_fwd, &idx_x.seq, &idx_y.seq, &aa_fwd, thresh);
-    record_spans(spans_fwd, &combined_fwd[pf..], AA5_ANCHOR_SPAN_BP);
-    let pr = combined_rc.len();
-    append_hsp_gated_aa_lcbs(combined_rc, &idx_x.seq, &idx_y.seq_rc, &aa_rc, thresh);
-    record_spans(spans_rc, &combined_rc[pr..], AA5_ANCHOR_SPAN_BP);
+    (ctx.filter_uncovered)(&mut aa_fwd);
+    (ctx.filter_uncovered)(&mut aa_rc);
+    let pf = ctx.combined_fwd.len();
+    append_hsp_gated_aa_lcbs(
+        ctx.combined_fwd,
+        &ctx.idx_x.seq,
+        &ctx.idx_y.seq,
+        &aa_fwd,
+        thresh,
+    );
+    record_spans(ctx.spans_fwd, &ctx.combined_fwd[pf..], AA5_ANCHOR_SPAN_BP);
+    let pr = ctx.combined_rc.len();
+    append_hsp_gated_aa_lcbs(
+        ctx.combined_rc,
+        &ctx.idx_x.seq,
+        &ctx.idx_y.seq_rc,
+        &aa_rc,
+        thresh,
+    );
+    record_spans(ctx.spans_rc, &ctx.combined_rc[pr..], AA5_ANCHOR_SPAN_BP);
 }
 
-#[allow(clippy::too_many_arguments)]
-fn collect_ry_lcbs(
-    idx_x: &ContigIndex,
-    idx_y: &ContigIndex,
+fn collect_ry_lcbs<F: Fn(&mut AnchorPairs)>(
+    ctx: &mut FallbackCtx<'_, F>,
     cached_ry_hits: Option<HitPair>,
-    combined_fwd: &mut LcbList,
-    combined_rc: &mut LcbList,
-    spans_fwd: &mut HashMap<(usize, usize), usize>,
-    spans_rc: &mut HashMap<(usize, usize), usize>,
-    cfg: &AlignConfig,
 ) -> Result<(), AlignError> {
     let (hits_ry_fwd, hits_ry_rc) = if let Some(hits) = cached_ry_hits {
         hits
     } else {
         let x_ry = FlatSeedIndex::build_with_sdust(
-            &idx_x.seq,
+            &ctx.idx_x.seq,
             MASK_RY20,
             2,
-            cfg.skip_softmasked,
+            ctx.cfg.skip_softmasked,
             true,
-            Some(&idx_x.sdust),
+            Some(&ctx.idx_x.sdust),
         )?;
         let y_ry = FlatSeedIndex::build_with_sdust(
-            &idx_y.seq,
+            &ctx.idx_y.seq,
             MASK_RY20,
             2,
-            cfg.skip_softmasked,
+            ctx.cfg.skip_softmasked,
             true,
-            Some(&idx_y.sdust),
+            Some(&ctx.idx_y.sdust),
         )?;
         x_ry.intersect(&y_ry)
     };
-    let prev_fwd = combined_fwd.len();
+    let prev_fwd = ctx.combined_fwd.len();
     append_nonoverlapping_lcbs(
-        combined_fwd,
+        ctx.combined_fwd,
         &[],
         &hits_ry_fwd,
-        cfg.fallback_min_anchors,
-        cfg.fallback_min_span,
+        ctx.cfg.fallback_min_anchors,
+        ctx.cfg.fallback_min_span,
     );
-    record_spans(spans_fwd, &combined_fwd[prev_fwd..], MASK_RY20.len());
-    let prev_rc = combined_rc.len();
+    record_spans(ctx.spans_fwd, &ctx.combined_fwd[prev_fwd..], MASK_RY20.len());
+    let prev_rc = ctx.combined_rc.len();
     append_nonoverlapping_lcbs(
-        combined_rc,
+        ctx.combined_rc,
         &[],
         &hits_ry_rc,
-        cfg.fallback_min_anchors,
-        cfg.fallback_min_span,
+        ctx.cfg.fallback_min_anchors,
+        ctx.cfg.fallback_min_span,
     );
-    record_spans(spans_rc, &combined_rc[prev_rc..], MASK_RY20.len());
+    record_spans(ctx.spans_rc, &ctx.combined_rc[prev_rc..], MASK_RY20.len());
     Ok(())
 }
 

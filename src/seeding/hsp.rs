@@ -93,34 +93,45 @@ pub(crate) fn append_hsp_gated_lastz12_lcbs(
     let strong_margin = (1.8 * space_bits).round() as i32;
     let mut filtered_hits: AnchorPairs = Vec::new();
     let mut strong_hsps: LcbList = Vec::new();
-    let eval_hit = |&(px, py): &(usize, usize)| {
-        let (lx, ly, rx, ry, sc) = extend_ungapped_hsp(seq_x, seq_y, px, py, min_hsp_score)?;
-        let strong = (sc >= min_hsp_score + strong_margin && rx > lx + 19 && ry > ly + 19)
-            .then_some(((lx, ly), (rx - 19, ry - 19)));
-        Some((px, py, strong))
-    };
-    let evaluated: Vec<_> = if hits.len() >= 2048 {
-        hits.par_iter().filter_map(eval_hit).collect()
-    } else {
-        hits.iter().filter_map(eval_hit).collect()
-    };
-    filtered_hits.reserve(evaluated.len());
-    for (px, py, strong) in evaluated {
-        filtered_hits.push((px, py));
-        if let Some((p0, p1)) = strong {
-            strong_hsps.push(vec![p0, p1]);
+    let mut sorted_hits = hits.to_vec();
+    sorted_hits.sort_unstable_by_key(|&(px, py)| ((px as i128) - (py as i128), px));
+    let eval_diag_group = |group: &[(usize, usize)]| {
+        let mut local_hits = Vec::new();
+        let mut local_strong = Vec::new();
+        let mut max_rx = 0usize;
+        for &(px, py) in group {
+            if px < max_rx {
+                local_hits.push((px, py));
+                continue;
+            }
+            if let Some((lx, ly, rx, ry, sc)) =
+                extend_ungapped_hsp(seq_x, seq_y, px, py, min_hsp_score)
+            {
+                max_rx = max_rx.max(rx);
+                local_hits.push((px, py));
+                if sc >= min_hsp_score + strong_margin && rx > lx + 19 && ry > ly + 19 {
+                    local_strong.push(vec![(lx, ly), (rx - 19, ry - 19)]);
+                }
+            }
         }
+        (local_hits, local_strong)
+    };
+    let diag_chunks: Vec<&[(usize, usize)]> = sorted_hits
+        .chunk_by(|a, b| ((a.0 as i128) - (a.1 as i128)) == ((b.0 as i128) - (b.1 as i128)))
+        .collect();
+    let evaluated: Vec<_> = if sorted_hits.len() >= 2048 {
+        diag_chunks.par_iter().map(|g| eval_diag_group(g)).collect()
+    } else {
+        diag_chunks.iter().map(|g| eval_diag_group(g)).collect()
+    };
+    for (lh, ls) in evaluated {
+        filtered_hits.extend(lh);
+        strong_hsps.extend(ls);
     }
     let mut candidates = cluster_strand_lcbs(&filtered_hits, 1800, 200, 3, 30, 250.0);
     candidates.extend(cluster_strand_lcbs(&filtered_hits, 150, 25, 2, 16, 150.0));
     candidates.extend(strong_hsps);
-    let mut intervals = super::IntervalSet::from_lcbs(target.iter());
-    for lcb in candidates {
-        let (sx, ex) = (lcb[0].0, lcb[lcb.len() - 1].0);
-        if intervals.insert_if_disjoint(sx, ex) {
-            target.push(lcb);
-        }
-    }
+    super::chain::push_disjoint_lcbs(target, &[], candidates);
 }
 
 pub(crate) fn find_w12_raw_lcbs(idx_x: &ContigIndex, idx_y: &ContigIndex) -> (LcbList, LcbList) {
@@ -140,13 +151,7 @@ pub(crate) fn append_nonoverlapping_lcbs(
     let mut candidates = cluster_strand_lcbs(hits, 1800, 200, min_anchors, min_span, 250.0);
     // Tight 2-hit diagonal pass (LASTZ-style): 2 nearby hits within 120bp and <=25bp drift.
     candidates.extend(cluster_strand_lcbs(hits, 120, 25, 2, 16, 120.0));
-    let mut intervals = super::IntervalSet::from_lcbs(existing.iter().chain(target.iter()));
-    for lcb in candidates {
-        let (sx, ex) = (lcb[0].0, lcb[lcb.len() - 1].0);
-        if intervals.insert_if_disjoint(sx, ex) {
-            target.push(lcb);
-        }
-    }
+    super::chain::push_disjoint_lcbs(target, existing, candidates);
 }
 
 #[cfg(test)]

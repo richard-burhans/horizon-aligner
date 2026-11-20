@@ -111,9 +111,9 @@ fn cmd_extract(gfa_path: &str, specs: &[ExtractSpec], max_bp: Option<usize>) -> 
                 horizon_aligner::matches_sample_prefix(&p.name, &spec.sample_prefix) && {
                     let rest = horizon_aligner::strip_sample_prefix(&p.name, &spec.sample_prefix);
                     rest == spec.seq_id
-                        || rest.ends_with(&format!(".{}", spec.seq_id))
-                        || rest.ends_with(&format!("#{}", spec.seq_id))
-                        || rest.ends_with(&format!(":{}", spec.seq_id))
+                        || rest.strip_suffix(spec.seq_id.as_str()).is_some_and(|prefix| {
+                            prefix.ends_with('.') || prefix.ends_with('#') || prefix.ends_with(':')
+                        })
                 }
             }) {
                 let steps: Vec<(String, bool)> = parse_path_steps(&p.segment_names)
@@ -187,25 +187,27 @@ fn cmd_extract(gfa_path: &str, specs: &[ExtractSpec], max_bp: Option<usize>) -> 
     // Write one FASTA per spec (longest matching record).
     for (spec, (header_id, steps)) in specs.iter().zip(selected_paths.iter()) {
         let mut seq_out: Vec<u8> = Vec::new();
-        for (seg, is_fwd) in steps {
-            let seg_seq = seg_map
-                .get(seg)
-                .with_context(|| format!("missing segment '{seg}' in GFA"))?;
-            if seg_seq == b"*" {
-                bail!(
-                    "segment '{seg}' has placeholder sequence '*' and cannot be extracted to FASTA"
-                );
-            }
-            if *is_fwd {
-                seq_out.extend_from_slice(seg_seq);
-            } else {
-                rev_comp_into(seg_seq, &mut seq_out);
-            }
-            if let Some(cap) = max_bp
-                && seq_out.len() >= cap
-            {
-                seq_out.truncate(cap);
-                break;
+        if max_bp != Some(0) {
+            for (seg, is_fwd) in steps {
+                let seg_seq = seg_map
+                    .get(seg)
+                    .with_context(|| format!("missing segment '{seg}' in GFA"))?;
+                if seg_seq == b"*" {
+                    bail!(
+                        "segment '{seg}' has placeholder sequence '*' and cannot be extracted to FASTA"
+                    );
+                }
+                if *is_fwd {
+                    seq_out.extend_from_slice(seg_seq);
+                } else {
+                    rev_comp_into(seg_seq, &mut seq_out);
+                }
+                if let Some(cap) = max_bp
+                    && seq_out.len() >= cap
+                {
+                    seq_out.truncate(cap);
+                    break;
+                }
             }
         }
 

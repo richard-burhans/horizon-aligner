@@ -15,11 +15,28 @@ use std::time::Instant;
 const USAGE: &str = "usage: horizon_eval <ref_name> <target_name> <ref.fa> <target.fa> <truth.maf> [--min-fallback-cov F] [--hsp-threshold N]";
 
 fn read_named_contigs(path: &Path, target: &str) -> Result<HashMap<String, Vec<u8>>> {
-    let contigs = horizon_aligner::read_fasta_contigs(path, usize::MAX)?
-        .into_iter()
+    let all = horizon_aligner::read_fasta_contigs(path, usize::MAX)?;
+    let matched: HashMap<String, Vec<u8>> = all
+        .iter()
         .filter(|(id, _)| horizon_aligner::matches_sample_prefix(id, target))
+        .map(|(id, seq)| (id.clone(), seq.clone()))
         .collect();
-    Ok(contigs)
+    if matched.is_empty() {
+        Ok(all.into_iter().collect())
+    } else {
+        Ok(matched)
+    }
+}
+
+fn resolve_contig_index<'a, T>(
+    cache: &'a HashMap<String, T>,
+    maf_id: &str,
+    sample_name: &str,
+) -> Option<&'a T> {
+    cache.get(maf_id).or_else(|| {
+        let stripped = horizon_aligner::strip_sample_prefix(maf_id, sample_name);
+        (stripped != maf_id).then(|| cache.get(stripped)).flatten()
+    })
 }
 
 type MafPairMap = HashMap<(String, String), HashSet<(usize, usize)>>;
@@ -162,8 +179,14 @@ fn main() -> Result<()> {
     };
 
     let t0 = Instant::now();
-    let needed_refs: HashSet<&str> = maf_by_pair.keys().map(|(r, _)| r.as_str()).collect();
-    let needed_tgts: HashSet<&str> = maf_by_pair.keys().map(|(_, t)| t.as_str()).collect();
+    let needed_refs: HashSet<&str> = maf_by_pair
+        .keys()
+        .flat_map(|(r, _)| [r.as_str(), horizon_aligner::strip_sample_prefix(r, &cli.ref_name)])
+        .collect();
+    let needed_tgts: HashSet<&str> = maf_by_pair
+        .keys()
+        .flat_map(|(_, t)| [t.as_str(), horizon_aligner::strip_sample_prefix(t, &cli.target_name)])
+        .collect();
     let ref_idx_cache: HashMap<String, _> = ref_contigs
         .par_iter()
         .filter(|(id, _)| needed_refs.contains(id.as_str()))
@@ -185,8 +208,10 @@ fn main() -> Result<()> {
 
     let mut aligned_pairs = Vec::with_capacity(pairs.len());
     for ((ref_id, tgt_id), maf_set) in &pairs {
-        let (Some(idx_r), Some(idx_t)) = (ref_idx_cache.get(ref_id), tgt_idx_cache.get(tgt_id))
-        else {
+        let (Some(idx_r), Some(idx_t)) = (
+            resolve_contig_index(&ref_idx_cache, ref_id, &cli.ref_name),
+            resolve_contig_index(&tgt_idx_cache, tgt_id, &cli.target_name),
+        ) else {
             eprintln!(
                 "horizon_eval: warning: skipping MAF pair ({ref_id}, {tgt_id}) missing from FASTA inputs ({} pairs)",
                 maf_set.len()
@@ -195,16 +220,25 @@ fn main() -> Result<()> {
         };
         aligned_pairs.push((idx_r, idx_t, maf_set));
     }
+    anyhow::ensure!(
+        pairs.is_empty() || !aligned_pairs.is_empty(),
+        "no truth MAF contig pairs matched the provided FASTA inputs"
+    );
 
     let pair_stats: Vec<Result<(usize, usize, usize, usize)>> = aligned_pairs
         .into_par_iter()
         .map(|(idx_r, idx_t, maf_set)| {
-            let aln = align_contig_pair_with_config(idx_r, idx_t, &cfg)?;
-            let proto_set: HashSet<(usize, usize)> = aln.aligned_pairs.iter().copied().collect();
-            let overlap = proto_set.intersection(maf_set).count();
+            let mut aln = align_contig_pair_with_config(idx_r, idx_t, &cfg)?;
+            aln.aligned_pairs.sort_unstable();
+            aln.aligned_pairs.dedup();
+            let overlap = aln
+                .aligned_pairs
+                .iter()
+                .filter(|pair| maf_set.contains(pair))
+                .count();
             Ok((
                 maf_set.len(),
-                proto_set.len(),
+                aln.aligned_pairs.len(),
                 overlap,
                 aln.macro_bubbles + aln.internal_bubbles,
             ))
@@ -273,5 +307,17 @@ mod tests {
 
         let _ = fs::remove_file(&fa_path);
         let _ = fs::remove_file(&maf_path);
+    }
+
+    #[test]
+    fn read_named_contigs_falls_back_to_unprefixed_headers() {
+        let dir = std::env::temp_dir();
+        let pid = std::process::id();
+        let fa_path = dir.join(format!("horizon_eval_unprefixed_{pid}.fa"));
+        fs::write(&fa_path, ">chr1\nACGT\n").unwrap();
+        let contigs = read_named_contigs(&fa_path, "hg38").unwrap();
+        let _ = fs::remove_file(&fa_path);
+        assert_eq!(contigs.get("chr1").map(Vec::as_slice), Some(&b"ACGT"[..]));
+        assert!(resolve_contig_index(&contigs, "hg38.chr1", "hg38").is_some());
     }
 }

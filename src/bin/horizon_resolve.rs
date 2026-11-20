@@ -10,7 +10,7 @@ use horizon_aligner::gfa::{
 };
 use std::collections::{HashMap, HashSet};
 use std::env;
-use std::io::{BufRead, Write};
+use std::io::Write;
 use std::ops::ControlFlow;
 use std::time::Instant;
 
@@ -201,9 +201,9 @@ fn resolve_window(
             .or_insert((len_bp, divergence));
     }
 
-    let raw_cost = extract_min_mdl_cost(&mut eg, root, &model).map_or(0.0, |(c, _)| c);
+    let raw_cost = extract_min_mdl_cost(&eg, root, &model).map_or(0.0, |(c, _)| c);
     saturate_synteny(&mut eg, 6, 4096);
-    let Some((opt_cost, expr)) = extract_min_mdl_cost(&mut eg, root, &model) else {
+    let Some((opt_cost, expr)) = extract_min_mdl_cost(&eg, root, &model) else {
         return (
             steps.iter().map(|&(s, f)| (s.to_string(), f)).collect(),
             None,
@@ -344,10 +344,8 @@ fn pass2_rewrite<W: Write>(
     anchors: &HashSet<String>,
     cli: &CliArgs,
 ) -> Result<ResolveStats> {
-    let mut reader = horizon_aligner::gfa::open_line_reader(gfa_path)?;
     let mut stats = ResolveStats::default();
-    let mut line = String::new();
-    let mut raw_l_lines: Vec<String> = Vec::new();
+    let mut raw_links: Vec<horizon_aligner::gfa::GfaLink> = Vec::new();
     let mut used_edges: HashSet<(String, bool, String, bool)> = HashSet::new();
 
     let record_edges = |steps: &[(String, bool)],
@@ -360,17 +358,23 @@ fn pass2_rewrite<W: Write>(
         }
     };
 
-    while reader.read_line(&mut line)? > 0 {
-        let trimmed = line.trim_end_matches(['\r', '\n']);
-        if trimmed.starts_with("L\t") {
-            raw_l_lines.push(trimmed.to_string());
-            line.clear();
-            continue;
-        } else if trimmed.starts_with("P\t") {
-            let cols: Vec<&str> = trimmed.split('\t').collect();
-            if cols.len() >= 4 {
+    writeln!(out, "H\tVN:Z:1.1")?;
+    stream_gfa_records(gfa_path, |rec| {
+        match rec {
+            GfaRecord::Segment(s) => {
+                let seq_str = String::from_utf8_lossy(&s.sequence);
+                if let Some(ref tags) = s.tags {
+                    writeln!(out, "S\t{}\t{}\t{}", s.name, seq_str, tags)?;
+                } else {
+                    writeln!(out, "S\t{}\t{}", s.name, seq_str)?;
+                }
+            }
+            GfaRecord::Link(l) => {
+                raw_links.push(l);
+            }
+            GfaRecord::Path(p) => {
                 stats.paths_seen += 1;
-                let steps = parse_path_steps(cols[2]);
+                let steps = parse_path_steps(&p.segment_names);
                 let (resolved, _) = decompose_and_resolve(
                     &steps,
                     anchors,
@@ -395,30 +399,15 @@ fn pass2_rewrite<W: Write>(
                         .zip(steps.iter())
                         .all(|((a, fa), &(b, fb))| a == b && *fa == fb);
                 let overlaps = if same_steps {
-                    cols[3].to_string()
+                    p.overlaps.as_str()
                 } else {
-                    "*".to_string()
+                    "*"
                 };
-                if cols.len() > 4 {
-                    writeln!(
-                        out,
-                        "P\t{}\t{}\t{}\t{}",
-                        cols[1],
-                        seg_str,
-                        overlaps,
-                        cols[4..].join("\t")
-                    )?;
-                } else {
-                    writeln!(out, "P\t{}\t{}\t{}", cols[1], seg_str, overlaps)?;
-                }
-                line.clear();
-                continue;
+                writeln!(out, "P\t{}\t{}\t{}", p.name, seg_str, overlaps)?;
             }
-        } else if trimmed.starts_with("W\t") {
-            let cols: Vec<&str> = trimmed.split('\t').collect();
-            if cols.len() >= 7 {
+            GfaRecord::Walk(w) => {
                 stats.walks_seen += 1;
-                let steps = parse_walk_steps(cols[6]);
+                let steps = parse_walk_steps(&w.walk);
                 let (resolved, tags) = decompose_and_resolve(
                     &steps,
                     anchors,
@@ -447,19 +436,14 @@ fn pass2_rewrite<W: Write>(
                         .iter()
                         .zip(steps.iter())
                         .all(|((a, fa), &(b, fb))| a == b && *fa == fb);
-                let end_str = if !same_steps
-                    && all_known
-                    && resolved_bp > 0
-                    && let Ok(start_pos) = cols[4].parse::<usize>()
-                {
-                    start_pos.saturating_add(resolved_bp).to_string()
+                let end_pos = if !same_steps && all_known && resolved_bp > 0 {
+                    w.start.saturating_add(resolved_bp)
                 } else {
-                    cols[5].to_string()
+                    w.end
                 };
-                let extra_tags: String = if cols.len() > 7 {
-                    let kept: Vec<&str> = cols[7..]
-                        .iter()
-                        .copied()
+                let extra_tags: String = if let Some(ref raw_tags) = w.tags {
+                    let kept: Vec<&str> = raw_tags
+                        .split('\t')
                         .filter(|t| !(cli.tag_walks && !tags.is_empty() && t.starts_with("EG:Z:")))
                         .collect();
                     if kept.is_empty() {
@@ -474,11 +458,11 @@ fn pass2_rewrite<W: Write>(
                     writeln!(
                         out,
                         "W\t{}\t{}\t{}\t{}\t{}\t{}{}\tEG:Z:{}",
-                        cols[1],
-                        cols[2],
-                        cols[3],
-                        cols[4],
-                        end_str,
+                        w.sample,
+                        w.haplotype,
+                        w.seq_id,
+                        w.start,
+                        end_pos,
                         walk_str,
                         extra_tags,
                         tags.join(";")
@@ -487,32 +471,28 @@ fn pass2_rewrite<W: Write>(
                     writeln!(
                         out,
                         "W\t{}\t{}\t{}\t{}\t{}\t{}{}",
-                        cols[1], cols[2], cols[3], cols[4], end_str, walk_str, extra_tags
+                        w.sample, w.haplotype, w.seq_id, w.start, end_pos, walk_str, extra_tags
                     )?;
                 }
-                line.clear();
-                continue;
             }
         }
-        writeln!(out, "{trimmed}")?;
-        line.clear();
-    }
+        Ok(ControlFlow::Continue(()))
+    })?;
 
     let has_paths_or_walks = stats.paths_seen + stats.walks_seen > 0;
     let mut seen_edges: HashSet<(String, bool, String, bool)> = HashSet::new();
-    for l_line in &raw_l_lines {
-        let cols: Vec<&str> = l_line.split('\t').collect();
-        if cols.len() >= 6 {
-            let uf = cols[2] != "-";
-            let vf = cols[4] != "-";
-            let fwd_edge = (cols[1].to_string(), uf, cols[3].to_string(), vf);
-            if !has_paths_or_walks || used_edges.contains(&fwd_edge) {
-                writeln!(out, "{l_line}")?;
-                seen_edges.insert((cols[3].to_string(), !vf, cols[1].to_string(), !uf));
-                seen_edges.insert(fwd_edge);
-            }
-        } else {
-            writeln!(out, "{l_line}")?;
+    for l in raw_links {
+        let uf = l.from_orient != b'-';
+        let vf = l.to_orient != b'-';
+        let fwd_edge = (l.from.clone(), uf, l.to.clone(), vf);
+        if !has_paths_or_walks || used_edges.contains(&fwd_edge) {
+            writeln!(
+                out,
+                "L\t{}\t{}\t{}\t{}\t{}",
+                l.from, l.from_orient as char, l.to, l.to_orient as char, l.overlap
+            )?;
+            seen_edges.insert((l.to, !vf, l.from, !uf));
+            seen_edges.insert(fwd_edge);
         }
     }
     let mut missing: Vec<(String, bool, String, bool)> = used_edges

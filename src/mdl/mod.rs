@@ -373,8 +373,8 @@ fn schedule_and_run_extension(
     let mut macro_bubbles = 0usize;
 
     for (is_rc, lcb_list, y_work, anchor_spans) in [
-        (false, lcbs_fwd, seq_y, spans_fwd),
-        (true, lcbs_rc, seq_y_rc, spans_rc),
+        (false, lcbs_fwd, seq_y, &mut *spans_fwd),
+        (true, lcbs_rc, seq_y_rc, &mut *spans_rc),
     ] {
         let rescued_inter =
             fallback::rescue_inter_lcb_gaps(seq_x, y_work, lcb_list, anchor_spans, span)?;
@@ -397,7 +397,16 @@ fn schedule_and_run_extension(
     }
 
     // Estimate divergence-adaptive Pair-HMM parameters empirically from LCB anchors (with Beta prior shrinkage).
-    let hmm_params = estimate_hmm_params(seq_x, seq_y, seq_y_rc, lcbs_fwd, lcbs_rc, span);
+    let hmm_params = estimate_hmm_params(
+        seq_x,
+        seq_y,
+        seq_y_rc,
+        lcbs_fwd,
+        lcbs_rc,
+        spans_fwd,
+        spans_rc,
+        span,
+    );
     // Calibrate finite-sample Conformal Risk Control floor (n_cal = 15, alpha = 0.07) at observed GC.
     let mut gc_cnt = 0usize;
     let mut acgt_cnt = 0usize;
@@ -514,10 +523,7 @@ fn execute_dp_and_xdrop(
         )
         .collect();
 
-    for (is_rc, rev, mut pairs) in xdrop_results {
-        if rev {
-            pairs.reverse();
-        }
+    for (is_rc, _rev, pairs) in xdrop_results {
         scratch_pairs.clear();
         for (px, py) in pairs {
             let y_orig = if is_rc { pv_len - 1 - py } else { py };
@@ -732,13 +738,16 @@ fn lcb_passes_mdl_gate<F: Fn((usize, usize)) -> usize>(
 }
 
 /// Estimate divergence-adaptive Pair-HMM parameters from LCB anchors with Bayesian shrinkage.
+#[allow(clippy::too_many_arguments)]
 fn estimate_hmm_params(
     seq_x: &[u8],
     seq_y: &[u8],
     seq_y_rc: &[u8],
     lcbs_fwd: &[Vec<(usize, usize)>],
     lcbs_rc: &[Vec<(usize, usize)>],
-    span: usize,
+    spans_fwd: &std::collections::HashMap<(usize, usize), usize>,
+    spans_rc: &std::collections::HashMap<(usize, usize), usize>,
+    default_span: usize,
 ) -> HmmParams {
     let mut matches = 0usize;
     let mut total_bases = 0usize;
@@ -746,9 +755,13 @@ fn estimate_hmm_params(
     let mut total_indel_len = 0usize;
     let mut total_span = 0usize;
 
-    'outer: for (y_work, lcbs) in [(seq_y, lcbs_fwd), (seq_y_rc, lcbs_rc)] {
+    'outer: for (y_work, lcbs, anchor_spans) in [
+        (seq_y, lcbs_fwd, spans_fwd),
+        (seq_y_rc, lcbs_rc, spans_rc),
+    ] {
         for lcb in lcbs {
             for &(ax, ay) in lcb.iter().take(64) {
+                let span = anchor_spans.get(&(ax, ay)).copied().unwrap_or(default_span);
                 if ax + span <= seq_x.len() && ay + span <= y_work.len() {
                     for off in 0..span {
                         let bx = seq_x[ax + off].to_ascii_uppercase();
@@ -838,7 +851,8 @@ mod tests {
             8.0
         ));
 
-        let params = estimate_hmm_params(x, y, y, &[lcb], &[], 4);
+        let empty = std::collections::HashMap::new();
+        let params = estimate_hmm_params(x, y, y, &[lcb], &[], &empty, &empty, 4);
         assert!((0.60..=0.72).contains(&params.identity_prior));
     }
 }

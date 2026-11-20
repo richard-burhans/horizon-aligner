@@ -41,6 +41,7 @@ struct LiftedPiece {
     start: usize,
     end: usize,
     strand: char,
+    rel_fwd: bool,
     src_start: usize,
     src_end: usize,
     duplicated: bool,
@@ -202,7 +203,8 @@ fn lift_feature(
                 chosen.target_start + (seg_len - seg_s),
             )
         };
-        let out_strand = if chosen.is_fwd == step.is_fwd {
+        let rel_fwd = chosen.is_fwd == step.is_fwd;
+        let out_strand = if rel_fwd {
             feat.strand
         } else {
             flip_strand(feat.strand)
@@ -212,18 +214,20 @@ fn lift_feature(
             start: t_s,
             end: t_e,
             strand: out_strand,
+            rel_fwd,
             src_start: ov_s,
             src_end: ov_e,
             duplicated,
         };
         last_target = Some((piece.chrom.clone(), piece.start, piece.end, piece.strand));
 
-        // Coalesce contiguous (or within bridge_bp on the same chrom & strand) pieces.
+        // Coalesce contiguous (or within bridge_bp on the same chrom, strand, and relative orientation) pieces.
         if let Some(prev) = raw_pieces.last_mut() {
-            let same_ctx = prev.chrom == piece.chrom && prev.strand == piece.strand;
-            let same_rel_dir = chosen.is_fwd == step.is_fwd;
+            let same_ctx = prev.chrom == piece.chrom
+                && prev.strand == piece.strand
+                && prev.rel_fwd == piece.rel_fwd;
             if same_ctx
-                && same_rel_dir
+                && piece.rel_fwd
                 && piece.start >= prev.end
                 && piece.start - prev.end <= bridge_bp
                 && piece.src_start >= prev.src_end
@@ -235,7 +239,7 @@ fn lift_feature(
                 continue;
             }
             if same_ctx
-                && !same_rel_dir
+                && !piece.rel_fwd
                 && prev.start >= piece.end
                 && prev.start - piece.end <= bridge_bp
                 && piece.src_start >= prev.src_end
@@ -408,8 +412,9 @@ pub(crate) fn run_lift<W1: Write, W2: Write>(
         Ok(ControlFlow::Continue(()))
     })?;
 
-    // Build source StepSpan tables keyed by match_keys (retaining all walks per key).
-    let mut source_tables: HashMap<String, Vec<(Vec<StepSpan>, usize, usize)>> = HashMap::new();
+    // Build source StepSpan tables keyed by match_keys (storing walk indices to avoid cloning StepSpans).
+    let mut source_walks: Vec<(Vec<StepSpan>, usize, usize)> = Vec::with_capacity(source_paths.len());
+    let mut source_tables: HashMap<String, Vec<usize>> = HashMap::new();
     for p in source_paths {
         let start_off = p.start_offset;
         let mut cur = start_off;
@@ -425,11 +430,10 @@ pub(crate) fn run_lift<W1: Write, W2: Write>(
             });
             cur = next_cur;
         }
+        let walk_idx = source_walks.len();
+        source_walks.push((spans, start_off, cur));
         for key in p.match_keys {
-            source_tables
-                .entry(key)
-                .or_default()
-                .push((spans.clone(), start_off, cur));
+            source_tables.entry(key).or_default().push(walk_idx);
         }
     }
 
@@ -465,7 +469,7 @@ pub(crate) fn run_lift<W1: Write, W2: Write>(
     };
 
     for feat in cfg.features {
-        let Some(src_walks) = source_tables.get(&feat.chrom) else {
+        let Some(src_walk_idxs) = source_tables.get(&feat.chrom) else {
             summary.unmapped += 1;
             if let Some(u) = unmapped_out.as_deref_mut() {
                 writeln!(
@@ -476,100 +480,106 @@ pub(crate) fn run_lift<W1: Write, W2: Write>(
             }
             continue;
         };
-        let matching_walks: Vec<_> = src_walks
-            .iter()
-            .filter(|(_, s0, s1)| feat.end > *s0 && feat.start < *s1)
-            .collect();
-        let pieces = if matching_walks.is_empty() {
-            Vec::new()
-        } else {
-            let mut all_pieces = Vec::new();
-            for (src_steps, _, _) in matching_walks {
-                all_pieces.extend(lift_feature(
-                    feat,
-                    src_steps,
-                    &seg_lens,
-                    &target_index,
-                    &target_step_names,
-                    cfg.bridge_bp,
-                ));
-            }
-            all_pieces
-        };
-        let mapped_bp = if pieces.is_empty() {
-            0
-        } else {
-            let mut covered: Vec<(usize, usize)> = pieces
-                .iter()
-                .filter(|p| p.src_end > p.src_start)
-                .map(|p| (p.src_start, p.src_end))
-                .collect();
-            covered.sort_unstable();
-            let mut total = 0usize;
-            let mut cur_s = 0usize;
-            let mut cur_e = 0usize;
-            for (s, e) in covered {
-                if s > cur_e {
-                    total += cur_e - cur_s;
-                    cur_s = s;
-                    cur_e = e;
-                } else {
-                    cur_e = cur_e.max(e);
-                }
-            }
-            total + (cur_e - cur_s)
-        };
         let total_bp = feat.end.saturating_sub(feat.start).max(1);
-        #[allow(clippy::cast_precision_loss)]
-        let frac = mapped_bp as f64 / total_bp as f64;
+        let mut mapped_any = false;
+        let mut best_failed_frac = 0.0_f64;
 
-        if pieces.is_empty() || frac < cfg.min_frac {
+        for &w_idx in src_walk_idxs {
+            let (ref src_steps, s0, s1) = source_walks[w_idx];
+            if feat.end <= s0 || feat.start >= s1 {
+                continue;
+            }
+            let pieces = lift_feature(
+                feat,
+                src_steps,
+                &seg_lens,
+                &target_index,
+                &target_step_names,
+                cfg.bridge_bp,
+            );
+            let mapped_bp = if pieces.is_empty() {
+                0
+            } else {
+                let mut covered: Vec<(usize, usize)> = pieces
+                    .iter()
+                    .filter(|p| p.src_end > p.src_start)
+                    .map(|p| (p.src_start, p.src_end))
+                    .collect();
+                covered.sort_unstable();
+                let mut total = 0usize;
+                let mut cur_s = 0usize;
+                let mut cur_e = 0usize;
+                for (s, e) in covered {
+                    if s > cur_e {
+                        total += cur_e - cur_s;
+                        cur_s = s;
+                        cur_e = e;
+                    } else {
+                        cur_e = cur_e.max(e);
+                    }
+                }
+                total + (cur_e - cur_s)
+            };
+            #[allow(clippy::cast_precision_loss)]
+            let frac = mapped_bp as f64 / total_bp as f64;
+            if pieces.is_empty() || frac < cfg.min_frac {
+                best_failed_frac = best_failed_frac.max(frac);
+                continue;
+            }
+            mapped_any = true;
+            if pieces.len() == 1 {
+                if mapped_bp == total_bp {
+                    summary.lifted_exact += 1;
+                } else {
+                    summary.lifted_partial += 1;
+                }
+            } else {
+                summary.lifted_split += 1;
+            }
+
+            for (idx, p) in pieces.iter().enumerate() {
+                let status = if pieces.len() > 1 {
+                    format!("SPLIT_{}/{}", idx + 1, pieces.len())
+                } else if mapped_bp == total_bp {
+                    "EXACT".to_string()
+                } else {
+                    "PARTIAL".to_string()
+                };
+                let dup_tag = if p.duplicated { ";DUP" } else { "" };
+                writeln!(
+                    out,
+                    "{}\t{}\t{}\t{}\t{}\t{}\t{}:{}-{}\t{:.4}\t{}{}",
+                    p.chrom,
+                    p.start,
+                    p.end,
+                    feat.name,
+                    feat.score,
+                    p.strand,
+                    feat.chrom,
+                    feat.start,
+                    feat.end,
+                    frac,
+                    status,
+                    dup_tag
+                )?;
+            }
+        }
+
+        if !mapped_any {
             summary.unmapped += 1;
             if let Some(u) = unmapped_out.as_deref_mut() {
                 writeln!(
                     u,
                     "{}\t{}\t{}\t{}\t{}\t{}\tUNMAPPED({:.3})",
-                    feat.chrom, feat.start, feat.end, feat.name, feat.score, feat.strand, frac
+                    feat.chrom,
+                    feat.start,
+                    feat.end,
+                    feat.name,
+                    feat.score,
+                    feat.strand,
+                    best_failed_frac
                 )?;
             }
-            continue;
-        }
-
-        if pieces.len() == 1 {
-            if mapped_bp == total_bp {
-                summary.lifted_exact += 1;
-            } else {
-                summary.lifted_partial += 1;
-            }
-        } else {
-            summary.lifted_split += 1;
-        }
-
-        for (idx, p) in pieces.iter().enumerate() {
-            let status = if pieces.len() > 1 {
-                format!("SPLIT_{}/{}", idx + 1, pieces.len())
-            } else if mapped_bp == total_bp {
-                "EXACT".to_string()
-            } else {
-                "PARTIAL".to_string()
-            };
-            let dup_tag = if p.duplicated { ";DUP" } else { "" };
-            writeln!(
-                out,
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}:{}-{}\t{:.4}\t{}{}",
-                p.chrom,
-                p.start,
-                p.end,
-                feat.name,
-                feat.score,
-                p.strand,
-                feat.chrom,
-                feat.start,
-                feat.end,
-                frac,
-                status,
-                dup_tag
-            )?;
         }
     }
 

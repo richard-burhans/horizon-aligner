@@ -681,6 +681,7 @@ pub fn is_hdf5_deflated(bytes: &[u8], obj_addr: usize) -> bool {
 ///
 /// # Errors
 /// Returns an `std::io::Error` if seeking, reading, or zlib decompression fails.
+#[allow(clippy::too_many_lines)]
 pub fn read_hdf5_v0_dataset_bytes_seek<R: std::io::Read + std::io::Seek>(
     r: &mut R,
     obj_addr: u64,
@@ -744,7 +745,17 @@ pub fn read_hdf5_v0_dataset_bytes_seek<R: std::io::Read + std::io::Seek>(
     let mut chunks = Vec::new();
     let mut visited = std::collections::HashSet::new();
     walk_chunk_btree_v1_seek(r, btree_addr, ndim, &mut chunks, &mut visited, 0)?;
-    let mut out = Vec::new();
+    let prealloc = dims
+        .as_ref()
+        .zip(elem_size)
+        .and_then(|(ds_dims, es)| {
+            ds_dims.iter().try_fold(es, |acc, &d| {
+                usize::try_from(d).ok().and_then(|du| acc.checked_mul(du))
+            })
+        })
+        .unwrap_or(0)
+        .min(usize::try_from(MAX_CHUNK_DECOMPRESSED_BYTES).unwrap_or(usize::MAX));
+    let mut out = Vec::with_capacity(prealloc);
     let mut raw_chunk = Vec::new();
     for ch in chunks {
         let Ok(len) = usize::try_from(ch.size) else {

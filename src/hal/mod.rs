@@ -83,6 +83,31 @@ pub fn is_hdf5_hal(bytes: &[u8]) -> bool {
     bytes.starts_with(&HDF5_SIGNATURE)
 }
 
+fn concat_hal_contigs(
+    species_name: &str,
+    contigs: &[(String, Vec<u8>)],
+) -> (Vec<u8>, Vec<HalSequence>) {
+    let mut dna = Vec::new();
+    let mut seqs = Vec::with_capacity(contigs.len().max(1));
+    for (cname, cseq) in contigs {
+        let offset = dna.len();
+        dna.extend_from_slice(cseq);
+        seqs.push(HalSequence {
+            name: cname.clone(),
+            length: cseq.len(),
+            offset,
+        });
+    }
+    if seqs.is_empty() {
+        seqs.push(HalSequence {
+            name: format!("{species_name}.chr1"),
+            length: 0,
+            offset: 0,
+        });
+    }
+    (dna, seqs)
+}
+
 impl HalAlignment {
     /// Construct a star-tree `HalAlignment` from a reference genome, query `(name, dna)` pairs,
     /// and `(query_idx, ref_start, qry_start, len, rev)` blocks.
@@ -93,94 +118,29 @@ impl HalAlignment {
         queries: &[(String, Vec<u8>)],
         blocks: &[(usize, usize, usize, usize, bool)], // (query_idx, ref_start, qry_start, len, rev)
     ) -> Self {
-        type HalIntervalHits = Vec<(usize, usize, bool)>;
-        let mut genomes = Vec::with_capacity(1 + queries.len());
-        let mut bottom_segments = Vec::new();
-
-        // Group blocks by (ref_start, len) on the root/reference genome.
-        let mut by_interval: BTreeMap<(usize, usize), HalIntervalHits> = BTreeMap::new();
-        for &(q_idx, r_start, q_start, len, rev) in blocks {
-            by_interval
-                .entry((r_start, len))
-                .or_default()
-                .push((q_idx, q_start, rev));
-        }
-
-        let mut child_tops_per_q: Vec<Vec<HalTopSegment>> = vec![Vec::new(); queries.len()];
-        for ((r_start, len), hits) in by_interval {
-            let b_idx = bottom_segments.len();
-            let mut child_links = vec![None; queries.len()];
-            let mut any_valid = false;
-            for (q_idx, q_start, rev) in hits {
-                if q_idx >= queries.len() {
-                    continue;
-                }
-                any_valid = true;
-                let t_idx = child_tops_per_q[q_idx].len();
-                let prev_paralog = child_links[q_idx].map(|(prev_t, _)| prev_t);
-                child_tops_per_q[q_idx].push(HalTopSegment {
-                    start: q_start,
-                    length: len,
-                    parent_bottom_idx: Some(b_idx),
-                    parent_reversed: rev,
-                    next_paralog: prev_paralog,
-                });
-                child_links[q_idx] = Some((t_idx, rev));
-            }
-            if any_valid {
-                bottom_segments.push(HalBottomSegment {
-                    start: r_start,
-                    length: len,
-                    child_tops: child_links,
-                });
-            }
-        }
-
-        genomes.push(HalGenome {
-            name: ref_name.to_owned(),
-            parent: None,
-            children: (1..=queries.len()).collect(),
-            sequences: vec![HalSequence {
-                name: format!("{ref_name}.chr1"),
-                length: ref_dna.len(),
-                offset: 0,
-            }],
-            dna: ref_dna.to_vec(),
-            top_segments: Vec::new(),
-            bottom_segments,
-        });
-
-        let mut leaf_names = Vec::with_capacity(queries.len());
-        for (q_idx, (q_name, q_dna)) in queries.iter().enumerate() {
-            leaf_names.push(q_name.clone());
-            genomes.push(HalGenome {
-                name: q_name.clone(),
-                parent: Some(0),
-                children: Vec::new(),
-                sequences: vec![HalSequence {
-                    name: format!("{q_name}.chr1"),
-                    length: q_dna.len(),
-                    offset: 0,
-                }],
-                dna: q_dna.clone(),
-                top_segments: std::mem::take(&mut child_tops_per_q[q_idx]),
-                bottom_segments: Vec::new(),
-            });
-        }
-
-        let tree_newick = format!("({}){ref_name};", leaf_names.join(","));
-        Self {
-            tree_newick,
-            genomes,
-        }
+        type HalSpeciesContigs = (String, Vec<(String, Vec<u8>)>);
+        let ref_contigs = [(format!("{ref_name}.chr1"), ref_dna.to_vec())];
+        let qry_contigs: Vec<HalSpeciesContigs> = queries
+            .iter()
+            .map(|(q_name, q_dna)| {
+                (
+                    q_name.clone(),
+                    vec![(format!("{q_name}.chr1"), q_dna.clone())],
+                )
+            })
+            .collect();
+        let mc_blocks: Vec<(usize, usize, usize, usize, usize, usize, bool)> = blocks
+            .iter()
+            .map(|&(q_idx, r_start, q_start, len, rev)| (q_idx, 0, 0, r_start, q_start, len, rev))
+            .collect();
+        Self::from_multi_contig_star_blocks(ref_name, &ref_contigs, &qry_contigs, &mc_blocks)
     }
 
-    /// Named contigs for a query genome `(species_name, contigs)`.
     /// Construct a multi-contig star-tree `HalAlignment` from named reference contigs,
     /// query `(species_name, contigs)` pairs, and `(query_idx, ref_contig_idx, qry_contig_idx,
     /// ref_local_start, qry_local_start, len, rev)` blocks.
     #[must_use]
-    #[allow(clippy::too_many_lines, clippy::type_complexity)]
+    #[allow(clippy::type_complexity)]
     pub fn from_multi_contig_star_blocks(
         ref_name: &str,
         ref_contigs: &[(String, Vec<u8>)],
@@ -188,46 +148,12 @@ impl HalAlignment {
         blocks: &[(usize, usize, usize, usize, usize, usize, bool)],
     ) -> Self {
         type HalIntervalHits = Vec<(usize, usize, bool)>;
-        let mut ref_dna = Vec::new();
-        let mut ref_seqs = Vec::with_capacity(ref_contigs.len());
-        for (cname, cseq) in ref_contigs {
-            let offset = ref_dna.len();
-            ref_dna.extend_from_slice(cseq);
-            ref_seqs.push(HalSequence {
-                name: cname.clone(),
-                length: cseq.len(),
-                offset,
-            });
-        }
-        if ref_seqs.is_empty() {
-            ref_seqs.push(HalSequence {
-                name: format!("{ref_name}.chr1"),
-                length: 0,
-                offset: 0,
-            });
-        }
+        let (ref_dna, ref_seqs) = concat_hal_contigs(ref_name, ref_contigs);
 
         let mut qry_dnas: Vec<Vec<u8>> = Vec::with_capacity(queries.len());
         let mut qry_seqs: Vec<Vec<HalSequence>> = Vec::with_capacity(queries.len());
         for (q_name, q_contigs) in queries {
-            let mut dna = Vec::new();
-            let mut seqs = Vec::with_capacity(q_contigs.len());
-            for (cname, cseq) in q_contigs {
-                let offset = dna.len();
-                dna.extend_from_slice(cseq);
-                seqs.push(HalSequence {
-                    name: cname.clone(),
-                    length: cseq.len(),
-                    offset,
-                });
-            }
-            if seqs.is_empty() {
-                seqs.push(HalSequence {
-                    name: format!("{q_name}.chr1"),
-                    length: 0,
-                    offset: 0,
-                });
-            }
+            let (dna, seqs) = concat_hal_contigs(q_name, q_contigs);
             qry_dnas.push(dna);
             qry_seqs.push(seqs);
         }
@@ -401,7 +327,7 @@ impl HalAlignment {
                 let mut cur_t = Some(t_idx);
                 let mut steps = 0usize;
                 while let Some(idx) = cur_t {
-                    if steps >= child.top_segments.len() {
+                    if (steps > 0 && idx == t_idx) || steps >= child.top_segments.len() {
                         break;
                     }
                     steps += 1;

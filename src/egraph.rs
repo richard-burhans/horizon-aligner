@@ -242,6 +242,9 @@ pub fn saturate_synteny(eg: &mut EGraph, max_iters: usize, max_nodes: usize) {
                         a.op.cmp(&b.op).then_with(|| a.children.cmp(&b.children))
                     });
                     for cnode in cnodes {
+                        if eg.memo.len() >= max_nodes {
+                            break;
+                        }
                         if cnode.op == "inv" && cnode.children.len() == 1 {
                             merges.push((eid, cnode.children[0]));
                         } else if cnode.op == "seq" && cnode.children.len() == 2 {
@@ -279,6 +282,9 @@ pub fn saturate_synteny(eg: &mut EGraph, max_iters: usize, max_nodes: usize) {
                         x.op.cmp(&y.op).then_with(|| x.children.cmp(&y.children))
                     });
                     for anode in anodes {
+                        if eg.memo.len() >= max_nodes {
+                            break;
+                        }
                         if anode.op == "seq" && anode.children.len() == 2 {
                             let (x, y) = (anode.children[0], anode.children[1]);
                             let yz = eg.add(ENode {
@@ -300,6 +306,9 @@ pub fn saturate_synteny(eg: &mut EGraph, max_iters: usize, max_nodes: usize) {
                         x.op.cmp(&y.op).then_with(|| x.children.cmp(&y.children))
                     });
                     for bnode in bnodes {
+                        if eg.memo.len() >= max_nodes {
+                            break;
+                        }
                         if bnode.op == "seq" && bnode.children.len() == 2 {
                             let (y, z) = (bnode.children[0], bnode.children[1]);
                             let xy = eg.add(ENode {
@@ -405,6 +414,26 @@ impl MdlCostModel {
         child_cost + self.dup_header_bits + residual_bits
     }
 
+    fn block_residual_bits(&self, label: &str) -> f64 {
+        if self.block_stats.is_empty() {
+            return 0.0;
+        }
+        if let Some(&(len_bp, div)) = self.block_stats.get(label) {
+            let p = if div.is_finite() {
+                div.clamp(1e-6, 0.75)
+            } else {
+                0.75
+            };
+            let h2 = -p * p.log2() - (1.0 - p) * (1.0 - p).log2() + p * 3.0_f64.log2();
+            #[allow(clippy::cast_precision_loss)]
+            {
+                (len_bp as f64) * h2
+            }
+        } else {
+            0.0
+        }
+    }
+
     fn expr_residual_bits(expr: &Expr, stats: &HashMap<String, (usize, f64)>) -> f64 {
         match expr {
             Expr::Block(lbl) => {
@@ -434,23 +463,54 @@ impl MdlCostModel {
 /// Extract minimum-MDL-bit-cost synteny expression rooted at `root`.
 /// Returns `None` if `root` is out of bounds or has no extractable expression.
 #[must_use]
-pub fn extract_min_cost(eg: &mut EGraph, root: usize) -> Option<(f64, Expr)> {
+pub fn extract_min_cost(eg: &EGraph, root: usize) -> Option<(f64, Expr)> {
     let model = MdlCostModel::from_egraph(eg);
     extract_min_mdl_cost(eg, root, &model)
+}
+
+fn build_expr_from_best(
+    eg: &EGraph,
+    eid: usize,
+    best: &HashMap<usize, (f64, f64, ENode)>,
+    visiting: &mut HashSet<usize>,
+) -> Option<Expr> {
+    if !visiting.insert(eid) {
+        return None;
+    }
+    let (_, _, node) = best.get(&eid)?;
+    let expr = if let Some(lbl) = node.op.strip_prefix("blk:") {
+        Some(Expr::Block(lbl.to_owned()))
+    } else if node.op == "inv" && node.children.len() == 1 {
+        let cid = eg.find_imm(node.children[0]);
+        build_expr_from_best(eg, cid, best, visiting).map(|e| Expr::Inv(Box::new(e)))
+    } else if node.op == "dup" && node.children.len() == 1 {
+        let cid = eg.find_imm(node.children[0]);
+        build_expr_from_best(eg, cid, best, visiting).map(|e| Expr::Dup(Box::new(e)))
+    } else if node.op == "seq" && node.children.len() == 2 {
+        let l_id = eg.find_imm(node.children[0]);
+        let r_id = eg.find_imm(node.children[1]);
+        let left = build_expr_from_best(eg, l_id, best, visiting)?;
+        let right = build_expr_from_best(eg, r_id, best, visiting)?;
+        Some(Expr::Seq(Box::new(left), Box::new(right)))
+    } else {
+        None
+    };
+    visiting.remove(&eid);
+    expr
 }
 
 /// Extract minimum-parsimony synteny expression rooted at `root` under an explicit [`MdlCostModel`].
 /// Returns `None` if `root` is out of bounds or has no extractable expression.
 #[must_use]
 pub fn extract_min_mdl_cost(
-    eg: &mut EGraph,
+    eg: &EGraph,
     root: usize,
     model: &MdlCostModel,
 ) -> Option<(f64, Expr)> {
     if root >= eg.parent.len() {
         return None;
     }
-    let mut best: HashMap<usize, (f64, Expr)> = HashMap::new();
+    let mut best: HashMap<usize, (f64, f64, ENode)> = HashMap::new();
     let max_rounds = eg.classes.len() + 2;
     let mut class_ids: Vec<usize> = eg.classes.keys().copied().collect();
     class_ids.sort_unstable();
@@ -458,7 +518,7 @@ pub fn extract_min_mdl_cost(
     for _ in 0..max_rounds {
         let mut updated = false;
         for raw_id in &class_ids {
-            let eid = eg.find(*raw_id);
+            let eid = eg.find_imm(*raw_id);
             let Some(node_set) = eg.classes.get(&eid) else {
                 continue;
             };
@@ -468,38 +528,39 @@ pub fn extract_min_mdl_cost(
             for node in nodes {
                 if let Some(lbl) = node.op.strip_prefix("blk:") {
                     let cost = model.block_bits(lbl);
-                    if best.get(&eid).is_none_or(|(cur, _)| cost < *cur) {
-                        best.insert(eid, (cost, Expr::Block(lbl.to_owned())));
+                    let res = model.block_residual_bits(lbl);
+                    if best.get(&eid).is_none_or(|(cur, _, _)| cost < *cur) {
+                        best.insert(eid, (cost, res, (*node).clone()));
                         updated = true;
                     }
                 } else if node.op == "inv" && node.children.len() == 1 {
                     let cid = eg.find_imm(node.children[0]);
-                    if let Some((c, e)) = best.get(&cid) {
+                    if let Some(&(c, res, _)) = best.get(&cid) {
                         let cost = c + model.inv_op_bits;
-                        if best.get(&eid).is_none_or(|(cur, _)| cost < *cur) {
-                            let expr = Expr::Inv(Box::new(e.clone()));
-                            best.insert(eid, (cost, expr));
+                        if best.get(&eid).is_none_or(|(cur, _, _)| cost < *cur) {
+                            best.insert(eid, (cost, res, (*node).clone()));
                             updated = true;
                         }
                     }
                 } else if node.op == "dup" && node.children.len() == 1 {
                     let cid = eg.find_imm(node.children[0]);
-                    if let Some((c, e)) = best.get(&cid) {
-                        let cost = model.dup_cost(*c, e);
-                        if best.get(&eid).is_none_or(|(cur, _)| cost < *cur) {
-                            let expr = Expr::Dup(Box::new(e.clone()));
-                            best.insert(eid, (cost, expr));
+                    if let Some(&(c, res, _)) = best.get(&cid) {
+                        let cost = c + model.dup_header_bits + res;
+                        if best.get(&eid).is_none_or(|(cur, _, _)| cost < *cur) {
+                            best.insert(eid, (cost, res, (*node).clone()));
                             updated = true;
                         }
                     }
                 } else if node.op == "seq" && node.children.len() == 2 {
                     let l_id = eg.find_imm(node.children[0]);
                     let r_id = eg.find_imm(node.children[1]);
-                    if let (Some((c1, e1)), Some((c2, e2))) = (best.get(&l_id), best.get(&r_id)) {
+                    if let (Some(&(c1, r1, _)), Some(&(c2, r2, _))) =
+                        (best.get(&l_id), best.get(&r_id))
+                    {
                         let cost = c1 + c2 + model.seq_op_bits;
-                        if best.get(&eid).is_none_or(|(cur, _)| cost < *cur) {
-                            let expr = Expr::Seq(Box::new(e1.clone()), Box::new(e2.clone()));
-                            best.insert(eid, (cost, expr));
+                        let res = r1 + r2;
+                        if best.get(&eid).is_none_or(|(cur, _, _)| cost < *cur) {
+                            best.insert(eid, (cost, res, (*node).clone()));
                             updated = true;
                         }
                     }
@@ -510,7 +571,11 @@ pub fn extract_min_mdl_cost(
             break;
         }
     }
-    best.remove(&eg.find(root))
+    let root_id = eg.find_imm(root);
+    let cost = best.get(&root_id)?.0;
+    let mut visiting = HashSet::new();
+    let expr = build_expr_from_best(eg, root_id, &best, &mut visiting)?;
+    Some((cost, expr))
 }
 
 /// Collect all block labels wrapped in `Expr::Dup(...)`.
@@ -569,7 +634,7 @@ mod tests {
         let mut eg = EGraph::new();
         let root = build_seq_expr(&mut eg, &haplotype).expect("nonempty");
         saturate_synteny(&mut eg, 4, 800);
-        let (_, expr) = extract_min_cost(&mut eg, root).expect("extracted");
+        let (_, expr) = extract_min_cost(&eg, root).expect("extracted");
         assert!(has_dup_of(&expr, "B"), "expected dup(B) in {expr:?}");
     }
 
@@ -583,7 +648,7 @@ mod tests {
         let mut low_div = MdlCostModel::from_egraph(&eg);
         low_div.block_stats.insert("B".to_owned(), (1000, 0.02));
         let (cost_low, expr_low) =
-            extract_min_mdl_cost(&mut eg, root, &low_div).expect("extracted");
+            extract_min_mdl_cost(&eg, root, &low_div).expect("extracted");
         assert!(
             has_dup_of(&expr_low, "B"),
             "2% div should collapse dup: {expr_low:?}"
@@ -592,7 +657,7 @@ mod tests {
 
         let mut high_div = MdlCostModel::from_egraph(&eg);
         high_div.block_stats.insert("B".to_owned(), (1000, 0.75));
-        let (_, expr_high) = extract_min_mdl_cost(&mut eg, root, &high_div).expect("extracted");
+        let (_, expr_high) = extract_min_mdl_cost(&eg, root, &high_div).expect("extracted");
         assert!(
             !has_dup_of(&expr_high, "B"),
             "75% (JC-saturated) div should NOT collapse dup: {expr_high:?}"

@@ -277,16 +277,22 @@ fn base_to_idx(b: u8) -> Option<usize> {
 pub(crate) fn build_ancestral_consensus_contigs(
     hinge_contigs: &ContigList,
     high_cov_mafs: &[&str],
+    need_contig: &[bool],
 ) -> ContigList {
     const BASES: [u8; 4] = *b"ACGT";
     let ctg_map: HashMap<&str, usize> = hinge_contigs
         .iter()
         .enumerate()
+        .filter(|&(i, _)| need_contig.get(i).copied().unwrap_or(true))
         .map(|(i, (n, _))| (n.as_str(), i))
         .collect();
     let mut counts: Vec<Vec<[u32; 4]>> = hinge_contigs
         .iter()
-        .map(|(_, seq)| {
+        .enumerate()
+        .map(|(i, (_, seq))| {
+            if !need_contig.get(i).copied().unwrap_or(true) {
+                return Vec::new();
+            }
             seq.iter()
                 .map(|&b| {
                     let mut c = [0u32; 4];
@@ -435,7 +441,6 @@ pub(crate) fn run_progressive_sister_rescue(
 ) -> Result<()> {
     let hinge_contigs = &indexed[hinge_idx].1;
     let mut aligned_pairs: HashSet<(usize, usize)> = HashSet::new();
-    let mut rescues: Vec<(usize, String)> = Vec::new();
     for i in 0..indexed.len() {
         if i == hinge_idx {
             continue;
@@ -485,7 +490,7 @@ pub(crate) fn run_progressive_sister_rescue(
                 75,
             );
             if !rescued_j.is_empty() {
-                rescues.push((pw_j, rescued_j));
+                pairwise_mafs[pw_j].1.push_str(&rescued_j);
             }
             let rescued_i = rescue_transitive_maf(
                 hinge_contigs,
@@ -498,12 +503,9 @@ pub(crate) fn run_progressive_sister_rescue(
                 75,
             );
             if !rescued_i.is_empty() {
-                rescues.push((pw_i, rescued_i));
+                pairwise_mafs[pw_i].1.push_str(&rescued_i);
             }
         }
-    }
-    for (pw_idx, rescued_maf) in rescues {
-        pairwise_mafs[pw_idx].1.push_str(&rescued_maf);
     }
     Ok(())
 }
@@ -590,12 +592,13 @@ pub(crate) fn run_ancestral_consensus_rescue(
             sp_to_pw_idx,
             pairwise_mafs,
         );
-        let cons_contigs: ContigList = build_ancestral_consensus_contigs(hinge_contigs, &seed_mafs)
-            .into_iter()
-            .enumerate()
-            .filter(|&(ci, _)| need_contig[ci])
-            .map(|(_, c)| c)
-            .collect();
+        let cons_contigs: ContigList =
+            build_ancestral_consensus_contigs(hinge_contigs, &seed_mafs, &need_contig)
+                .into_iter()
+                .enumerate()
+                .filter(|&(ci, _)| need_contig[ci])
+                .map(|(_, c)| c)
+                .collect();
         if cons_contigs.is_empty() {
             break;
         }

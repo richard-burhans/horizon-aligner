@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result, bail};
 use horizon_aligner::{
-    AlignConfig, ContigIndex, align_contig_pair_with_config, format_maf_blocks, hal::HalAlignment,
+    AlignConfig, ContigIndex, align_contig_pair_runs, format_maf_blocks_runs, hal::HalAlignment,
     merge_pairwise_mafs, prepare_contig_index_opts, read_fasta_contigs, select_top_k_pairs,
     shared_seed_count,
 };
@@ -79,42 +79,45 @@ pub(crate) fn align_species_pair(
         })
         .collect();
 
-    let results: Vec<(String, Option<HalBlock>)> = pairs
+    let results: Vec<(String, Vec<HalBlock>)> = pairs
         .par_iter()
         .map(|&(xi, yi)| {
             let (nx, ix) = &ref_indices[xi];
             let (ny, iy) = &qry_indices[yi];
-            let aln = align_contig_pair_with_config(ix, iy, cfg)?;
-            if aln.aligned_pairs.is_empty() {
-                return Ok((String::new(), None));
+            let aln = align_contig_pair_runs(ix, iy, cfg)?;
+            if aln.aligned_runs.is_empty() {
+                return Ok((String::new(), Vec::new()));
             }
             let sx = &ref_contigs[xi].1;
             let sy = &qry_contigs[yi].1;
-            let maf = format_maf_blocks(nx, sx.len(), ny, sy.len(), sx, sy, &aln);
-            let hblk = if let Some(&(x0, y0)) = aln.aligned_pairs.first()
-                && let Some(&(x1, y1)) = aln.aligned_pairs.last()
-                && x1 > x0
-            {
-                Some((xi, yi, x0, y0.min(y1), x1 - x0 + 1, y1 < y0))
-            } else {
-                None
-            };
-            Ok((maf, hblk))
+            let maf = format_maf_blocks_runs(nx, sx.len(), ny, sy.len(), sx, sy, &aln);
+            let hblks: Vec<HalBlock> = aln
+                .aligned_runs
+                .iter()
+                .filter(|r| r.len > 0)
+                .filter_map(|r| {
+                    let q_start = if r.is_rc {
+                        (r.y_start + 1).checked_sub(r.len)?
+                    } else {
+                        r.y_start
+                    };
+                    Some((xi, yi, r.x_start, q_start, r.len, r.is_rc))
+                })
+                .collect();
+            Ok((maf, hblks))
         })
         .collect::<Result<Vec<_>>>()?;
 
     let mut maf_buf = String::from("##maf version=1 scoring=horizon_mdl\n");
     let mut hal_blocks = Vec::new();
-    for (maf, hblk) in results {
+    for (maf, hblks) in results {
         if !maf.is_empty() {
             let body = maf
                 .strip_prefix("##maf version=1 scoring=horizon_mdl\n")
                 .unwrap_or(&maf);
             maf_buf.push_str(body);
         }
-        if let Some(b) = hblk {
-            hal_blocks.push(b);
-        }
+        hal_blocks.extend(hblks);
     }
     Ok((maf_buf, hal_blocks))
 }
@@ -206,6 +209,7 @@ fn parse_args() -> Result<Option<GuideCliArgs>> {
     }))
 }
 
+#[allow(clippy::too_many_lines)]
 fn main() -> Result<()> {
     let Some(cli) = parse_args()? else {
         return Ok(());
@@ -254,10 +258,12 @@ fn main() -> Result<()> {
             &cfg,
             cli.top_k,
         )?;
-        let q_idx = hal_queries.len();
-        hal_queries.push((qry_sp.clone(), qry_contigs.clone()));
-        for (xi, yi, rs, qs, len, rev) in hblocks {
-            hal_all_blocks.push((q_idx, xi, yi, rs, qs, len, rev));
+        if cli.write_hal {
+            let q_idx = hal_queries.len();
+            hal_queries.push((qry_sp.clone(), qry_contigs.clone()));
+            for (xi, yi, rs, qs, len, rev) in hblocks {
+                hal_all_blocks.push((q_idx, xi, yi, rs, qs, len, rev));
+            }
         }
         sp_to_pw_idx.insert(i, pairwise_mafs.len());
         pairwise_mafs.push((qry_sp.clone(), maf_buf));
@@ -283,12 +289,6 @@ fn main() -> Result<()> {
         )?;
     }
 
-    let hal = HalAlignment::from_multi_contig_star_blocks(
-        hinge_sp,
-        hinge_contigs,
-        &hal_queries,
-        &hal_all_blocks,
-    );
     let (merged_maf, merged_gfa, total_blocks, multi_blocks) =
         merge_pairwise_mafs(hinge_sp, &pairwise_mafs, 1000);
     let merged_maf = prefix_hinge_species_in_maf(hinge_sp, &merged_maf);
@@ -297,15 +297,26 @@ fn main() -> Result<()> {
         .with_context(|| format!("writing {out_prefix}.maf"))?;
     fs::write(format!("{out_prefix}.gfa"), merged_gfa)
         .with_context(|| format!("writing {out_prefix}.gfa"))?;
-    if cli.write_hal {
+    let (hal_tree_desc, hal_bottom_segs) = if cli.write_hal {
+        let hal = HalAlignment::from_multi_contig_star_blocks(
+            hinge_sp,
+            hinge_contigs,
+            &hal_queries,
+            &hal_all_blocks,
+        );
+        let desc = hal.tree_newick.clone();
+        let nb = hal.genomes[0].bottom_segments.len();
         hal.write_hdf5_hal(std::path::Path::new(&format!("{out_prefix}.hal")))?;
-    }
+        (desc, nb)
+    } else {
+        ("skipped".to_owned(), 0)
+    };
     println!(
         "hinge={} species={} hal_tree={} hal_bottom_segs={} total_blocks={} multi_species_blocks={} elapsed_s={:.4}",
         hinge_sp,
         indexed.len(),
-        hal.tree_newick,
-        hal.genomes[0].bottom_segments.len(),
+        hal_tree_desc,
+        hal_bottom_segs,
         total_blocks,
         multi_blocks,
         t0.elapsed().as_secs_f64()
@@ -442,7 +453,7 @@ a score=20
 s hg38.chr1 0 20 + 20 ACGTACGTACGTACGTACGT
 s sp2.chr1 0 20 + 20 ACGTACGTACGTACGTACGT
 ";
-        let consensus = build_ancestral_consensus_contigs(&hinge_contigs, &[maf_s1, maf_s2]);
+        let consensus = build_ancestral_consensus_contigs(&hinge_contigs, &[maf_s1, maf_s2], &[true]);
         assert_eq!(consensus.len(), 1);
         assert_eq!(consensus[0].0, "hg38.chr1");
         assert_eq!(consensus[0].1, b"ACGTACGTACGTACGTACGT");

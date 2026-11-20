@@ -20,32 +20,44 @@ struct SegFlank {
     suffix: Vec<u8>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct DirectedEdge {
-    from: String,
+    from: u32,
     from_fwd: bool,
-    to: String,
+    to: u32,
     to_fwd: bool,
 }
 
 impl DirectedEdge {
-    fn new(from: &str, from_fwd: bool, to: &str, to_fwd: bool) -> Self {
+    fn new(from: u32, from_fwd: bool, to: u32, to_fwd: bool) -> Self {
         Self {
-            from: from.to_string(),
+            from,
             from_fwd,
-            to: to.to_string(),
+            to,
             to_fwd,
         }
     }
 
-    fn rev(&self) -> Self {
+    fn rev(self) -> Self {
         Self {
-            from: self.to.clone(),
+            from: self.to,
             from_fwd: !self.to_fwd,
-            to: self.from.clone(),
+            to: self.from,
             to_fwd: !self.from_fwd,
         }
     }
+}
+
+fn intern_seg(map: &mut HashMap<String, u32>, next_id: &mut u32, name: &str) -> u32 {
+    if let Some(&id) = map.get(name) {
+        return id;
+    }
+    let id = *next_id;
+    *next_id = next_id
+        .checked_add(1)
+        .expect("segment interner exceeded u32::MAX segments");
+    map.insert(name.to_string(), id);
+    id
 }
 
 fn oriented_3p_flank(flank: &SegFlank, is_fwd: bool) -> Vec<u8> {
@@ -133,7 +145,9 @@ struct CleanStats {
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::type_complexity)]
 fn clean_gfa<W: Write>(gfa_path: &str, cfg: &CleanConfig, out: &mut W) -> Result<CleanStats> {
-    let mut seg_flanks = HashMap::<String, SegFlank>::new();
+    let mut seg_ids = HashMap::<String, u32>::new();
+    let mut next_seg_id = 0_u32;
+    let mut seg_flanks = HashMap::<u32, SegFlank>::new();
     let mut links = Vec::<GfaLink>::new();
     let mut walk_support = HashMap::<DirectedEdge, usize>::new();
 
@@ -141,6 +155,7 @@ fn clean_gfa<W: Write>(gfa_path: &str, cfg: &CleanConfig, out: &mut W) -> Result
     stream_gfa_records(gfa_path, |rec| {
         match rec {
             GfaRecord::Segment(s) => {
+                let id = intern_seg(&mut seg_ids, &mut next_seg_id, &s.name);
                 let has_seq = s.sequence != b"*";
                 let len = s.seq_len();
                 let prefix = if has_seq && len > 0 {
@@ -154,7 +169,7 @@ fn clean_gfa<W: Write>(gfa_path: &str, cfg: &CleanConfig, out: &mut W) -> Result
                     Vec::new()
                 };
                 seg_flanks.insert(
-                    s.name,
+                    id,
                     SegFlank {
                         len,
                         prefix,
@@ -162,13 +177,19 @@ fn clean_gfa<W: Write>(gfa_path: &str, cfg: &CleanConfig, out: &mut W) -> Result
                     },
                 );
             }
-            GfaRecord::Link(l) => links.push(l),
+            GfaRecord::Link(l) => {
+                intern_seg(&mut seg_ids, &mut next_seg_id, &l.from);
+                intern_seg(&mut seg_ids, &mut next_seg_id, &l.to);
+                links.push(l);
+            }
             GfaRecord::Path(p) => {
                 let steps = parse_path_steps(&p.segment_names);
                 for win in steps.windows(2) {
-                    let e = DirectedEdge::new(win[0].0, win[0].1, win[1].0, win[1].1);
+                    let u = intern_seg(&mut seg_ids, &mut next_seg_id, win[0].0);
+                    let v = intern_seg(&mut seg_ids, &mut next_seg_id, win[1].0);
+                    let e = DirectedEdge::new(u, win[0].1, v, win[1].1);
                     let rev = e.rev();
-                    *walk_support.entry(e.clone()).or_insert(0) += 1;
+                    *walk_support.entry(e).or_insert(0) += 1;
                     if rev != e {
                         *walk_support.entry(rev).or_insert(0) += 1;
                     }
@@ -177,9 +198,11 @@ fn clean_gfa<W: Write>(gfa_path: &str, cfg: &CleanConfig, out: &mut W) -> Result
             GfaRecord::Walk(w) => {
                 let steps = parse_walk_steps(&w.walk);
                 for win in steps.windows(2) {
-                    let e = DirectedEdge::new(win[0].0, win[0].1, win[1].0, win[1].1);
+                    let u = intern_seg(&mut seg_ids, &mut next_seg_id, win[0].0);
+                    let v = intern_seg(&mut seg_ids, &mut next_seg_id, win[1].0);
+                    let e = DirectedEdge::new(u, win[0].1, v, win[1].1);
                     let rev = e.rev();
-                    *walk_support.entry(e.clone()).or_insert(0) += 1;
+                    *walk_support.entry(e).or_insert(0) += 1;
                     if rev != e {
                         *walk_support.entry(rev).or_insert(0) += 1;
                     }
@@ -197,21 +220,19 @@ fn clean_gfa<W: Write>(gfa_path: &str, cfg: &CleanConfig, out: &mut W) -> Result
     let mut severed_links = 0usize;
 
     for l in &links {
-        let edge = DirectedEdge::new(&l.from, l.from_orient != b'-', &l.to, l.to_orient != b'-');
+        let u = seg_ids[&l.from];
+        let v = seg_ids[&l.to];
+        let edge = DirectedEdge::new(u, l.from_orient != b'-', v, l.to_orient != b'-');
         let rev_edge = edge.rev();
-        let canon = if (&edge.from, edge.from_fwd, &edge.to, edge.to_fwd)
-            <= (
-                &rev_edge.from,
-                rev_edge.from_fwd,
-                &rev_edge.to,
-                rev_edge.to_fwd,
-            ) {
-            edge.clone()
+        let canon = if (edge.from, edge.from_fwd, edge.to, edge.to_fwd)
+            <= (rev_edge.from, rev_edge.from_fwd, rev_edge.to, rev_edge.to_fwd)
+        {
+            edge
         } else {
-            rev_edge.clone()
+            rev_edge
         };
 
-        let (should_sever, cp_bits) = *canon_decisions.entry(canon.clone()).or_insert_with(|| {
+        let (should_sever, cp_bits) = *canon_decisions.entry(canon).or_insert_with(|| {
             let sup = walk_support
                 .get(&canon)
                 .copied()
@@ -254,9 +275,15 @@ fn clean_gfa<W: Write>(gfa_path: &str, cfg: &CleanConfig, out: &mut W) -> Result
                 }
             }
             GfaRecord::Link(l) => {
-                let edge =
-                    DirectedEdge::new(&l.from, l.from_orient != b'-', &l.to, l.to_orient != b'-');
-                if let Some(&cp_bits) = severed_info.get(&edge) {
+                let edge_cp = seg_ids
+                    .get(&l.from)
+                    .zip(seg_ids.get(&l.to))
+                    .and_then(|(&u, &v)| {
+                        let edge =
+                            DirectedEdge::new(u, l.from_orient != b'-', v, l.to_orient != b'-');
+                        severed_info.get(&edge).copied()
+                    });
+                if let Some(cp_bits) = edge_cp {
                     emitted_bubbles += 1;
                     writeln!(
                         out,
@@ -279,8 +306,14 @@ fn clean_gfa<W: Write>(gfa_path: &str, cfg: &CleanConfig, out: &mut W) -> Result
                 }
                 let mut chunks: Vec<Vec<(&str, bool)>> = vec![vec![steps[0]]];
                 for win in steps.windows(2) {
-                    let e = DirectedEdge::new(win[0].0, win[0].1, win[1].0, win[1].1);
-                    if severed_info.contains_key(&e) {
+                    let is_severed = seg_ids
+                        .get(win[0].0)
+                        .zip(seg_ids.get(win[1].0))
+                        .is_some_and(|(&u, &v)| {
+                            let e = DirectedEdge::new(u, win[0].1, v, win[1].1);
+                            severed_info.contains_key(&e)
+                        });
+                    if is_severed {
                         chunks.push(vec![win[1]]);
                     } else if let Some(last) = chunks.last_mut() {
                         last.push(win[1]);
@@ -347,14 +380,26 @@ fn clean_gfa<W: Write>(gfa_path: &str, cfg: &CleanConfig, out: &mut W) -> Result
                 }
                 let mut chunks: Vec<(usize, usize, Vec<(&str, bool)>)> = Vec::new();
                 let mut cur_start = w.start;
-                let first_len = seg_flanks.get(steps[0].0).map_or(0, |f| f.len);
+                let first_len = seg_ids
+                    .get(steps[0].0)
+                    .and_then(|id| seg_flanks.get(id))
+                    .map_or(0, |f| f.len);
                 let mut cur_end = cur_start.saturating_add(first_len);
                 let mut cur_steps = vec![steps[0]];
 
                 for win in steps.windows(2) {
-                    let step_len = seg_flanks.get(win[1].0).map_or(0, |f| f.len);
-                    let e = DirectedEdge::new(win[0].0, win[0].1, win[1].0, win[1].1);
-                    if severed_info.contains_key(&e) {
+                    let step_len = seg_ids
+                        .get(win[1].0)
+                        .and_then(|id| seg_flanks.get(id))
+                        .map_or(0, |f| f.len);
+                    let is_severed = seg_ids
+                        .get(win[0].0)
+                        .zip(seg_ids.get(win[1].0))
+                        .is_some_and(|(&u, &v)| {
+                            let e = DirectedEdge::new(u, win[0].1, v, win[1].1);
+                            severed_info.contains_key(&e)
+                        });
+                    if is_severed {
                         chunks.push((cur_start, cur_end, std::mem::take(&mut cur_steps)));
                         cur_start = cur_end;
                         cur_end = cur_start.saturating_add(step_len);

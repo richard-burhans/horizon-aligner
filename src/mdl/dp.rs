@@ -349,9 +349,13 @@ pub(super) fn filter_mea_pairs_and_count_bubbles<X: Copy>(
                     && raw_cols[idx].1.is_some()
                     && raw_cols[idx].3 >= min_post_prob)
                     // Intentionally bridge 1-bp posterior dips (including mildly negative matches)
-                    // when the immediately following column recovers above `min_post_prob`.
+                    // when the immediately following column is an aligned pair recovering above `min_post_prob`.
                     || (idx + 1 < k
+                        && raw_cols[idx].0.is_some()
+                        && raw_cols[idx].1.is_some()
                         && raw_cols[idx].2 > -2.5
+                        && raw_cols[idx + 1].0.is_some()
+                        && raw_cols[idx + 1].1.is_some()
                         && raw_cols[idx + 1].3 >= min_post_prob))
             {
                 block_bits += raw_cols[idx].2;
@@ -973,5 +977,35 @@ mod tests {
             super::runs_to_pairs(&runs),
             vec![(10, 20), (11, 21), (12, 22), (13, 23), (14, 24)]
         );
+    }
+
+    #[test]
+    fn dip_bridging_does_not_bridge_across_gap_when_min_post_prob_zero() {
+        let cols = vec![
+            (Some(0usize), Some(0usize), 1.5, 0.9),
+            (Some(1), Some(1), -1.0, 0.0), // gap/dip before an unaligned gap
+            (None, Some(2), -1.0, 0.0),    // gap column with post_prob == 0.0
+            (Some(2), Some(3), 1.5, 0.9),
+        ];
+        let mut abstain = Vec::new();
+        let (kept, _bubbles) = super::filter_mea_pairs_and_count_bubbles(
+            &cols,
+            &mut abstain,
+            0.0,
+            2.0,
+        );
+        // If column 1 wrongly bridged into the gap column 2, block_bits would be
+        // 1.5 - 1.0 - 1.0 = -0.5 < 2.0 and abstain[0] would be marked true.
+        // With the fix, column 2 is not bridged, so wait: 1.5 < 2.0 too; test with 2.5 on col 0:
+        let _ = kept;
+        let cols2 = vec![
+            (Some(0usize), Some(0usize), 2.5, 0.9),
+            (None, Some(1), -2.0, 0.0),    // gap column (must NOT be bridged into)
+            (Some(1), Some(2), 2.5, 0.9),
+        ];
+        let (kept2, _) =
+            super::filter_mea_pairs_and_count_bubbles(&cols2, &mut abstain, 0.0, 2.0);
+        assert_eq!(kept2, vec![(0, 0), (1, 2)]);
+        assert!(abstain[1], "gap column must remain abstained");
     }
 }

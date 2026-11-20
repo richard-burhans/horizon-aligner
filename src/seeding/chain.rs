@@ -278,6 +278,28 @@ impl IntervalSet {
     }
 }
 
+pub(crate) fn push_disjoint_lcbs(
+    target: &mut super::LcbList,
+    existing: &[Vec<(usize, usize)>],
+    mut candidates: super::LcbList,
+) {
+    candidates.sort_unstable_by_key(|lcb| {
+        let span = lcb
+            .last()
+            .zip(lcb.first())
+            .map_or(0, |(last, first)| last.0.saturating_sub(first.0));
+        std::cmp::Reverse((lcb.len(), span))
+    });
+    let mut intervals = IntervalSet::from_lcbs(existing.iter().chain(target.iter()));
+    for lcb in candidates {
+        if let (Some(first), Some(last)) = (lcb.first(), lcb.last())
+            && intervals.insert_if_disjoint(first.0, last.0)
+        {
+            target.push(lcb);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{IntervalSet, lis_chain, merge_colinear_lcbs};

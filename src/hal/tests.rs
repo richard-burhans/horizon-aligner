@@ -803,3 +803,18 @@ fn hal_hdf5_export_normalizes_gaps_overlaps_and_paralogy_cycles() {
         assert!(t.2 >= 0, "paralogous segment {idx} must have next_paralog");
     }
 }
+
+#[test]
+fn hal_to_maf_handles_cyclic_next_paralog_without_duplicate_rows() {
+    let mut hal = HalAlignment::from_star_blocks(
+        "hg38",
+        b"ACGTACGT",
+        &[("q1".to_owned(), b"ACGTACGTACGTACGT".to_vec())],
+        &[(0, 0, 0, 8, false), (0, 0, 8, 8, false)],
+    );
+    // Close the paralog chain into a cycle (0 -> 1 -> 0) as normalized HALs do.
+    hal.genomes[1].top_segments[0].next_paralog = Some(1);
+    let maf = hal.to_maf_for_genome("hg38").expect("maf");
+    let q1_rows = maf.lines().filter(|l| l.starts_with("s q1 ")).count();
+    assert_eq!(q1_rows, 2, "cyclic next_paralog must emit each paralog once:\n{maf}");
+}

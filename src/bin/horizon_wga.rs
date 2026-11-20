@@ -60,7 +60,7 @@ fn parse_args() -> Result<Option<CliArgs>> {
         match args[i].as_str() {
             "-h" | "--help" => {
                 println!(
-                    "usage: horizon_wga <target.fa> <query.fa> [max_contigs] [--maf out.maf] [--gfa out.gfa] [--min-shared-seeds N] [--min-top-lcb N] [--top-k K | --rbest] [--resolve-dups] [--respect-softmask] [--ry-seeds | --no-ry-seeds] [--min-fallback-cov F] [--hsp-threshold N]\n       (max_contigs defaults to 1; pass 0 to align all contigs)\n       horizon_wga --hal-info <file.hal>\n       horizon_wga --graph <graph.gfa> <query.fa> [max_contigs]"
+                    "usage: horizon_wga <target.fa> <query.fa> [max_contigs] [--maf out.maf] [--gfa out.gfa] [--min-shared-seeds N] [--min-top-lcb N] [--top-k K | --rbest] [--resolve-dups] [--one-to-one] [--respect-softmask] [--ry-seeds | --no-ry-seeds] [--min-fallback-cov F] [--hsp-threshold N]\n       (max_contigs defaults to 1; pass 0 to align all contigs)\n       horizon_wga --hal-info <file.hal>\n       horizon_wga --graph <graph.gfa> <query.fa> [max_contigs]"
                 );
                 return Ok(None);
             }
@@ -165,7 +165,7 @@ fn parse_args() -> Result<Option<CliArgs>> {
     }
     if pos.len() < 2 && hal_info.is_none() && (graph_path.is_none() || pos.is_empty()) {
         bail!(
-            "usage: horizon_wga <target.fa> <query.fa> [max_contigs] [--maf out.maf] [--gfa out.gfa] [--graph target.gfa] [--hal-info file.hal] [--min-shared-seeds N] [--min-top-lcb N] [--top-k K | --rbest] [--resolve-dups] [--respect-softmask] [--ry-seeds | --no-ry-seeds] [--min-fallback-cov F] [--hsp-threshold N]"
+            "usage: horizon_wga <target.fa> <query.fa> [max_contigs] [--maf out.maf] [--gfa out.gfa] [--graph target.gfa] [--hal-info file.hal] [--min-shared-seeds N] [--min-top-lcb N] [--top-k K | --rbest] [--resolve-dups] [--one-to-one] [--respect-softmask] [--ry-seeds | --no-ry-seeds] [--min-fallback-cov F] [--hsp-threshold N]"
         );
     }
     let (fa_x, fa_y, max_contigs) = if hal_info.is_some() {
@@ -406,7 +406,7 @@ fn main() -> Result<()> {
                 }
             }
             if r.is_rc {
-                let y_lo = r.y_start + 1 - r.len;
+                let y_lo = r.y_start.saturating_add(1).saturating_sub(r.len);
                 for py in y_lo..=r.y_start {
                     if let Some(w) = y_bits.get_mut(py >> 6) {
                         *w |= 1_u64 << (py & 63);

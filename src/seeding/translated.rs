@@ -339,10 +339,23 @@ pub(crate) fn append_hsp_gated_aa_lcbs(
 ) {
     let mut gated = Vec::new();
     let mut strong = Vec::new();
-    for &(px, py) in hits {
+    let mut sorted_hits = hits.to_vec();
+    sorted_hits.sort_unstable_by_key(|&(px, py)| ((px as i128) - (py as i128), px));
+    let mut max_rx_by_diag_frame: std::collections::HashMap<(i128, usize), usize> =
+        std::collections::HashMap::new();
+    for (px, py) in sorted_hits {
+        let key = ((px as i128) - (py as i128), px % 3);
+        if max_rx_by_diag_frame.get(&key).is_some_and(|&rx| px < rx) {
+            gated.push((px, py));
+            continue;
+        }
         if let Some((lx, ly, rx, ry, sc)) =
             extend_aa_ungapped_hsp(seq_x, seq_y, px, py, min_aa_score)
         {
+            max_rx_by_diag_frame
+                .entry(key)
+                .and_modify(|m| *m = (*m).max(rx))
+                .or_insert(rx);
             gated.push((px, py));
             if sc >= min_aa_score + 30 && rx >= lx + 24 && ry >= ly + 24 {
                 strong.push(vec![(lx, ly), (rx - 18, ry - 18)]);
@@ -351,13 +364,7 @@ pub(crate) fn append_hsp_gated_aa_lcbs(
     }
     let mut candidates = cluster_strand_lcbs(&gated, 1800, 200, 2, 24, 250.0);
     candidates.extend(strong);
-    let mut intervals = super::IntervalSet::from_lcbs(target.iter());
-    for lcb in candidates {
-        let (sx, ex) = (lcb[0].0, lcb[lcb.len() - 1].0);
-        if intervals.insert_if_disjoint(sx, ex) {
-            target.push(lcb);
-        }
-    }
+    super::chain::push_disjoint_lcbs(target, &[], candidates);
 }
 
 /// Find 2-hit translated amino-acid 5-of-6 (`18 bp`) anchors across all reading frames.

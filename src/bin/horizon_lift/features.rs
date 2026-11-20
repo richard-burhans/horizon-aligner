@@ -42,24 +42,28 @@ pub(crate) fn parse_features(path: &Path, is_gff: bool) -> Result<Vec<InputFeatu
             let end_1: usize = cols[4]
                 .parse()
                 .with_context(|| format!("invalid GFF3 end at line {}", idx + 1))?;
-            let start = start_1.saturating_sub(1);
-            let end = end_1;
             anyhow::ensure!(
-                start <= end,
+                start_1 >= 1 && start_1 <= end_1,
                 "invalid GFF3 interval {start_1}..{end_1} at line {}",
                 idx + 1
             );
+            let start = start_1 - 1;
+            let end = end_1;
             let score = cols[5].to_string();
             let strand = match cols[6].chars().next() {
                 Some('-') => '-',
                 Some('+') => '+',
                 _ => '.',
             };
-            let name = cols[8]
+            let id_attr = cols[8]
                 .split(';')
-                .find_map(|kv| kv.strip_prefix("ID=").or_else(|| kv.strip_prefix("Name=")))
-                .unwrap_or(cols[2])
-                .to_string();
+                .find_map(|kv| kv.strip_prefix("ID="))
+                .filter(|v| !v.is_empty());
+            let name_attr = cols[8]
+                .split(';')
+                .find_map(|kv| kv.strip_prefix("Name="))
+                .filter(|v| !v.is_empty());
+            let name = id_attr.or(name_attr).unwrap_or(cols[2]).to_string();
             out.push(InputFeature {
                 chrom,
                 start,
@@ -160,5 +164,21 @@ mod tests {
         let err = parse_features(&p, false).unwrap_err();
         let _ = std::fs::remove_file(&p);
         assert!(err.to_string().contains("invalid BED interval"));
+    }
+
+    #[test]
+    fn parse_gff3_rejects_zero_start_and_prefers_id_over_name() {
+        let p_zero = write_temp("horizon_lift_gff_zero", "chr1\t.\texon\t0\t10\t.\t+\t.\tID=x\n");
+        let err = parse_features(&p_zero, true).unwrap_err();
+        let _ = std::fs::remove_file(&p_zero);
+        assert!(err.to_string().contains("invalid GFF3 interval"));
+
+        let p_attr = write_temp(
+            "horizon_lift_gff_attr",
+            "chr1\t.\tgene\t1\t10\t.\t+\t.\tName=foo;ID=bar\n",
+        );
+        let feats = parse_features(&p_attr, true).unwrap();
+        let _ = std::fs::remove_file(&p_attr);
+        assert_eq!(feats[0].name, "bar");
     }
 }

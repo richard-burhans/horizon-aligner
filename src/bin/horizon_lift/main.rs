@@ -457,11 +457,50 @@ W\tCHM13\t0\tchr1\t0\t10\t>s1
         let summary = run_lift(&cfg, &mut out, None::<&mut Vec<u8>>).expect("run_lift");
         let _ = std::fs::remove_file(&gfa_path);
         assert_eq!(summary.unmapped, 0);
+        assert_eq!(summary.lifted_exact, 2);
+        assert_eq!(summary.lifted_split, 0);
         let out_str = String::from_utf8(out).expect("utf8");
         assert!(
-            out_str.contains("\t1.0000\t"),
-            "expected frac=1.0000, got: {out_str}"
+            out_str.contains("\t1.0000\tEXACT"),
+            "expected diploid walks to emit EXACT per walk, got: {out_str}"
         );
+    }
+
+    #[test]
+    fn unstranded_feature_does_not_coalesce_across_inversion() {
+        let gfa_path = test_tmp("unstranded_inv_test.gfa");
+        let gfa = "\
+H\tVN:Z:1.1
+S\ts1\tACGTACGTAC
+S\ts2\tTGCATGCATG
+W\tGRCh38\t0\tchr1\t0\t20\t>s1>s2
+W\tCHM13\t0\tchr1\t0\t20\t>s1<s2
+";
+        std::fs::write(&gfa_path, gfa).expect("write test GFA");
+        let features = vec![InputFeature {
+            chrom: "chr1".into(),
+            start: 5,
+            end: 15,
+            name: "f_dot".into(),
+            score: "0".into(),
+            strand: '.',
+        }];
+        let cfg = LiftConfig {
+            gfa_path: gfa_path.to_str().expect("valid utf8"),
+            from_sample: "GRCh38",
+            to_sample: "CHM13",
+            to_chroms: &HashSet::new(),
+            features: &features,
+            min_frac: 0.0,
+            bridge_bp: 5,
+        };
+        let mut out = Vec::new();
+        let summary = run_lift(&cfg, &mut out, None::<&mut Vec<u8>>).expect("run_lift");
+        let _ = std::fs::remove_file(&gfa_path);
+        assert_eq!(summary.lifted_split, 1);
+        assert_eq!(summary.lifted_exact, 0);
+        let out_str = String::from_utf8(out).expect("utf8");
+        assert_eq!(out_str.lines().count(), 2, "expected 2 split pieces, got: {out_str}");
     }
 
     #[test]

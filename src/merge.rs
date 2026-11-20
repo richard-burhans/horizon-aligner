@@ -24,37 +24,66 @@ struct ProjectedInterval {
     qry_src_size: usize,
 }
 
-fn project_block_interval(
+#[derive(Clone, Copy)]
+struct BlockCursor {
+    col_idx: usize,
+    ref_pos: usize,
+    qry_consumed: usize,
+}
+
+fn project_block_interval_with_cursor(
     blk: &PairwiseMafBlock,
+    cursor: &mut BlockCursor,
     lo: usize,
     hi: usize,
 ) -> Option<ProjectedInterval> {
     if blk.ref_start > lo || blk.ref_end < hi {
         return None;
     }
+    if cursor.ref_pos > lo {
+        *cursor = BlockCursor {
+            col_idx: 0,
+            ref_pos: blk.ref_start,
+            qry_consumed: 0,
+        };
+    }
     let span = hi - lo;
-    let mut ref_pos = blk.ref_start;
-    let mut qry_before = 0usize;
+    let mut col_idx = cursor.col_idx;
+    let mut ref_pos = cursor.ref_pos;
+    let mut qry_consumed = cursor.qry_consumed;
     let mut qry_in = 0usize;
     let mut ref_bases = Vec::with_capacity(span);
     let mut qry_bases = Vec::with_capacity(span);
     let mut ins_after = vec![Vec::new(); span];
+    let mut saved_start_cursor: Option<BlockCursor> = None;
 
-    for (&rb, &qb) in blk.ref_seq.iter().zip(blk.qry_seq.iter()) {
+    while col_idx < blk.ref_seq.len() {
+        let rb = blk.ref_seq[col_idx];
+        let qb = blk.qry_seq[col_idx];
         if rb != b'-' {
+            if ref_pos == lo && saved_start_cursor.is_none() {
+                saved_start_cursor = Some(BlockCursor {
+                    col_idx,
+                    ref_pos,
+                    qry_consumed,
+                });
+            }
             if (lo..hi).contains(&ref_pos) {
                 ref_bases.push(rb);
                 qry_bases.push(qb);
                 if qb != b'-' {
                     qry_in += 1;
                 }
-            } else if ref_pos < lo && qb != b'-' {
-                qry_before += 1;
+            } else if ref_pos >= hi {
+                break;
+            }
+            if ref_pos < lo && qb != b'-' {
+                qry_consumed += 1;
             }
             ref_pos += 1;
         } else if ref_pos <= lo {
             if qb != b'-' {
-                qry_before += 1;
+                qry_consumed += 1;
             }
         } else {
             if ref_pos > hi {
@@ -66,19 +95,44 @@ fn project_block_interval(
                 qry_in += 1;
             }
         }
+        col_idx += 1;
+    }
+
+    if let Some(sc) = saved_start_cursor {
+        *cursor = BlockCursor {
+            col_idx,
+            ref_pos,
+            qry_consumed: sc.qry_consumed + qry_in,
+        };
     }
 
     if ref_bases.len() != span || qry_in == 0 {
         return None;
     }
+    let qry_start = saved_start_cursor
+        .map_or(qry_consumed, |sc| sc.qry_consumed);
     Some(ProjectedInterval {
         ref_bases,
         qry_bases,
         ins_after,
-        qry_start: blk.qry_start.checked_add(qry_before)?,
+        qry_start: blk.qry_start.checked_add(qry_start)?,
         qry_size: qry_in,
         qry_src_size: blk.qry_src_size,
     })
+}
+
+#[cfg(test)]
+fn project_block_interval(
+    blk: &PairwiseMafBlock,
+    lo: usize,
+    hi: usize,
+) -> Option<ProjectedInterval> {
+    let mut cursor = BlockCursor {
+        col_idx: 0,
+        ref_pos: blk.ref_start,
+        qry_consumed: 0,
+    };
+    project_block_interval_with_cursor(blk, &mut cursor, lo, hi)
 }
 
 type ThreadedQueryRow = (String, String, usize, usize, char, usize, String);
@@ -143,13 +197,13 @@ fn parse_pairwise_maf_blocks(
 ) -> std::collections::BTreeSet<String> {
     type RawRow = (String, usize, usize, char, usize, String);
     let mut cur_rows: Vec<RawRow> = Vec::new();
-    let mut tokens_by_contig: std::collections::BTreeMap<String, Vec<(String, i8)>> =
+    let mut tokens_by_contig: std::collections::BTreeMap<String, Vec<(usize, String, i8)>> =
         std::collections::BTreeMap::new();
 
     let flush =
         |rows: &mut Vec<RawRow>,
          by_contig: &mut std::collections::BTreeMap<String, Vec<PairwiseMafBlock>>,
-         tokens_by_contig: &mut std::collections::BTreeMap<String, Vec<(String, i8)>>| {
+         tokens_by_contig: &mut std::collections::BTreeMap<String, Vec<(usize, String, i8)>>| {
             if rows.len() >= 2 {
                 let r = &rows[0];
                 let q = &rows[1];
@@ -165,7 +219,7 @@ fn parse_pairwise_maf_blocks(
                 tokens_by_contig
                     .entry(r.0.clone())
                     .or_default()
-                    .push((format!("B{b_idx}"), if q.3 == '-' { -1 } else { 1 }));
+                    .push((r.1, format!("B{b_idx}"), if q.3 == '-' { -1 } else { 1 }));
                 by_contig
                     .entry(r.0.clone())
                     .or_default()
@@ -207,8 +261,11 @@ fn parse_pairwise_maf_blocks(
     flush(&mut cur_rows, by_contig, &mut tokens_by_contig);
 
     let mut sp_dups = std::collections::BTreeSet::new();
-    for tokens in tokens_by_contig.values() {
-        crate::formats::collect_windowed_duplications(tokens, &mut sp_dups);
+    for mut tokens in tokens_by_contig.into_values() {
+        tokens.sort_unstable_by_key(|(start, _, _)| *start);
+        let ordered: Vec<(String, i8)> =
+            tokens.into_iter().map(|(_, tok, st)| (tok, st)).collect();
+        crate::formats::collect_windowed_duplications(&ordered, &mut sp_dups);
     }
     sp_dups
 }
@@ -232,7 +289,8 @@ fn emit_merged_block(
         hi - lo
     );
     for (sp, qc, qs, qz, st, qsrc, qseq) in sp_rows {
-        let _ = writeln!(maf_out, "s {sp}.{qc} {qs} {qz} {st} {qsrc} {qseq}");
+        let stripped = crate::formats::strip_sample_prefix(qc, sp);
+        let _ = writeln!(maf_out, "s {sp}.{stripped} {qs} {qz} {st} {qsrc} {qseq}");
     }
     maf_out.push('\n');
 
@@ -252,6 +310,7 @@ fn emit_merged_block(
 /// Merge multiple pairwise MAF texts anchored on `ref_species` using exact reference-interval
 /// splitting and base-level threading into multi-species MAF v1 + GFA v1.1 + e-graph paralog tags.
 #[must_use]
+#[allow(clippy::too_many_lines)]
 pub fn merge_pairwise_mafs(
     ref_species: &str,
     pairwise_mafs: &[(String, String)],
@@ -286,7 +345,7 @@ pub fn merge_pairwise_mafs(
         bounds.sort_unstable();
         bounds.dedup();
 
-        let mut active: Vec<usize> = Vec::new();
+        let mut active: Vec<(usize, BlockCursor)> = Vec::new();
         let mut next_idx = 0usize;
 
         for w in bounds.windows(2) {
@@ -296,11 +355,18 @@ pub fn merge_pairwise_mafs(
             }
             while next_idx < blocks.len() && blocks[next_idx].ref_start <= lo {
                 if blocks[next_idx].ref_end >= hi {
-                    active.push(next_idx);
+                    active.push((
+                        next_idx,
+                        BlockCursor {
+                            col_idx: 0,
+                            ref_pos: blocks[next_idx].ref_start,
+                            qry_consumed: 0,
+                        },
+                    ));
                 }
                 next_idx += 1;
             }
-            active.retain(|&idx| blocks[idx].ref_end >= hi);
+            active.retain(|&(idx, _)| blocks[idx].ref_end >= hi);
             if active.is_empty() {
                 continue;
             }
@@ -310,9 +376,9 @@ pub fn merge_pairwise_mafs(
             // Net overlapping alignments per query species by highest match score in [lo, hi).
             let mut best_by_sp: BTreeMap<String, (isize, String, char, ProjectedInterval)> =
                 BTreeMap::new();
-            for &idx in &active {
-                let blk = &blocks[idx];
-                if let Some(proj) = project_block_interval(blk, lo, hi) {
+            for (idx, cursor) in &mut active {
+                let blk = &blocks[*idx];
+                if let Some(proj) = project_block_interval_with_cursor(blk, cursor, lo, hi) {
                     ref_src_size_opt.get_or_insert(blk.ref_src_size);
                     if ref_bases_opt.is_none() {
                         ref_bases_opt = Some(proj.ref_bases.clone());
@@ -432,5 +498,29 @@ mod tests {
         assert_eq!(right.ins_after, vec![Vec::new(), Vec::new()]);
         assert_eq!(right.qry_start, 23);
         assert_eq!(right.qry_size, 2);
+    }
+
+    #[test]
+    fn merge_pairwise_mafs_handles_prefixed_contigs_and_unsorted_blocks() {
+        let maf_dog = "\
+##maf version=1
+a score=1
+s human.chr1 10 4 + 100 ACGT
+s dog.chr2 20 4 + 100 ACGT
+
+a score=1
+s human.chr1 0 4 + 100 TTTT
+s dog.chr2 0 4 + 100 TTTT
+";
+        let (maf_out, _gfa_out, total_blocks, _multi) =
+            merge_pairwise_mafs("human", &[("dog".to_owned(), maf_dog.to_owned())], 10);
+        assert_eq!(total_blocks, 2);
+        // Should not double-prefix "dog.dog.chr2"
+        assert!(maf_out.contains("s dog.chr2 "));
+        assert!(!maf_out.contains("dog.dog.chr2"));
+        // Blocks should be emitted in sorted reference order (0 before 10).
+        let first_offset = maf_out.find("s human.chr1 0 4").expect("block 0");
+        let second_offset = maf_out.find("s human.chr1 10 4").expect("block 10");
+        assert!(first_offset < second_offset);
     }
 }

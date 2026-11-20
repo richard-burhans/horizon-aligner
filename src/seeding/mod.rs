@@ -679,13 +679,13 @@ pub fn select_top_k_pairs(
     }
     let mut mask = vec![vec![false; query_idx.len()]; target_idx.len()];
     for (x_i, list) in by_x.iter_mut().enumerate() {
-        list.sort_unstable_by_key(|a| std::cmp::Reverse(a.0));
+        list.sort_unstable_by_key(|a| (std::cmp::Reverse(a.0), a.1));
         for &(_, y_i) in list.iter().take(top_k) {
             mask[x_i][y_i] = true;
         }
     }
     for (y_i, list) in by_y.iter_mut().enumerate() {
-        list.sort_unstable_by_key(|a| std::cmp::Reverse(a.0));
+        list.sort_unstable_by_key(|a| (std::cmp::Reverse(a.0), a.1));
         for &(_, x_i) in list.iter().take(top_k) {
             mask[x_i][y_i] = true;
         }

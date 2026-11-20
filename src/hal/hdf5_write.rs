@@ -141,31 +141,33 @@ impl Hdf5V0Builder {
         let mut msg_bytes = Vec::new();
         for &(mtype, body) in messages {
             let padded_len = (body.len() + 7) & !7;
-            debug_assert!(
-                u16::try_from(padded_len).is_ok(),
-                "HDF5 v1 object header message exceeds 65535 bytes: {padded_len}"
-            );
+            let padded_u16 = u16::try_from(padded_len).unwrap_or_else(|_| {
+                panic!("HDF5 v1 object header message exceeds 65535 bytes: {padded_len}")
+            });
             msg_bytes.extend_from_slice(&mtype.to_le_bytes());
-            msg_bytes
-                .extend_from_slice(&u16::try_from(padded_len).unwrap_or(u16::MAX).to_le_bytes());
+            msg_bytes.extend_from_slice(&padded_u16.to_le_bytes());
             msg_bytes.push(0); // flags
             msg_bytes.extend_from_slice(&[0u8; 3]); // reserved
             msg_bytes.extend_from_slice(body);
             msg_bytes.resize(msg_bytes.len() + (padded_len - body.len()), 0);
         }
+        let n_msgs_u16 = u16::try_from(messages.len()).unwrap_or_else(|_| {
+            panic!(
+                "HDF5 v1 object header message count exceeds 65535: {}",
+                messages.len()
+            )
+        });
+        let msg_bytes_u32 = u32::try_from(msg_bytes.len()).unwrap_or_else(|_| {
+            panic!(
+                "HDF5 v1 object header size exceeds u32::MAX: {}",
+                msg_bytes.len()
+            )
+        });
         self.buf.push(1); // version 1
         self.buf.push(0);
-        self.buf.extend_from_slice(
-            &u16::try_from(messages.len())
-                .unwrap_or(u16::MAX)
-                .to_le_bytes(),
-        );
+        self.buf.extend_from_slice(&n_msgs_u16.to_le_bytes());
         self.buf.extend_from_slice(&1u32.to_le_bytes()); // ref_count
-        self.buf.extend_from_slice(
-            &u32::try_from(msg_bytes.len())
-                .unwrap_or(u32::MAX)
-                .to_le_bytes(),
-        );
+        self.buf.extend_from_slice(&msg_bytes_u32.to_le_bytes());
         self.buf.extend_from_slice(&[0u8; 4]); // padding to 16-byte header
         self.buf.extend_from_slice(&msg_bytes);
         hdr_addr
@@ -410,12 +412,14 @@ impl Hdf5V0Builder {
 
 fn encode_vls_attr_msg(name: &str, str_len: u32, gcol_addr: u64, obj_idx: u32) -> Vec<u8> {
     let name_bytes = name.as_bytes();
-    let name_size = name_bytes.len() + 1;
+    let name_size = u16::try_from(name_bytes.len() + 1).unwrap_or_else(|_| {
+        panic!("HDF5 attribute name exceeds 65535 bytes: {}", name.len())
+    });
 
     let mut msg = Vec::new();
     msg.push(1); // Attribute message version 1
     msg.push(0); // reserved
-    msg.extend_from_slice(&u16::try_from(name_size).unwrap_or(u16::MAX).to_le_bytes());
+    msg.extend_from_slice(&name_size.to_le_bytes());
     msg.extend_from_slice(&20u16.to_le_bytes()); // datatype size (20 bytes for VLS of char)
     msg.extend_from_slice(&8u16.to_le_bytes()); // dataspace size (8 bytes for scalar)
 
@@ -446,11 +450,113 @@ fn encode_vls_attr_msg(name: &str, str_len: u32, gcol_addr: u64, obj_idx: u32) -
     msg
 }
 
+fn interval_overlaps(
+    occupied: &std::collections::BTreeMap<usize, usize>,
+    start: usize,
+    end: usize,
+) -> bool {
+    if let Some((&_prev_s, &prev_e)) = occupied.range(..end).next_back()
+        && prev_e > start
+    {
+        return true;
+    }
+    occupied.range(start..end).next().is_some()
+}
+
+fn seq_contains_interval(seqs: &[HalSequence], start: usize, end: usize) -> bool {
+    let idx = seqs.partition_point(|s| s.offset + s.length <= start);
+    seqs.get(idx)
+        .is_some_and(|s| start >= s.offset && end <= s.offset + s.length)
+}
+
+fn finalize_child_top_segments(
+    sequences: &[HalSequence],
+    mut segs: Vec<(usize, usize, usize, bool)>,
+    c_idx: usize,
+    root_bottoms: &mut [HalBottomSegment],
+) -> Vec<HalTopSegment> {
+    use std::collections::HashMap;
+    segs.sort_by_key(|&(s, _, _, _)| s);
+
+    let mut final_tops: Vec<HalTopSegment> = Vec::new();
+    let mut seg_idx = 0usize;
+    for seq in sequences {
+        let mut pos = seq.offset;
+        let seq_end = seq.offset + seq.length;
+        while seg_idx < segs.len() && segs[seg_idx].0 < seq_end {
+            let (s, l, p_b_idx, rev) = segs[seg_idx];
+            seg_idx += 1;
+            if s < pos {
+                continue;
+            }
+            if s > pos {
+                final_tops.push(HalTopSegment {
+                    start: pos,
+                    length: s - pos,
+                    parent_bottom_idx: None,
+                    parent_reversed: false,
+                    next_paralog: None,
+                });
+            }
+            final_tops.push(HalTopSegment {
+                start: s,
+                length: l,
+                parent_bottom_idx: Some(p_b_idx),
+                parent_reversed: rev,
+                next_paralog: None,
+            });
+            pos = s + l;
+        }
+        if pos < seq_end {
+            final_tops.push(HalTopSegment {
+                start: pos,
+                length: seq_end - pos,
+                parent_bottom_idx: None,
+                parent_reversed: false,
+                next_paralog: None,
+            });
+        }
+    }
+
+    let mut by_parent: HashMap<usize, Vec<(usize, bool)>> = HashMap::new();
+    for (t_idx, t) in final_tops.iter().enumerate() {
+        if let Some(pb) = t.parent_bottom_idx {
+            by_parent
+                .entry(pb)
+                .or_default()
+                .push((t_idx, t.parent_reversed));
+        }
+    }
+    for (pb, list) in by_parent {
+        if let Some(&(first_t, first_rev)) = list.first() {
+            root_bottoms[pb].child_tops[c_idx] = Some((first_t, first_rev));
+        }
+        if list.len() > 1 {
+            for w in 0..list.len() {
+                let cur_t = list[w].0;
+                let next_t = list[(w + 1) % list.len()].0;
+                final_tops[cur_t].next_paralog = Some(next_t);
+            }
+        }
+    }
+
+    final_tops
+}
+
+struct NormalizedSegments {
+    tops_by_genome: Vec<Vec<HalTopSegment>>,
+    bottoms_by_genome: Vec<Vec<HalBottomSegment>>,
+}
+
 #[allow(clippy::too_many_lines)]
-fn normalize_star_hal_for_export(hal: &HalAlignment) -> HalAlignment {
-    use std::collections::{BTreeSet, HashMap};
-    if hal.genomes.is_empty() {
-        return hal.clone();
+fn normalize_hal_segments_for_export(hal: &HalAlignment) -> NormalizedSegments {
+    use std::collections::{BTreeMap, BTreeSet};
+    let n_genomes = hal.genomes.len();
+    if n_genomes == 0 {
+        return NormalizedSegments {
+            tops_by_genome: Vec::new(),
+            bottoms_by_genome: Vec::new(),
+        };
     }
     let root = &hal.genomes[0];
     if root.parent.is_some()
@@ -458,7 +564,33 @@ fn normalize_star_hal_for_export(hal: &HalAlignment) -> HalAlignment {
             .iter()
             .any(|g| g.parent != Some(0) || !g.children.is_empty())
     {
-        return hal.clone();
+        // Non-star tree: preserve existing segment links while ensuring sorted order.
+        let mut tops_by_genome: Vec<Vec<HalTopSegment>> = hal
+            .genomes
+            .iter()
+            .map(|g| {
+                let mut t = g.top_segments.clone();
+                t.sort_by_key(|s| s.start);
+                t
+            })
+            .collect();
+        let mut bottoms_by_genome: Vec<Vec<HalBottomSegment>> = hal
+            .genomes
+            .iter()
+            .map(|g| {
+                let mut b = g.bottom_segments.clone();
+                b.sort_by_key(|s| s.start);
+                b
+            })
+            .collect();
+        for g in &mut tops_by_genome {
+            let _ = g.len();
+        }
+        let _ = &mut bottoms_by_genome;
+        return NormalizedSegments {
+            tops_by_genome,
+            bottoms_by_genome,
+        };
     }
 
     let num_children = root.children.len();
@@ -469,19 +601,23 @@ fn normalize_star_hal_for_export(hal: &HalAlignment) -> HalAlignment {
         pts.insert(s.offset.min(root.dna.len()));
         pts.insert((s.offset + s.length).min(root.dna.len()));
     }
-    for b in &root.bottom_segments {
-        if b.length > 0 && b.start < root.dna.len() {
-            pts.insert(b.start);
-            pts.insert((b.start + b.length).min(root.dna.len()));
-        }
+    let mut sorted_orig_b: Vec<&HalBottomSegment> = root
+        .bottom_segments
+        .iter()
+        .filter(|b| b.length > 0 && b.start < root.dna.len())
+        .collect();
+    for &b in &sorted_orig_b {
+        pts.insert(b.start);
+        pts.insert((b.start + b.length).min(root.dna.len()));
     }
+    sorted_orig_b.sort_by_key(|b| b.start);
     let pts_vec: Vec<usize> = pts.into_iter().collect();
 
     let mut new_bottoms: Vec<HalBottomSegment> = Vec::with_capacity(pts_vec.len());
-    // Pending child top segments: (start, len, new_bottom_idx, reversed)
     let mut placed_tops: Vec<Vec<(usize, usize, usize, bool)>> = vec![Vec::new(); num_children];
-    // Track occupied intervals per child so we never emit overlapping top segments on a child.
-    let mut occupied_child: Vec<Vec<(usize, usize)>> = vec![Vec::new(); num_children];
+    let mut occupied_child: Vec<BTreeMap<usize, usize>> = vec![BTreeMap::new(); num_children];
+    let mut active: Vec<&HalBottomSegment> = Vec::new();
+    let mut next_b = 0usize;
 
     for win in pts_vec.windows(2) {
         let a = win[0];
@@ -489,14 +625,17 @@ fn normalize_star_hal_for_export(hal: &HalAlignment) -> HalAlignment {
         if b <= a {
             continue;
         }
+        while next_b < sorted_orig_b.len() && sorted_orig_b[next_b].start <= a {
+            active.push(sorted_orig_b[next_b]);
+            next_b += 1;
+        }
+        active.retain(|orig_b| orig_b.start + orig_b.length >= b);
+
         let sub_len = b - a;
         let b_idx = new_bottoms.len();
         let child_links = vec![None; num_children];
 
-        for orig_b in &root.bottom_segments {
-            if orig_b.length == 0 || orig_b.start > a || orig_b.start + orig_b.length < b {
-                continue;
-            }
+        for &orig_b in &active {
             for c_idx in 0..num_children {
                 let Some(child_g_idx) = root.children.get(c_idx).copied() else {
                     continue;
@@ -504,7 +643,9 @@ fn normalize_star_hal_for_export(hal: &HalAlignment) -> HalAlignment {
                 let Some(child_g) = hal.genomes.get(child_g_idx) else {
                     continue;
                 };
-                let Some((mut cur_t_idx, mut cur_rev)) = orig_b.child_tops.get(c_idx).and_then(|x| *x) else {
+                let Some((mut cur_t_idx, mut cur_rev)) =
+                    orig_b.child_tops.get(c_idx).and_then(|x| *x)
+                else {
                     continue;
                 };
                 let mut seen_t = 0usize;
@@ -517,15 +658,10 @@ fn normalize_star_hal_for_export(hal: &HalAlignment) -> HalAlignment {
                         orig_t.start + off_in_orig
                     };
                     let t_end = t_start + sub_len;
-                    let in_one_seq = child_g
-                        .sequences
-                        .iter()
-                        .any(|s| t_start >= s.offset && t_end <= s.offset + s.length);
-                    let overlaps = occupied_child[c_idx]
-                        .iter()
-                        .any(|&(os, oe)| t_start < oe && os < t_end);
-                    if in_one_seq && !overlaps {
-                        occupied_child[c_idx].push((t_start, t_end));
+                    if seq_contains_interval(&child_g.sequences, t_start, t_end)
+                        && !interval_overlaps(&occupied_child[c_idx], t_start, t_end)
+                    {
+                        occupied_child[c_idx].insert(t_start, t_end);
                         placed_tops[c_idx].push((t_start, sub_len, b_idx, cur_rev));
                     }
                     seen_t += 1;
@@ -551,77 +687,22 @@ fn normalize_star_hal_for_export(hal: &HalAlignment) -> HalAlignment {
         });
     }
 
-    let mut out = hal.clone();
-    out.genomes[0].bottom_segments = new_bottoms;
-
-    for (c_idx, &child_g_idx) in hal.genomes[0].children.iter().enumerate() {
-        let mut segs = std::mem::take(&mut placed_tops[c_idx]);
-        segs.sort_by_key(|&(s, _, _, _)| s);
-
-        let mut final_tops: Vec<HalTopSegment> = Vec::new();
-        let mut seg_idx = 0usize;
-        for seq in &hal.genomes[child_g_idx].sequences {
-            let mut pos = seq.offset;
-            let seq_end = seq.offset + seq.length;
-            while seg_idx < segs.len() && segs[seg_idx].0 < seq_end {
-                let (s, l, p_b_idx, rev) = segs[seg_idx];
-                seg_idx += 1;
-                if s < pos {
-                    continue;
-                }
-                if s > pos {
-                    final_tops.push(HalTopSegment {
-                        start: pos,
-                        length: s - pos,
-                        parent_bottom_idx: None,
-                        parent_reversed: false,
-                        next_paralog: None,
-                    });
-                }
-                final_tops.push(HalTopSegment {
-                    start: s,
-                    length: l,
-                    parent_bottom_idx: Some(p_b_idx),
-                    parent_reversed: rev,
-                    next_paralog: None,
-                });
-                pos = s + l;
-            }
-            if pos < seq_end {
-                final_tops.push(HalTopSegment {
-                    start: pos,
-                    length: seq_end - pos,
-                    parent_bottom_idx: None,
-                    parent_reversed: false,
-                    next_paralog: None,
-                });
-            }
-        }
-
-        // Link bottom -> top and build paralogy cycles for duplicate parent_bottom_idx.
-        let mut by_parent: HashMap<usize, Vec<(usize, bool)>> = HashMap::new();
-        for (t_idx, t) in final_tops.iter().enumerate() {
-            if let Some(pb) = t.parent_bottom_idx {
-                by_parent.entry(pb).or_default().push((t_idx, t.parent_reversed));
-            }
-        }
-        for (pb, list) in by_parent {
-            if let Some(&(first_t, first_rev)) = list.first() {
-                out.genomes[0].bottom_segments[pb].child_tops[c_idx] = Some((first_t, first_rev));
-            }
-            if list.len() > 1 {
-                for w in 0..list.len() {
-                    let cur_t = list[w].0;
-                    let next_t = list[(w + 1) % list.len()].0;
-                    final_tops[cur_t].next_paralog = Some(next_t);
-                }
-            }
-        }
-
-        out.genomes[child_g_idx].top_segments = final_tops;
+    let mut tops_by_genome = vec![Vec::new(); n_genomes];
+    let mut bottoms_by_genome = vec![Vec::new(); n_genomes];
+    for (c_idx, &child_g_idx) in root.children.iter().enumerate() {
+        tops_by_genome[child_g_idx] = finalize_child_top_segments(
+            &hal.genomes[child_g_idx].sequences,
+            std::mem::take(&mut placed_tops[c_idx]),
+            c_idx,
+            &mut new_bottoms,
+        );
     }
+    bottoms_by_genome[0] = new_bottoms;
 
-    out
+    NormalizedSegments {
+        tops_by_genome,
+        bottoms_by_genome,
+    }
 }
 
 impl HalAlignment {
@@ -629,12 +710,12 @@ impl HalAlignment {
     /// using pure Rust without linking `libhdf5`.
     #[must_use]
     pub fn to_hdf5_bytes(&self) -> Vec<u8> {
-        let norm = normalize_star_hal_for_export(self);
+        let norm = normalize_hal_segments_for_export(self);
         let mut w = Hdf5V0Builder::new();
         // Store VLS attribute strings in a single Global Heap collection:
         // idx 1 = tree_newick, idx 2 = "2.2", idx 3 = "0", idx 4 = "1"
-        let gcol_addr = w.write_gcol(&[norm.tree_newick.as_str(), "2.2", "0", "1"]);
-        let tree_len = u32::try_from(norm.tree_newick.len()).unwrap_or(0);
+        let gcol_addr = w.write_gcol(&[self.tree_newick.as_str(), "2.2", "0", "1"]);
+        let tree_len = u32::try_from(self.tree_newick.len()).unwrap_or(0);
 
         let (meta_hdr, _, _) = w.write_group(&[]);
         let (genomes_hdr, _, _) = w.write_group(&[]);
@@ -642,36 +723,34 @@ impl HalAlignment {
             w.write_group_with_attrs(&[], &[("Phylogeny", tree_len, gcol_addr, 1)]);
         let (ver_hdr, _, _) = w.write_group_with_attrs(&[], &[("Verison", 3, gcol_addr, 2)]);
 
-        let mut root_entries: Vec<(&str, u64)> = Vec::with_capacity(norm.genomes.len() + 4);
+        let mut root_entries: Vec<(&str, u64)> = Vec::with_capacity(self.genomes.len() + 4);
         root_entries.push(("Meta", meta_hdr));
         root_entries.push(("Phylogeny", phylo_hdr));
         root_entries.push(("Genomes", genomes_hdr));
         root_entries.push(("Verison", ver_hdr));
 
-        for g in &norm.genomes {
+        for (g_idx, g) in self.genomes.iter().enumerate() {
+            let tops = &norm.tops_by_genome[g_idx];
+            let bottoms = &norm.bottoms_by_genome[g_idx];
+
             let dna_packed = encode_hal_dna(&g.dna);
             let dna_addr = w.write_dataset(&[dna_packed.len() as u64], 1, &dna_packed);
 
-            let seqidx_bytes = encode_hal_seq_index(
-                &g.sequences,
-                &g.top_segments,
-                &g.bottom_segments,
-                g.dna.len(),
-            );
+            let seqidx_bytes =
+                encode_hal_seq_index(&g.sequences, tops, bottoms, g.dna.len());
             let seqidx_addr =
                 w.write_dataset(&[(g.sequences.len() + 1) as u64], 24, &seqidx_bytes);
 
             let (seqname_bytes, stride) = encode_hal_seq_names(&g.sequences);
             let seqname_addr = w.write_dataset(&[g.sequences.len() as u64], stride, &seqname_bytes);
 
-            let top_bytes = encode_hal_top_array(&g.top_segments, g.dna.len());
-            let top_addr =
-                w.write_dataset(&[(g.top_segments.len() + 1) as u64], 33, &top_bytes);
+            let top_bytes = encode_hal_top_array(tops, g.dna.len());
+            let top_addr = w.write_dataset(&[(tops.len() + 1) as u64], 33, &top_bytes);
 
             let num_children = g.children.len();
-            let bot_bytes = encode_hal_bottom_array(&g.bottom_segments, num_children, g.dna.len());
+            let bot_bytes = encode_hal_bottom_array(bottoms, num_children, g.dna.len());
             let bot_addr = w.write_dataset(
-                &[(g.bottom_segments.len() + 1) as u64],
+                &[(bottoms.len() + 1) as u64],
                 24 + 9 * num_children,
                 &bot_bytes,
             );
