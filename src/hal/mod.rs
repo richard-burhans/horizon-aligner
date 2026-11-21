@@ -166,6 +166,11 @@ impl HalAlignment {
             let Some(q_seq) = qry_seqs.get(q_idx).and_then(|s| s.get(q_ci)) else {
                 continue;
             };
+            if r_local.checked_add(len).is_none_or(|e| e > r_seq.length)
+                || q_local.checked_add(len).is_none_or(|e| e > q_seq.length)
+            {
+                continue;
+            }
             let (Some(r_global), Some(q_global)) = (
                 r_seq.offset.checked_add(r_local),
                 q_seq.offset.checked_add(q_local),
@@ -185,9 +190,6 @@ impl HalAlignment {
             let mut child_links = vec![None; queries.len()];
             let mut any_valid = false;
             for (q_idx, q_start, rev) in hits {
-                if q_idx >= queries.len() {
-                    continue;
-                }
                 any_valid = true;
                 let t_idx = child_tops_per_q[q_idx].len();
                 let prev_paralog = child_links[q_idx].map(|(prev_t, _)| prev_t);

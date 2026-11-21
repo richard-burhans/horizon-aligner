@@ -16,6 +16,7 @@ pub struct AlignedRun {
 impl AlignedRun {
     /// Expand this run into `(x, y)` pairs.
     pub fn push_pairs(&self, out: &mut Vec<(usize, usize)>) {
+        debug_assert!(!self.is_rc || self.y_start + 1 >= self.len);
         out.reserve(self.len);
         if self.is_rc {
             for k in 0..self.len {

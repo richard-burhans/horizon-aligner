@@ -389,9 +389,7 @@ pub fn read_fasta_contigs(
     path: &std::path::Path,
     max_contigs: usize,
 ) -> std::io::Result<Vec<(String, Vec<u8>)>> {
-    use std::io::BufRead as _;
-    let f = std::fs::File::open(path)?;
-    let mut reader = std::io::BufReader::with_capacity(256 * 1024, f);
+    let mut reader = crate::io_util::open_text_reader(path).map_err(std::io::Error::other)?;
     let mut out = Vec::new();
     let mut name = String::new();
     let mut seq = Vec::new();

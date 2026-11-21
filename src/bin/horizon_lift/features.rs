@@ -1,8 +1,7 @@
 //! BED and GFF3 feature parsing for `horizon_lift`.
 
 use anyhow::{Context, Result};
-use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::BufRead as _;
 use std::path::Path;
 
 #[derive(Debug, Clone)]
@@ -16,8 +15,7 @@ pub(crate) struct InputFeature {
 }
 
 pub(crate) fn parse_features(path: &Path, is_gff: bool) -> Result<Vec<InputFeature>> {
-    let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
-    let reader = BufReader::new(file);
+    let reader = horizon_aligner::io_util::open_text_reader(path)?;
     let mut out = Vec::new();
     for (idx, line_res) in reader.lines().enumerate() {
         let line = line_res?;

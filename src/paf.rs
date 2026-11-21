@@ -60,13 +60,14 @@ impl Iterator for CigarIter<'_> {
         let mut saw_digit = false;
         while self.pos < self.bytes.len() && self.bytes[self.pos].is_ascii_digit() {
             saw_digit = true;
-            len = match len
+            let Some(next_len) = len
                 .checked_mul(10)
                 .and_then(|v| v.checked_add(usize::from(self.bytes[self.pos] - b'0')))
-            {
-                Some(v) => v,
-                None => return Some(Err(anyhow::anyhow!("CIGAR length overflow"))),
+            else {
+                self.pos = self.bytes.len();
+                return Some(Err(anyhow::anyhow!("CIGAR length overflow")));
             };
+            len = next_len;
             self.pos += 1;
         }
         if !saw_digit || self.pos >= self.bytes.len() {

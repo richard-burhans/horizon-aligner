@@ -10,7 +10,7 @@ pub(crate) fn partition_colinear_blocks(pairs: &[(usize, usize)]) -> Vec<(Vec<(u
         pairs
     } else {
         let mut tmp = pairs.to_vec();
-        tmp.sort_unstable_by_key(|&(x, _)| x);
+        tmp.sort_unstable();
         sorted_storage = tmp;
         &sorted_storage
     };

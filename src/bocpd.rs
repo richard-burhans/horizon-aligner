@@ -36,6 +36,9 @@ pub(crate) fn base_to_idx(b: u8) -> Option<usize> {
 #[inline]
 #[must_use]
 pub fn base_probs(gc: f64) -> [f64; 4] {
+    if gc.is_nan() {
+        return [0.25; 4];
+    }
     let gc = gc.clamp(0.02, 0.98);
     let p_gc = gc * 0.5;
     let p_at = (1.0 - gc) * 0.5;
