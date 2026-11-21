@@ -39,21 +39,26 @@ fn hsp_pair_score(a: u8, b: u8, match_sc: i32, transition_sc: i32, tv_sc: i32) -
     }
 }
 
-/// Extend a 19-bp seed hit `(px, py)` without gaps using transition-aware X-drop;
+/// Extend a `seed_span`-bp seed hit `(px, py)` without gaps using transition-aware X-drop;
 /// returns `Some((start_x, start_y, end_x, end_y, score))` when `score >= min_score`.
 fn extend_ungapped_hsp(
     seq_x: &[u8],
     seq_y: &[u8],
     px: usize,
     py: usize,
+    seed_span: usize,
     min_score: i32,
+    hsp_params: (i32, i32, i32, i32),
 ) -> Option<(usize, usize, usize, usize, i32)> {
-    let (match_sc, transition_sc, tv_sc, xdrop) = k80_hsp_params();
-    if px + 19 > seq_x.len() || py + 19 > seq_y.len() {
+    let (match_sc, transition_sc, tv_sc, xdrop) = hsp_params;
+    let seed_span = seed_span.max(1);
+    if px.checked_add(seed_span).is_none_or(|e| e > seq_x.len())
+        || py.checked_add(seed_span).is_none_or(|e| e > seq_y.len())
+    {
         return None;
     }
     let mut core = 0i32;
-    for off in 0..19 {
+    for off in 0..seed_span {
         core += hsp_pair_score(
             seq_x[px + off],
             seq_y[py + off],
@@ -84,10 +89,10 @@ fn extend_ungapped_hsp(
 
     cur = 0;
     let mut best_right = 0i32;
-    let mut rx = px + 19;
-    let mut ry = py + 19;
-    ix = px + 19;
-    iy = py + 19;
+    let mut rx = px + seed_span;
+    let mut ry = py + seed_span;
+    ix = px + seed_span;
+    iy = py + seed_span;
     while ix < seq_x.len() && iy < seq_y.len() {
         cur += hsp_pair_score(seq_x[ix], seq_y[iy], match_sc, transition_sc, tv_sc);
         ix += 1;
@@ -110,8 +115,11 @@ pub(crate) fn append_hsp_gated_lastz12_lcbs(
     seq_x: &[u8],
     seq_y: &[u8],
     hits: &[(usize, usize)],
+    seed_span: usize,
     min_hsp_score: i32,
 ) {
+    let seed_span = seed_span.max(1);
+    let hsp_params = k80_hsp_params();
     #[allow(clippy::cast_precision_loss)]
     let space_bits = ((seq_x.len().max(1) as f64) * (seq_y.len().max(1) as f64))
         .log2()
@@ -132,12 +140,13 @@ pub(crate) fn append_hsp_gated_lastz12_lcbs(
                 continue;
             }
             if let Some((lx, ly, rx, ry, sc)) =
-                extend_ungapped_hsp(seq_x, seq_y, px, py, min_hsp_score)
+                extend_ungapped_hsp(seq_x, seq_y, px, py, seed_span, min_hsp_score, hsp_params)
             {
                 max_rx = max_rx.max(rx);
                 local_hits.push((px, py));
-                if sc >= min_hsp_score + strong_margin && rx > lx + 19 && ry > ly + 19 {
-                    local_strong.push(vec![(lx, ly), (rx - 19, ry - 19)]);
+                if sc >= min_hsp_score + strong_margin && rx > lx + seed_span && ry > ly + seed_span
+                {
+                    local_strong.push(vec![(lx, ly), (rx - seed_span, ry - seed_span)]);
                 }
             }
         }
@@ -195,7 +204,7 @@ mod tests {
         }
         let hits: Vec<(usize, usize)> = (0..2200).map(|i| (i, i)).collect();
         let mut lcbs: LcbList = Vec::new();
-        append_hsp_gated_lastz12_lcbs(&mut lcbs, &seq, &seq, &hits, 120);
+        append_hsp_gated_lastz12_lcbs(&mut lcbs, &seq, &seq, &hits, 19, 120);
         assert_ne!(lcbs.len(), 0);
     }
 

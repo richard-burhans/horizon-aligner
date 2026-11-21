@@ -76,7 +76,11 @@ fn build_node_bounds(
         } else {
             (0, m)
         };
-        let len = j_hi.saturating_sub(j_lo).checked_add(1)?;
+        let len = if j_hi >= j_lo {
+            (j_hi - j_lo).checked_add(1)?
+        } else {
+            0
+        };
         bounds.push((j_lo, j_hi, off));
         off = off.checked_add(len)?;
     }

@@ -157,14 +157,24 @@ fn compute_pair_metrics(
 }
 
 fn run_locus(cli: &LocusCli) -> Result<()> {
-    let t0 = Instant::now();
-    if let Some(threads) = cli.threads {
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(threads.max(1))
-            .build_global()
-            .context("configuring rayon thread pool")?;
+    let pool = cli
+        .threads
+        .map(|threads| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads.max(1))
+                .build()
+                .context("configuring rayon thread pool")
+        })
+        .transpose()?;
+    if let Some(pool) = pool {
+        pool.install(|| run_locus_inner(cli))
+    } else {
+        run_locus_inner(cli)
     }
+}
 
+fn run_locus_inner(cli: &LocusCli) -> Result<()> {
+    let t0 = Instant::now();
     let contigs = read_fasta_contigs(Path::new(&cli.fasta_path), 0)
         .with_context(|| format!("reading locus FASTA '{}'", cli.fasta_path))?;
     if contigs.len() < 2 {
@@ -187,7 +197,7 @@ fn run_locus(cli: &LocusCli) -> Result<()> {
             .or_else(|| {
                 contigs
                     .iter()
-                    .position(|(name, _)| name.starts_with(wanted))
+                    .position(|(name, _)| horizon_aligner::matches_sample_prefix(name, wanted))
             })
             .with_context(|| format!("focal reference '{wanted}' not found in FASTA"))?
     } else {
@@ -214,35 +224,38 @@ fn run_locus(cli: &LocusCli) -> Result<()> {
         .par_iter()
         .map(
             |&(i, j)| -> Result<(PairMetrics, Option<(String, String)>)> {
-                let aln = align_contig_pair_runs(&indexed[i], &indexed[j], &cfg)?;
-                let metrics = compute_pair_metrics(i, j, &contigs[i].1, &contigs[j].1, &aln);
-                let focal_maf = if i == ref_idx {
+                if j == ref_idx {
+                    let aln = align_contig_pair_runs(&indexed[j], &indexed[i], &cfg)?;
+                    let metrics = compute_pair_metrics(i, j, &contigs[j].1, &contigs[i].1, &aln);
                     let maf = format_maf_blocks_runs(
-                        &contigs[i].0,
-                        contigs[i].1.len(),
                         &contigs[j].0,
                         contigs[j].1.len(),
-                        &contigs[i].1,
+                        &contigs[i].0,
+                        contigs[i].1.len(),
                         &contigs[j].1,
+                        &contigs[i].1,
                         &aln,
                     );
-                    Some((contigs[j].0.clone(), maf))
-                } else if j == ref_idx {
-                    let rev_aln = align_contig_pair_runs(&indexed[j], &indexed[i], &cfg)?;
-                    let maf = format_maf_blocks_runs(
-                        &contigs[j].0,
-                        contigs[j].1.len(),
-                        &contigs[i].0,
-                        contigs[i].1.len(),
-                        &contigs[j].1,
-                        &contigs[i].1,
-                        &rev_aln,
-                    );
-                    Some((contigs[i].0.clone(), maf))
+                    Ok((metrics, Some((contigs[i].0.clone(), maf))))
                 } else {
-                    None
-                };
-                Ok((metrics, focal_maf))
+                    let aln = align_contig_pair_runs(&indexed[i], &indexed[j], &cfg)?;
+                    let metrics = compute_pair_metrics(i, j, &contigs[i].1, &contigs[j].1, &aln);
+                    let focal_maf = if i == ref_idx {
+                        let maf = format_maf_blocks_runs(
+                            &contigs[i].0,
+                            contigs[i].1.len(),
+                            &contigs[j].0,
+                            contigs[j].1.len(),
+                            &contigs[i].1,
+                            &contigs[j].1,
+                            &aln,
+                        );
+                        Some((contigs[j].0.clone(), maf))
+                    } else {
+                        None
+                    };
+                    Ok((metrics, focal_maf))
+                }
             },
         )
         .collect::<Result<Vec<_>>>()?;
@@ -420,6 +433,21 @@ mod tests {
         let tsv = fs::read_to_string(format!("{}.similarity.tsv", cli.out_prefix)).expect("tsv");
         let maf = fs::read_to_string(format!("{}.maf", cli.out_prefix)).expect("maf");
         let gfa = fs::read_to_string(format!("{}.gfa", cli.out_prefix)).expect("gfa");
+
+        let cli_nonfirst_ref = LocusCli {
+            fasta_path: fa_path.to_string_lossy().into_owned(),
+            out_prefix: out_prefix.to_string_lossy().into_owned(),
+            focal_ref: Some("sp3".to_owned()),
+            threads: Some(2),
+            respect_softmask: false,
+        };
+        run_locus(&cli_nonfirst_ref).expect("second run_locus with threads=Some(2) and j==ref_idx");
+        let maf_sp3 =
+            fs::read_to_string(format!("{}.maf", cli_nonfirst_ref.out_prefix)).expect("maf sp3");
+        assert!(
+            maf_sp3.contains("s sp3 ") && maf_sp3.contains("s sp1.sp1 "),
+            "maf_sp3:\n{maf_sp3}"
+        );
 
         let _ = fs::remove_file(&fa_path);
         let _ = fs::remove_file(format!("{}.similarity.tsv", cli.out_prefix));

@@ -469,7 +469,7 @@ pub(crate) fn run_progressive_sister_rescue(
             .map(|j| {
                 let sc: usize = indexed[i]
                     .2
-                    .par_iter()
+                    .iter()
                     .map(|(_, ix)| {
                         indexed[j]
                             .2

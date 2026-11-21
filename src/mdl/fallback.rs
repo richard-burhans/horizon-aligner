@@ -58,6 +58,7 @@ impl<F: Fn(&mut AnchorPairs)> FallbackCtx<'_, F> {
             &self.idx_x.seq,
             &self.idx_y.seq,
             hits_fwd,
+            span_len,
             thresh,
         );
         record_spans(self.spans_fwd, &self.combined_fwd[prev_fwd..], span_len);
@@ -67,6 +68,7 @@ impl<F: Fn(&mut AnchorPairs)> FallbackCtx<'_, F> {
             &self.idx_x.seq,
             &self.idx_y.seq_rc,
             hits_rc,
+            span_len,
             thresh,
         );
         record_spans(self.spans_rc, &self.combined_rc[prev_rc..], span_len);

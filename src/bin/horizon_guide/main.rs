@@ -1,4 +1,4 @@
-//! Nystrom/sketch-selected hinge + multi-species WGA pipeline (`horizon_wga` + `horizon_merge`).
+//! Nystrom/sketch-selected hinge + progressive multi-species WGA/HAL pipeline (`horizon_guide`).
 
 use anyhow::{Context, Result, bail};
 use horizon_aligner::{
@@ -24,12 +24,11 @@ fn select_central_hinge(species: &[IndexedSpecies]) -> usize {
         .map(|i| {
             let idx_i = &species[i].2;
             let total: usize = (0..species.len())
-                .into_par_iter()
                 .filter(|&j| j != i)
                 .map(|j| {
                     let idx_j = &species[j].2;
                     idx_i
-                        .par_iter()
+                        .iter()
                         .map(|(_, ix)| {
                             idx_j
                                 .iter()

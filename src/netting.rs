@@ -166,8 +166,11 @@ pub fn net_one_to_one_runs(runs: &[AlignedRun], len_x: usize, len_y: usize) -> V
             if r.len == 0 || r.x_start >= len_x {
                 continue;
             }
+            let Some(y_end_rc) = r.y_start.checked_add(1) else {
+                continue;
+            };
             let valid_len = if r.is_rc {
-                r.len.min(r.y_start + 1).min(len_x - r.x_start)
+                r.len.min(y_end_rc).min(len_x - r.x_start)
             } else {
                 r.len
                     .min(len_x - r.x_start)
@@ -183,7 +186,7 @@ pub fn net_one_to_one_runs(runs: &[AlignedRun], len_x: usize, len_y: usize) -> V
                 continue;
             }
             let (y_lo, y_hi) = if r.is_rc {
-                (r.y_start + 1 - valid_len, (r.y_start + 1).min(len_y))
+                (y_end_rc - valid_len, y_end_rc.min(len_y))
             } else {
                 (r.y_start, (r.y_start + valid_len).min(len_y))
             };
@@ -201,7 +204,7 @@ pub fn net_one_to_one_runs(runs: &[AlignedRun], len_x: usize, len_y: usize) -> V
                 let (ky0, ky1) = if r.is_rc {
                     let rev_idx = free_y.len() - 1 - iy;
                     let (ya, yb) = free_y[rev_idx];
-                    (r.y_start + 1 - yb, r.y_start + 1 - ya)
+                    (y_end_rc - yb, y_end_rc - ya)
                 } else {
                     let (ya, yb) = free_y[iy];
                     (ya - r.y_start, yb - r.y_start)

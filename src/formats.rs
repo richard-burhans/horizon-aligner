@@ -316,12 +316,13 @@ pub fn format_maf_blocks(
             continue;
         }
         let x0 = blk[0].0;
-        let x_end = blk[blk.len() - 1].0 + 1;
         let mut ax = String::with_capacity(blk.len() + 8);
         let mut ay = String::with_capacity(blk.len() + 8);
 
-        let mut prev_x = blk[0].0;
-        let mut prev_y = blk[0].1;
+        let first_y_pos = blk[0].1;
+        let mut prev_x = x0;
+        let mut prev_y = first_y_pos;
+        let mut emitted_pairs = 1usize;
         ax.push(seq_x[prev_x].to_ascii_uppercase() as char);
         let first_y = seq_y[prev_y].to_ascii_uppercase();
         ay.push(if is_rev {
@@ -358,19 +359,21 @@ pub fn format_maf_blocks(
             });
             prev_x = x;
             prev_y = y;
+            emitted_pairs += 1;
         }
 
+        let x_end = prev_x + 1;
         let (y_start, y_span, y_strand) = if is_rev {
-            let y_lo = blk[blk.len() - 1].1;
-            let y_hi = blk[0].1 + 1;
+            let y_lo = prev_y;
+            let y_hi = first_y_pos + 1;
             (len_y.saturating_sub(y_hi), y_hi - y_lo, '-')
         } else {
-            let y_lo = blk[0].1;
-            let y_hi = blk[blk.len() - 1].1 + 1;
+            let y_lo = first_y_pos;
+            let y_hi = prev_y + 1;
             (y_lo, y_hi - y_lo, '+')
         };
 
-        let _ = writeln!(out, "a score={}.0", blk.len());
+        let _ = writeln!(out, "a score={emitted_pairs}.0");
         let _ = writeln!(out, "s {name_x} {x0} {} + {len_x} {ax}", x_end - x0);
         let _ = writeln!(
             out,

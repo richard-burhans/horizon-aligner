@@ -20,6 +20,7 @@ fn main() -> Result<()> {
 
     let ref_species = &args[0];
     let bin_bp: usize = args[1].parse().context("parsing bin_bp")?;
+    anyhow::ensure!(bin_bp > 0, "bin_bp must be > 0");
     let maf_out_path = PathBuf::from(&args[2]);
     let gfa_out_path = PathBuf::from(&args[3]);
 

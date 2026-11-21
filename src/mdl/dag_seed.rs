@@ -157,7 +157,7 @@ pub fn align_seq_to_dag_seeded_indexed(
     if seed_scores.is_empty() && seq_y.len() >= 18 {
         let q_aa5 = aa5_keys(seq_y);
         if !q_aa5.is_empty() {
-            for (nid, n_aa5) in index.aa5.iter().enumerate() {
+            for (nid, n_aa5) in index.aa5.iter().take(nodes.len()).enumerate() {
                 if !n_aa5.is_empty() {
                     let shared = sorted_u16_intersection_count(&q_aa5, n_aa5);
                     if shared > 0 {

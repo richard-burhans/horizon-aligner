@@ -132,6 +132,7 @@ pub fn calibrate_null_crc_for_gc(
     let mut scores = Vec::with_capacity(n_cal);
     let mut x = vec![b'A'; win_len];
     let mut y = vec![b'A'; win_len];
+    let mut scratch = DpScratch::default();
     for draw in 0..n_cal {
         let mut state =
             0x9E37_79B9_7F4A_7C15_u64 ^ ((draw as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9));
@@ -153,7 +154,15 @@ pub fn calibrate_null_crc_for_gc(
                 };
             }
         }
-        let res = banded_mdl_gap_with_min_post(&x, &y, 16, base_floor_bits, params, MIN_POST_PROB);
+        let res = banded_mdl_gap_with_scratch(
+            &x,
+            &y,
+            16,
+            base_floor_bits,
+            params,
+            MIN_POST_PROB,
+            &mut scratch,
+        );
         let null_bits = if res.kept_pairs.is_empty() {
             0.0
         } else {
@@ -208,6 +217,7 @@ pub fn calibrate_null_crc_from_seqs(
     let max_y = seq_y.len() - WIN;
     let mut scores = Vec::with_capacity(n_cal);
     let mut y_rev = [b'A'; WIN];
+    let mut scratch = DpScratch::default();
     let mut tries = 0usize;
     let max_tries = n_cal * 4;
     let mut draw = 0usize;
@@ -232,8 +242,15 @@ pub fn calibrate_null_crc_from_seqs(
         for (dst, &src) in y_rev.iter_mut().zip(wy.iter().rev()) {
             *dst = src;
         }
-        let res =
-            banded_mdl_gap_with_min_post(wx, &y_rev, 16, base_floor_bits, params, MIN_POST_PROB);
+        let res = banded_mdl_gap_with_scratch(
+            wx,
+            &y_rev,
+            16,
+            base_floor_bits,
+            params,
+            MIN_POST_PROB,
+            &mut scratch,
+        );
         let null_bits = if res.kept_pairs.is_empty() {
             0.0
         } else {
@@ -415,7 +432,12 @@ pub(super) fn band_center(i: usize, m: usize, n: usize) -> usize {
 
 #[must_use]
 pub(crate) fn dip_floor_bits_for_identity(identity: f64) -> f64 {
-    let p_id = identity.clamp(0.25, 0.999);
+    let p_id = if identity.is_finite() {
+        identity
+    } else {
+        IDENTITY_PRIOR
+    }
+    .clamp(0.25, 0.999);
     crate::bocpd::joint_pair_bits(b'A', b'C', [0.25; 4], [0.25; 4], p_id) - 0.5
 }
 
