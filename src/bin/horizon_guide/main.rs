@@ -3,8 +3,8 @@
 use anyhow::{Context, Result, bail};
 use horizon_aligner::{
     AlignConfig, ContigIndex, align_contig_pair_runs, format_maf_blocks_runs, hal::HalAlignment,
-    merge_pairwise_mafs, prepare_contig_index_opts, read_fasta_contigs, select_top_k_pairs,
-    shared_seed_count,
+    merge_pairwise_mafs, parse_two_row_maf_blocks, prepare_contig_index_opts, read_fasta_contigs,
+    select_top_k_pairs, shared_seed_count,
 };
 use rayon::prelude::*;
 use rescue::{run_ancestral_consensus_rescue, run_progressive_sister_rescue};
@@ -269,12 +269,6 @@ fn main() -> Result<()> {
         pairwise_mafs.push((qry_sp.clone(), maf_buf));
     }
 
-    if cli.progressive && cli.write_hal {
-        eprintln!(
-            "[horizon_guide] note: --hal exports direct star-tree blocks; --progressive rescue is reflected in .maf/.gfa"
-        );
-    }
-
     if cli.progressive && indexed.len() >= 3 {
         run_progressive_sister_rescue(
             &indexed,
@@ -304,12 +298,23 @@ fn main() -> Result<()> {
     fs::write(format!("{out_prefix}.gfa"), merged_gfa)
         .with_context(|| format!("writing {out_prefix}.gfa"))?;
     let (hal_tree_desc, hal_bottom_segs) = if cli.write_hal {
-        let hal = HalAlignment::from_multi_contig_star_blocks(
-            hinge_sp,
-            hinge_contigs,
-            &hal_queries,
-            &hal_all_blocks,
-        );
+        let hal = if cli.progressive && hal_queries.len() >= 2 {
+            let prog_blocks =
+                extract_hal_blocks_from_pairwise_mafs(hinge_contigs, &hal_queries, &pairwise_mafs);
+            HalAlignment::from_multi_contig_progressive_blocks(
+                hinge_sp,
+                hinge_contigs,
+                &hal_queries,
+                &prog_blocks,
+            )
+        } else {
+            HalAlignment::from_multi_contig_star_blocks(
+                hinge_sp,
+                hinge_contigs,
+                &hal_queries,
+                &hal_all_blocks,
+            )
+        };
         let desc = hal.tree_newick.clone();
         let nb = hal.genomes[0].bottom_segments.len();
         hal.write_hdf5_hal(std::path::Path::new(&format!("{out_prefix}.hal")))?;
@@ -328,6 +333,93 @@ fn main() -> Result<()> {
         t0.elapsed().as_secs_f64()
     );
     Ok(())
+}
+
+#[allow(clippy::type_complexity)]
+fn extract_hal_blocks_from_pairwise_mafs(
+    hinge_contigs: &ContigList,
+    hal_queries: &[(String, ContigList)],
+    pairwise_mafs: &[(String, String)],
+) -> Vec<(usize, usize, usize, usize, usize, usize, bool)> {
+    let hinge_idx_by_name: HashMap<&str, usize> = hinge_contigs
+        .iter()
+        .enumerate()
+        .map(|(idx, (name, _))| (name.as_str(), idx))
+        .collect();
+    let mut out = Vec::new();
+    for (q_idx, ((_, q_contigs), (_, maf_buf))) in
+        hal_queries.iter().zip(pairwise_mafs.iter()).enumerate()
+    {
+        let q_idx_by_name: HashMap<&str, usize> = q_contigs
+            .iter()
+            .enumerate()
+            .map(|(idx, (name, _))| (name.as_str(), idx))
+            .collect();
+        for (h_row, q_row) in parse_two_row_maf_blocks(maf_buf) {
+            let Some(&xi) = hinge_idx_by_name.get(h_row.src.as_str()) else {
+                continue;
+            };
+            let Some(&yi) = q_idx_by_name.get(q_row.src.as_str()) else {
+                continue;
+            };
+            let rev = h_row.strand != q_row.strand;
+            let mut h_off = 0usize;
+            let mut q_off = 0usize;
+            let mut hinge_run_start = 0usize;
+            let mut qry_run_start = 0usize;
+            let mut run_len = 0usize;
+            for (hb, qb) in h_row.seq.bytes().zip(q_row.seq.bytes()) {
+                if hb != b'-' && qb != b'-' {
+                    if run_len == 0 {
+                        hinge_run_start = h_off;
+                        qry_run_start = q_off;
+                    }
+                    run_len += 1;
+                } else if run_len > 0 {
+                    let rs = if h_row.strand == '+' {
+                        h_row.start + hinge_run_start
+                    } else {
+                        h_row
+                            .src_size
+                            .saturating_sub(h_row.start + hinge_run_start + run_len)
+                    };
+                    let qs = if q_row.strand == '+' {
+                        q_row.start + qry_run_start
+                    } else {
+                        q_row
+                            .src_size
+                            .saturating_sub(q_row.start + qry_run_start + run_len)
+                    };
+                    out.push((q_idx, xi, yi, rs, qs, run_len, rev));
+                    run_len = 0;
+                }
+                if hb != b'-' {
+                    h_off += 1;
+                }
+                if qb != b'-' {
+                    q_off += 1;
+                }
+            }
+            if run_len > 0 {
+                let rs = if h_row.strand == '+' {
+                    h_row.start + hinge_run_start
+                } else {
+                    h_row
+                        .src_size
+                        .saturating_sub(h_row.start + hinge_run_start + run_len)
+                };
+                let qs = if q_row.strand == '+' {
+                    q_row.start + qry_run_start
+                } else {
+                    q_row
+                        .src_size
+                        .saturating_sub(q_row.start + qry_run_start + run_len)
+                };
+                out.push((q_idx, xi, yi, rs, qs, run_len, rev));
+            }
+        }
+    }
+    out
 }
 
 fn prefix_hinge_species_in_maf(hinge_sp: &str, maf: &str) -> String {

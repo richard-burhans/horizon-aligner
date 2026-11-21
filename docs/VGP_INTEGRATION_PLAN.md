@@ -1,7 +1,7 @@
 # Horizon Suite Updates & Additions for the VGP All-to-All Alignment Project
 
 > **Target context:** [`pangenome/vgp-align-allocation/alignment-2026/main.md`](https://github.com/pangenome/vgp-align-allocation/blob/main/alignment-2026/main.md)
-> **Horizon status (`HEAD`):** **P0–P4 complete & benchmarked on real VGP/GenomeArk + HPRC data** (`121` passing active unit tests: `87` lib + `34` bin, `1` `.hal` integration test verified via `HORIZON_TEST_HAL`; `11` suite CLI binaries + `bench_chr1`, all wired into `horizon`).
+> **Horizon status (`HEAD`):** **P0–P4 complete & benchmarked on real VGP/GenomeArk + HPRC data** (`122` passing active unit tests: `88` lib + `34` bin, `1` `.hal` integration test verified via `HORIZON_TEST_HAL`; `11` suite CLI binaries + `bench_chr1`, all wired into `horizon`).
 
 ## 1. VGP Scale, Bottlenecks, and Where Horizon Fits
 

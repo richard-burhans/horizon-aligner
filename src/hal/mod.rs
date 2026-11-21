@@ -241,6 +241,129 @@ impl HalAlignment {
         }
     }
 
+    /// Construct a progressive (non-star) multi-contig `HalAlignment` by threading
+    /// `queries` along a pectinate guide tree rooted at `Anc_{k-1}`:
+    /// `((...((ref_name,q0)Anc0,q1)Anc1...),q_{k-1})Anc_{k-1};`.
+    /// Falls back to [`Self::from_multi_contig_star_blocks`] when `queries.len() < 2`.
+    #[must_use]
+    #[allow(clippy::type_complexity)]
+    pub fn from_multi_contig_progressive_blocks(
+        ref_name: &str,
+        ref_contigs: &[(String, Vec<u8>)],
+        queries: &[(String, Vec<(String, Vec<u8>)>)],
+        blocks: &[(usize, usize, usize, usize, usize, usize, bool)],
+    ) -> Self {
+        if queries.len() < 2 {
+            return Self::from_multi_contig_star_blocks(ref_name, ref_contigs, queries, blocks);
+        }
+        let star = Self::from_multi_contig_star_blocks(ref_name, ref_contigs, queries, blocks);
+        let ref_genome = &star.genomes[0];
+        let n_q = queries.len();
+        let n_b = ref_genome.bottom_segments.len();
+
+        // Build internal ancestral nodes Anc0..Anc_{n_q-1} sharing ref_genome's coordinate frame.
+        // Genome layout:
+        //   0..n_q         : Anc_{n_q-1} (root, idx 0) .. Anc0 (idx n_q - 1)
+        //   n_q            : ref_name (leaf, child of Anc0)
+        //   n_q + 1 ..     : queries[0..n_q] (query j is child of Anc_j)
+        let ref_leaf_idx = n_q;
+        let q_leaf_base = n_q + 1;
+        let mut genomes = Vec::with_capacity(1 + 2 * n_q);
+
+        for level_rev in 0..n_q {
+            let level = n_q - 1 - level_rev; // n_q-1 down to 0
+            let anc_name = format!("Anc{level}");
+            let parent = if level_rev == 0 {
+                None
+            } else {
+                Some(level_rev - 1)
+            };
+            let left_child = if level == 0 {
+                ref_leaf_idx
+            } else {
+                level_rev + 1
+            };
+            let right_child = q_leaf_base + level;
+
+            let top_segments = if parent.is_some() {
+                (0..n_b)
+                    .map(|bi| HalTopSegment {
+                        start: ref_genome.bottom_segments[bi].start,
+                        length: ref_genome.bottom_segments[bi].length,
+                        parent_bottom_idx: Some(bi),
+                        parent_reversed: false,
+                        next_paralog: None,
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+
+            let bottom_segments = (0..n_b)
+                .map(|bi| {
+                    let bseg = &ref_genome.bottom_segments[bi];
+                    let left_link = Some((bi, false));
+                    let right_link = bseg.child_tops[level];
+                    HalBottomSegment {
+                        start: bseg.start,
+                        length: bseg.length,
+                        child_tops: vec![left_link, right_link],
+                    }
+                })
+                .collect();
+
+            genomes.push(HalGenome {
+                name: anc_name,
+                parent,
+                children: vec![left_child, right_child],
+                sequences: ref_genome.sequences.clone(),
+                dna: ref_genome.dna.clone(),
+                top_segments,
+                bottom_segments,
+            });
+        }
+
+        // ref_name leaf (child of Anc0 at index n_q - 1)
+        let anc0_idx = n_q - 1;
+        let ref_tops = (0..n_b)
+            .map(|bi| HalTopSegment {
+                start: ref_genome.bottom_segments[bi].start,
+                length: ref_genome.bottom_segments[bi].length,
+                parent_bottom_idx: Some(bi),
+                parent_reversed: false,
+                next_paralog: None,
+            })
+            .collect();
+        genomes.push(HalGenome {
+            name: ref_genome.name.clone(),
+            parent: Some(anc0_idx),
+            children: Vec::new(),
+            sequences: ref_genome.sequences.clone(),
+            dna: ref_genome.dna.clone(),
+            top_segments: ref_tops,
+            bottom_segments: Vec::new(),
+        });
+
+        // Query leaves (query j is child of Anc_j at index n_q - 1 - j)
+        for (j, q_gen) in star.genomes[1..].iter().enumerate() {
+            let parent_idx = n_q - 1 - j;
+            let mut g = q_gen.clone();
+            g.parent = Some(parent_idx);
+            genomes.push(g);
+        }
+
+        let mut tree_newick = ref_name.to_owned();
+        for (j, (q_name, _)) in queries.iter().enumerate() {
+            tree_newick = format!("({tree_newick},{q_name})Anc{j}");
+        }
+        tree_newick.push(';');
+
+        Self {
+            tree_newick,
+            genomes,
+        }
+    }
+
     fn write_leaf_maf(leaf: &HalGenome, parent: &HalGenome, out: &mut String) {
         for tseg in &leaf.top_segments {
             let Some(b_idx) = tseg.parent_bottom_idx else {

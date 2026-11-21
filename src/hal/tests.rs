@@ -956,3 +956,39 @@ fn non_star_unsorted_segments_remap_cross_references_on_hdf5_export() {
     assert_eq!(tops[0].0, 0);
     assert_eq!(tops[0].3, 1);
 }
+
+#[test]
+fn progressive_multi_contig_hal_builds_ancestral_tree_and_roundtrips() {
+    let ref_contigs = vec![
+        ("c1".to_owned(), b"ACGTACGT".to_vec()),
+        ("c2".to_owned(), b"TTTTCCCC".to_vec()),
+    ];
+    let q1_contigs = vec![("q1_c1".to_owned(), b"ACGTACGT".to_vec())];
+    let q2_contigs = vec![("q2_c2".to_owned(), b"GGGGAAAA".to_vec())];
+    let hal = HalAlignment::from_multi_contig_progressive_blocks(
+        "hg38",
+        &ref_contigs,
+        &[
+            ("panTro4".to_owned(), q1_contigs),
+            ("mm10".to_owned(), q2_contigs),
+        ],
+        &[(0, 0, 0, 0, 0, 8, false), (1, 1, 0, 0, 0, 8, true)],
+    );
+    assert_eq!(hal.tree_newick, "((hg38,panTro4)Anc0,mm10)Anc1;");
+    assert_eq!(hal.genomes.len(), 5);
+    assert_eq!(hal.genomes[0].name, "Anc1");
+    assert_eq!(hal.genomes[0].bottom_segments.len(), 2);
+
+    let bytes = hal.to_hdf5_bytes();
+    let sb = read_hdf5_superblock(&bytes).expect("superblock");
+    let root_addr = sb.root_group_addr.expect("root addr");
+    let mut cursor = std::io::Cursor::new(&bytes);
+    let root_entries = read_hdf5_v0_group_entries_seek(&mut cursor, root_addr)
+        .expect("root entries")
+        .expect("some entries");
+    assert!(root_entries.iter().any(|e| e.name == "Anc0"));
+    assert!(root_entries.iter().any(|e| e.name == "Anc1"));
+    assert!(root_entries.iter().any(|e| e.name == "hg38"));
+    assert!(root_entries.iter().any(|e| e.name == "panTro4"));
+    assert!(root_entries.iter().any(|e| e.name == "mm10"));
+}
