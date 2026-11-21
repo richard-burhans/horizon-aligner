@@ -21,7 +21,7 @@ struct CliArgs {
     tag_walks: bool,
     max_bubble_steps: usize,
     min_anchor_bp: usize,
-    divergence: f64,
+    divergence: Option<f64>,
 }
 
 #[derive(Default)]
@@ -55,7 +55,7 @@ fn parse_args() -> Result<Option<CliArgs>> {
     let mut tag_walks = false;
     let mut max_bubble_steps = 16usize;
     let mut min_anchor_bp = 200usize;
-    let mut divergence = 0.02_f64;
+    let mut divergence: Option<f64> = None;
 
     let mut i = 0usize;
     while i < args.len() {
@@ -84,11 +84,16 @@ fn parse_args() -> Result<Option<CliArgs>> {
             }
             "--divergence" => {
                 i += 1;
-                divergence = args
+                let d: f64 = args
                     .get(i)
                     .context("missing value for --divergence")?
                     .parse()
                     .context("invalid --divergence")?;
+                anyhow::ensure!(
+                    d.is_finite() && d > 0.0,
+                    "--divergence must be a finite positive number, got {d}"
+                );
+                divergence = Some(d.clamp(1e-6, 0.75));
             }
             other if (!other.starts_with('-') || other == "-") && gfa_in.is_none() => {
                 gfa_in = Some(other.to_string());
@@ -99,10 +104,6 @@ fn parse_args() -> Result<Option<CliArgs>> {
     }
 
     let gfa_in = gfa_in.context("missing <input.gfa[.gz]>")?;
-    anyhow::ensure!(
-        divergence.is_finite() && divergence > 0.0,
-        "--divergence must be a finite positive number, got {divergence}"
-    );
     Ok(Some(CliArgs {
         gfa_in,
         out_path,
@@ -110,7 +111,7 @@ fn parse_args() -> Result<Option<CliArgs>> {
         tag_walks,
         max_bubble_steps: max_bubble_steps.max(2),
         min_anchor_bp,
-        divergence: divergence.clamp(1e-6, 0.75),
+        divergence,
     }))
 }
 
@@ -251,12 +252,35 @@ fn resolve_window(
     }
 }
 
+fn estimate_window_divergence(steps: &[(&str, bool)], anchors: &HashSet<String>) -> f64 {
+    if steps.is_empty() {
+        return 0.02;
+    }
+    let mut non_anchors = 0usize;
+    let mut rev_steps = 0usize;
+    for &(seg, fwd) in steps {
+        if !anchors.contains(seg) {
+            non_anchors += 1;
+        }
+        if !fwd {
+            rev_steps += 1;
+        }
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let n = steps.len() as f64;
+    #[allow(clippy::cast_precision_loss)]
+    let non_anchor_frac = non_anchors as f64 / n;
+    #[allow(clippy::cast_precision_loss)]
+    let inv_frac = rev_steps as f64 / n;
+    (0.02 + 0.08 * non_anchor_frac + 0.05 * inv_frac).clamp(0.01, 0.25)
+}
+
 fn decompose_and_resolve(
     steps: &[(&str, bool)],
     anchors: &HashSet<String>,
     seg_lens: &HashMap<String, usize>,
     max_bubble_steps: usize,
-    divergence: f64,
+    divergence_override: Option<f64>,
     collapse_dups: bool,
     stats: &mut ResolveStats,
 ) -> (Vec<(String, bool)>, Vec<String>) {
@@ -277,8 +301,10 @@ fn decompose_and_resolve(
             }
             j += 1;
         }
+        let win_div = divergence_override
+            .unwrap_or_else(|| estimate_window_divergence(&steps[i..j], anchors));
         let (win_steps, win_tag) =
-            resolve_window(&steps[i..j], seg_lens, divergence, collapse_dups, stats);
+            resolve_window(&steps[i..j], seg_lens, win_div, collapse_dups, stats);
         out_steps.extend(win_steps);
         if let Some(t) = win_tag {
             tags.push(t);
@@ -662,7 +688,7 @@ mod tests {
             tag_walks: true,
             max_bubble_steps: 16,
             min_anchor_bp: 100,
-            divergence: 0.01,
+            divergence: None,
         };
         let (seg_lens, anchors) = pass1_index(&cli.gfa_in, cli.min_anchor_bp)?;
         let mut writer = std::io::BufWriter::new(std::fs::File::create(&gfa_out)?);
