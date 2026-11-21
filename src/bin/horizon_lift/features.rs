@@ -162,7 +162,10 @@ mod tests {
 
     #[test]
     fn parse_gff3_rejects_zero_start_and_prefers_id_over_name() {
-        let p_zero = write_temp("horizon_lift_gff_zero", "chr1\t.\texon\t0\t10\t.\t+\t.\tID=x\n");
+        let p_zero = write_temp(
+            "horizon_lift_gff_zero",
+            "chr1\t.\texon\t0\t10\t.\t+\t.\tID=x\n",
+        );
         let err = parse_features(&p_zero, true).unwrap_err();
         let _ = std::fs::remove_file(&p_zero);
         assert!(err.to_string().contains("invalid GFF3 interval"));

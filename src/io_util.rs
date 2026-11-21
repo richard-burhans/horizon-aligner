@@ -145,10 +145,14 @@ pub fn open_text_writer(out_path: Option<&str>) -> Result<BufWriter<Box<dyn Writ
             Ok(c) => c,
             Err(e) => {
                 let _ = std::fs::remove_file(path);
-                return Err(e).with_context(|| format!("spawning `zstd -c` for '{}'", path.display()));
+                return Err(e)
+                    .with_context(|| format!("spawning `zstd -c` for '{}'", path.display()));
             }
         };
-        let stdin = child.stdin.take().context("capturing `zstd -c` stdin pipe")?;
+        let stdin = child
+            .stdin
+            .take()
+            .context("capturing `zstd -c` stdin pipe")?;
         return Ok(BufWriter::new(Box::new(ZstdWriteChild {
             child,
             stdin: Some(stdin),

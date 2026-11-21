@@ -378,13 +378,8 @@ fn schedule_and_run_extension(ctx: &mut AlignCtx<'_>) -> Result<ExtensionOutput,
         (false, ctx.lcbs_fwd, ctx.seq_y, &mut *ctx.spans_fwd),
         (true, ctx.lcbs_rc, ctx.seq_y_rc, &mut *ctx.spans_rc),
     ] {
-        let rescued_inter = fallback::rescue_inter_lcb_gaps(
-            ctx.seq_x,
-            y_work,
-            lcb_list,
-            anchor_spans,
-            ctx.span,
-        )?;
+        let rescued_inter =
+            fallback::rescue_inter_lcb_gaps(ctx.seq_x, y_work, lcb_list, anchor_spans, ctx.span)?;
         macro_bubbles += schedule_strand_lcb_jobs(
             is_rc,
             ctx.seq_x,
@@ -409,7 +404,12 @@ fn schedule_and_run_extension(ctx: &mut AlignCtx<'_>) -> Result<ExtensionOutput,
     } else {
         let mut gc_cnt = 0usize;
         let mut acgt_cnt = 0usize;
-        for &b in ctx.seq_x.iter().take(4096).chain(ctx.seq_y.iter().take(4096)) {
+        for &b in ctx
+            .seq_x
+            .iter()
+            .take(4096)
+            .chain(ctx.seq_y.iter().take(4096))
+        {
             match b.to_ascii_uppercase() {
                 b'G' | b'C' => {
                     gc_cnt += 1;
@@ -425,13 +425,7 @@ fn schedule_and_run_extension(ctx: &mut AlignCtx<'_>) -> Result<ExtensionOutput,
         } else {
             0.5
         };
-        dp::calibrate_null_crc_for_gc(
-            observed_gc,
-            15,
-            0.07,
-            ctx.effective_min_bits,
-            &hmm_params,
-        )
+        dp::calibrate_null_crc_for_gc(observed_gc, 15, 0.07, ctx.effective_min_bits, &hmm_params)
     };
 
     let t_dp_start = std::time::Instant::now();

@@ -184,7 +184,11 @@ fn run_locus(cli: &LocusCli) -> Result<()> {
         contigs
             .iter()
             .position(|(name, _)| name == wanted)
-            .or_else(|| contigs.iter().position(|(name, _)| name.starts_with(wanted)))
+            .or_else(|| {
+                contigs
+                    .iter()
+                    .position(|(name, _)| name.starts_with(wanted))
+            })
             .with_context(|| format!("focal reference '{wanted}' not found in FASTA"))?
     } else {
         contigs
@@ -208,37 +212,39 @@ fn run_locus(cli: &LocusCli) -> Result<()> {
 
     let results: Vec<(PairMetrics, Option<(String, String)>)> = pairs
         .par_iter()
-        .map(|&(i, j)| -> Result<(PairMetrics, Option<(String, String)>)> {
-            let aln = align_contig_pair_runs(&indexed[i], &indexed[j], &cfg)?;
-            let metrics = compute_pair_metrics(i, j, &contigs[i].1, &contigs[j].1, &aln);
-            let focal_maf = if i == ref_idx {
-                let maf = format_maf_blocks_runs(
-                    &contigs[i].0,
-                    contigs[i].1.len(),
-                    &contigs[j].0,
-                    contigs[j].1.len(),
-                    &contigs[i].1,
-                    &contigs[j].1,
-                    &aln,
-                );
-                Some((contigs[j].0.clone(), maf))
-            } else if j == ref_idx {
-                let rev_aln = align_contig_pair_runs(&indexed[j], &indexed[i], &cfg)?;
-                let maf = format_maf_blocks_runs(
-                    &contigs[j].0,
-                    contigs[j].1.len(),
-                    &contigs[i].0,
-                    contigs[i].1.len(),
-                    &contigs[j].1,
-                    &contigs[i].1,
-                    &rev_aln,
-                );
-                Some((contigs[i].0.clone(), maf))
-            } else {
-                None
-            };
-            Ok((metrics, focal_maf))
-        })
+        .map(
+            |&(i, j)| -> Result<(PairMetrics, Option<(String, String)>)> {
+                let aln = align_contig_pair_runs(&indexed[i], &indexed[j], &cfg)?;
+                let metrics = compute_pair_metrics(i, j, &contigs[i].1, &contigs[j].1, &aln);
+                let focal_maf = if i == ref_idx {
+                    let maf = format_maf_blocks_runs(
+                        &contigs[i].0,
+                        contigs[i].1.len(),
+                        &contigs[j].0,
+                        contigs[j].1.len(),
+                        &contigs[i].1,
+                        &contigs[j].1,
+                        &aln,
+                    );
+                    Some((contigs[j].0.clone(), maf))
+                } else if j == ref_idx {
+                    let rev_aln = align_contig_pair_runs(&indexed[j], &indexed[i], &cfg)?;
+                    let maf = format_maf_blocks_runs(
+                        &contigs[j].0,
+                        contigs[j].1.len(),
+                        &contigs[i].0,
+                        contigs[i].1.len(),
+                        &contigs[j].1,
+                        &contigs[i].1,
+                        &rev_aln,
+                    );
+                    Some((contigs[i].0.clone(), maf))
+                } else {
+                    None
+                };
+                Ok((metrics, focal_maf))
+            },
+        )
         .collect::<Result<Vec<_>>>()?;
 
     let (total_blocks, multi_blocks) =
@@ -330,7 +336,11 @@ fn parse_args() -> Result<Option<LocusCli>> {
             }
             "--out-prefix" | "-o" => {
                 i += 1;
-                out_prefix = Some(args.get(i).context("missing value for --out-prefix")?.clone());
+                out_prefix = Some(
+                    args.get(i)
+                        .context("missing value for --out-prefix")?
+                        .clone(),
+                );
             }
             "--ref" => {
                 i += 1;

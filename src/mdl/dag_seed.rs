@@ -409,4 +409,53 @@ mod tests {
         assert_eq!(aln.kept_pairs, [] as [(usize, usize, usize); 0]);
         assert_eq!(aln.bubbles, 1);
     }
+
+    #[test]
+    fn seeded_dag_falls_back_to_aa5_translated_seeds_on_synonymous_divergence() {
+        // Synonymous mutations (AGA->CGA, CCA->CCT, GTT->GTA, ACT->ACA) flip purine/pyrimidine
+        // every 3-5 bp, breaking every MASK_W10 and MASK_RY20 seed while keeping 100%
+        // amino-acid identity (RPVT * 4 = 16 aa) so aa5_keys seeds the target node.
+        let target_coding = b"AGACCAGTTACTAGACCAGTTACTAGACCAGTTACTAGACCAGTTACT";
+        let query_coding = b"CGACCTGTAACACGACCTGTAACACGACCTGTAACACGACCTGTAACA";
+        assert_eq!(target_coding.len(), 48);
+        assert_eq!(query_coding.len(), 48);
+
+        let mut nodes: Vec<GraphNode> = (0..11)
+            .map(|idx| GraphNode {
+                name: format!("decoy_{idx}"),
+                seq: vec![b'N'; 5_000],
+                preds: if idx == 0 { vec![] } else { vec![idx - 1] },
+            })
+            .collect();
+        let target_id = nodes.len();
+        nodes.push(GraphNode {
+            name: "coding_target".into(),
+            seq: target_coding.to_vec(),
+            preds: vec![],
+        });
+
+        let index = DagSeedIndex::build(&nodes);
+        let q_w10 = FlatSeedIndex::build_with_sdust(query_coding, MASK_W10, 8, false, false, None)
+            .expect("build w10 seed index");
+        let q_ry20 = FlatSeedIndex::build_with_sdust(query_coding, MASK_RY20, 8, false, true, None)
+            .expect("build ry20 seed index");
+        assert_eq!(
+            q_w10.shared_unique_keys(index.w10[target_id].as_ref().expect("target w10 index")),
+            0
+        );
+        assert_eq!(
+            q_ry20.shared_unique_keys(index.ry20[target_id].as_ref().expect("target ry20 index")),
+            0
+        );
+
+        let aln = align_seq_to_dag_seeded_indexed(
+            &nodes,
+            &index,
+            query_coding,
+            &HmmParams::default(),
+            8.0,
+        );
+        assert_eq!(aln.path_nodes, vec![target_id]);
+        assert!(aln.kept_pairs.len() >= 30);
+    }
 }

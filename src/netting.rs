@@ -3,7 +3,9 @@
 use crate::mdl::AlignedRun;
 
 /// Partition aligned pairs into colinear runs of at least 12 bases (sorting by `x` if unsorted).
-pub(crate) fn partition_colinear_blocks(pairs: &[(usize, usize)]) -> Vec<(Vec<(usize, usize)>, bool)> {
+pub(crate) fn partition_colinear_blocks(
+    pairs: &[(usize, usize)],
+) -> Vec<(Vec<(usize, usize)>, bool)> {
     type ActiveChain = (Vec<(usize, usize)>, Option<bool>);
     let sorted_storage: Vec<(usize, usize)>;
     let ordered: &[(usize, usize)] = if pairs.windows(2).all(|w| w[0].0 <= w[1].0) {

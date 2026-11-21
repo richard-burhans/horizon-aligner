@@ -394,9 +394,9 @@ where
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use std::fs::File;
     use flate2::Compression;
     use flate2::write::GzEncoder;
+    use std::fs::File;
     use std::io::{Cursor, Write};
 
     #[test]

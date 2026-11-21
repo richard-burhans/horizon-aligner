@@ -45,7 +45,11 @@ These are specific slice files downloaded to evaluate mammalian and vertebrate a
 - **HPRC Pangenome (Minigraph-Cactus)**
   - **File:** `hprc-v1.0-mc-grch38.gfa.gz`
   - **Source:** `https://s3-us-west-2.amazonaws.com/human-pangenomics/pangenomes/freeze/freeze1/minigraph-cactus/`
-  - **Purpose:** Validating `H`/`S`/`L`/`P`/`W` GFA v1.0/v1.1 graph streaming against the Human Pangenome Reference Consortium graphs.
+  - **Purpose:** Validating `H`/`S`/`L`/`P`/`W` GFA v1.0/v1.1 graph streaming (`horizon_gfa`, `horizon_lift`), 10k–200k subgraph scaling (`bench_hprc_subgraph_scaling.py`, `bench_external_graph_baselines.py`), and whole-chromosome `GRCh38.chr6` × `CHM13.chr6` 1-to-1 concordance (`extract_hprc_chr6_truth.py`, `compare_chr6_horizon_vs_hprc.py`, `score_paf_vs_hprc.py`).
+
+- **VGP / GenomeArk Pairwise PAF & Regional Locus Suites**
+  - **Files:** `chr6` `FastGA` PAF (`chr6_fastga.paf` / `.paf.zst`), GenomeArk Koala (`GCA_003287225.2`) × Amphioxus (`GCA_015852565.1`) `FastGA` PAF, and regional multi-FASTA loci (`galGal` × `taeGut`, 4-way human `25 kb` locus).
+  - **Purpose:** Evaluating streaming PAF SDUST+MDL filtering/netting (`horizon_filter`) against 2D HPRC 1-to-1 truth and multi-FASTA `impg`-style locus extraction/distance estimation (`horizon_locus`; `bench_vgp_filter_locus.py`).
 
 ## Recovery Script
 To quickly re-download the core UCSC slice files after a sandbox reset, run:

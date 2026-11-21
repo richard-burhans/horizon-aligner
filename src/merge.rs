@@ -109,8 +109,7 @@ fn project_block_interval_with_cursor(
     if ref_bases.len() != span || qry_in == 0 {
         return None;
     }
-    let qry_start = saved_start_cursor
-        .map_or(qry_consumed, |sc| sc.qry_consumed);
+    let qry_start = saved_start_cursor.map_or(qry_consumed, |sc| sc.qry_consumed);
     Some(ProjectedInterval {
         ref_bases,
         qry_bases,
@@ -205,43 +204,43 @@ fn parse_pairwise_maf_blocks(
     let mut tokens_by_contig: std::collections::BTreeMap<String, Vec<(usize, String, i8)>> =
         std::collections::BTreeMap::new();
 
-    let flush =
-        |rows: &mut Vec<(crate::formats::MafRow, usize)>,
-         by_contig: &mut std::collections::BTreeMap<String, Vec<PairwiseMafBlock>>,
-         tokens_by_contig: &mut std::collections::BTreeMap<String, Vec<(usize, String, i8)>>| {
-            if rows.len() >= 2 {
-                let mut it = rows.drain(..);
-                let (r, r_size) = it.next().expect("rows >= 2");
-                let (q, _q_size) = it.next().expect("rows >= 2");
-                if r.strand != '+' || r.seq.len() != q.seq.len() {
-                    return;
-                }
-                let Some(ref_end) = r.start.checked_add(r_size) else {
-                    return;
-                };
-                let b_idx = r.start / step_bp;
-                tokens_by_contig
-                    .entry(r.src.clone())
-                    .or_default()
-                    .push((r.start, format!("B{b_idx}"), if q.strand == '-' { -1 } else { 1 }));
-                by_contig
-                    .entry(r.src)
-                    .or_default()
-                    .push(PairwiseMafBlock {
-                        ref_start: r.start,
-                        ref_end,
-                        ref_src_size: r.src_size,
-                        qry_species: query_sp.to_owned(),
-                        qry_contig: q.src,
-                        qry_start: q.start,
-                        qry_strand: q.strand,
-                        qry_src_size: q.src_size,
-                        ref_seq: r.seq.into_bytes(),
-                        qry_seq: q.seq.into_bytes(),
-                    });
+    let flush = |rows: &mut Vec<(crate::formats::MafRow, usize)>,
+                 by_contig: &mut std::collections::BTreeMap<String, Vec<PairwiseMafBlock>>,
+                 tokens_by_contig: &mut std::collections::BTreeMap<
+        String,
+        Vec<(usize, String, i8)>,
+    >| {
+        if rows.len() >= 2 {
+            let mut it = rows.drain(..);
+            let (r, r_size) = it.next().expect("rows >= 2");
+            let (q, _q_size) = it.next().expect("rows >= 2");
+            if r.strand != '+' || r.seq.len() != q.seq.len() {
+                return;
             }
-            rows.clear();
-        };
+            let Some(ref_end) = r.start.checked_add(r_size) else {
+                return;
+            };
+            let b_idx = r.start / step_bp;
+            tokens_by_contig.entry(r.src.clone()).or_default().push((
+                r.start,
+                format!("B{b_idx}"),
+                if q.strand == '-' { -1 } else { 1 },
+            ));
+            by_contig.entry(r.src).or_default().push(PairwiseMafBlock {
+                ref_start: r.start,
+                ref_end,
+                ref_src_size: r.src_size,
+                qry_species: query_sp.to_owned(),
+                qry_contig: q.src,
+                qry_start: q.start,
+                qry_strand: q.strand,
+                qry_src_size: q.src_size,
+                ref_seq: r.seq.into_bytes(),
+                qry_seq: q.seq.into_bytes(),
+            });
+        }
+        rows.clear();
+    };
 
     for raw_line in maf_text.lines() {
         let line = raw_line.trim();
@@ -267,8 +266,7 @@ fn parse_pairwise_maf_blocks(
     let mut sp_dups = std::collections::BTreeSet::new();
     for mut tokens in tokens_by_contig.into_values() {
         tokens.sort_unstable_by_key(|(start, _, _)| *start);
-        let ordered: Vec<(String, i8)> =
-            tokens.into_iter().map(|(_, tok, st)| (tok, st)).collect();
+        let ordered: Vec<(String, i8)> = tokens.into_iter().map(|(_, tok, st)| (tok, st)).collect();
         crate::formats::collect_windowed_duplications(&ordered, &mut sp_dups);
     }
     sp_dups
@@ -441,11 +439,20 @@ pub fn merge_pairwise_mafs(
     for (sp, dups) in dups_by_species {
         if !dups.is_empty() {
             let joined: Vec<&str> = dups.iter().map(String::as_str).collect();
-            let _ = writeln!(out.gfa_out, "# EG:Z:{ref_species}__{sp}\t{}", joined.join(","));
+            let _ = writeln!(
+                out.gfa_out,
+                "# EG:Z:{ref_species}__{sp}\t{}",
+                joined.join(",")
+            );
         }
     }
 
-    (out.maf_out, out.gfa_out, out.total_blocks, out.multi_species_blocks)
+    (
+        out.maf_out,
+        out.gfa_out,
+        out.total_blocks,
+        out.multi_species_blocks,
+    )
 }
 
 fn interval_match_score(proj: &ProjectedInterval) -> isize {

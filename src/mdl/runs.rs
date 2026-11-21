@@ -83,9 +83,7 @@ pub fn merge_colinear_runs(runs: &mut Vec<AlignedRun>) {
         let next = runs[read_idx];
         let cur = &mut runs[write_idx];
         let cur_x_end = cur.x_start + cur.len;
-        if cur.is_rc == next.is_rc
-            && diag_key(cur) == diag_key(&next)
-            && next.x_start <= cur_x_end
+        if cur.is_rc == next.is_rc && diag_key(cur) == diag_key(&next) && next.x_start <= cur_x_end
         {
             let next_x_end = next.x_start + next.len;
             if next_x_end > cur_x_end {

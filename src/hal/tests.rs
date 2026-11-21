@@ -251,7 +251,12 @@ fn real_hal_decode_from_env() {
     assert_ne!(root.len(), 0);
     let first_genome = root
         .iter()
-        .find(|e| !matches!(e.name.as_str(), "Meta" | "Phylogeny" | "Genomes" | "Verison"))
+        .find(|e| {
+            !matches!(
+                e.name.as_str(),
+                "Meta" | "Phylogeny" | "Genomes" | "Verison"
+            )
+        })
         .expect("genome group");
     let g_entries = read_hdf5_v0_group_entries_seek(&mut f, first_genome.object_header_addr)
         .expect("seek genome")
@@ -346,7 +351,10 @@ fn hal_hdf5_write_and_seek_roundtrip() {
         .expect("bot bytes");
     assert_eq!(
         decode_hal_bottom_array(&bot_raw, 1),
-        vec![(0, 12, -1, vec![(0, false)]), (12, 0, -1, vec![(-1, false)])]
+        vec![
+            (0, 12, -1, vec![(0, false)]),
+            (12, 0, -1, vec![(-1, false)])
+        ]
     );
 }
 
@@ -722,7 +730,10 @@ fn multi_contig_hal_hdf5_write_and_seek_roundtrip() {
     let root_entries = read_hdf5_v0_group_entries_seek(&mut cursor, root_addr)
         .expect("root entries")
         .expect("some entries");
-    let hg38 = root_entries.iter().find(|e| e.name == "hg38").expect("hg38");
+    let hg38 = root_entries
+        .iter()
+        .find(|e| e.name == "hg38")
+        .expect("hg38");
     let hg38_ds = read_hdf5_v0_group_entries_seek(&mut cursor, hg38.object_header_addr)
         .expect("hg38 ds")
         .expect("some ds");
@@ -736,7 +747,10 @@ fn multi_contig_hal_hdf5_write_and_seek_roundtrip() {
     let sn_raw = read_hdf5_v0_dataset_bytes_seek(&mut cursor, sn_obj.object_header_addr)
         .expect("bytes")
         .expect("bytes");
-    assert_eq!(decode_hal_seq_names(&sn_raw, sn_stride), vec!["chr1", "chr2"]);
+    assert_eq!(
+        decode_hal_seq_names(&sn_raw, sn_stride),
+        vec!["chr1", "chr2"]
+    );
 }
 
 #[test]
@@ -768,7 +782,15 @@ fn hal_hdf5_export_normalizes_gaps_overlaps_and_paralogy_cycles() {
     let root_entries = read_hdf5_v0_group_entries_seek(&mut cursor, root_addr)
         .expect("root entries")
         .expect("some entries");
-    for req in ["Meta", "Phylogeny", "Genomes", "Verison", "hg38", "q1", "q2"] {
+    for req in [
+        "Meta",
+        "Phylogeny",
+        "Genomes",
+        "Verison",
+        "hg38",
+        "q1",
+        "q2",
+    ] {
         assert!(
             root_entries.iter().any(|e| e.name == req),
             "missing root entry {req}"
@@ -816,7 +838,10 @@ fn hal_to_maf_handles_cyclic_next_paralog_without_duplicate_rows() {
     hal.genomes[1].top_segments[0].next_paralog = Some(1);
     let maf = hal.to_maf_for_genome("hg38").expect("maf");
     let q1_rows = maf.lines().filter(|l| l.starts_with("s q1 ")).count();
-    assert_eq!(q1_rows, 2, "cyclic next_paralog must emit each paralog once:\n{maf}");
+    assert_eq!(
+        q1_rows, 2,
+        "cyclic next_paralog must emit each paralog once:\n{maf}"
+    );
 }
 
 fn read_hal_array_bytes(bytes: &[u8], genome: &str, dataset: &str) -> Vec<u8> {

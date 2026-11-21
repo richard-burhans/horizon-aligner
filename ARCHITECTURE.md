@@ -26,5 +26,5 @@ The architecture of `horizon-aligner` follows a unidirectional dependency flow f
 
 - `horizon_clean` severs low-support discordant edges (`walk_support <= 1` by default, or `0` with `--prune-unsupported`) into `HB:i:1` Horizon Bubbles while preserving higher-support links unchanged.
 - `horizon_resolve` decomposes graphs via `u32`-interned `PackedGraph` + $O(V + E)$ Tarjan biedged snarls, estimates window divergence via a topological `[0.02, 0.15]` heuristic (unless `--divergence` is passed), rewrites `P`/`W` walks, updates `W`-line `end` bounds, and prunes/synthesizes `L` links (assuming `0M` overlaps).
-- `horizon` dispatcher (`src/bin/horizon.rs`) currently forwards `wga`, `merge`, `guide`, `gfa`, `lift`, `clean`, `resolve`, `eval`, and `bench-chr1`; `horizon_filter` and `horizon_locus` are invoked directly.
+- `horizon` dispatcher (`src/bin/horizon.rs`) forwards `wga`, `merge`, `guide`, `gfa`, `lift`, `clean`, `resolve`, `filter`, `locus`, `eval`, and `bench-chr1`.
 - `hal/hdf5_write.rs` emits `libhdf5`-compatible HDF5 `v0` archives with multi-level B-trees (`>256` entries), whereas `hal/hdf5_read.rs` supports both `v0` and `v1` object headers.

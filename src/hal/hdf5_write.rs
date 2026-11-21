@@ -294,13 +294,15 @@ impl Hdf5V0Builder {
         self.buf.extend_from_slice(b"GCOL");
         self.buf.push(1); // version 1
         self.buf.extend_from_slice(&[0u8; 3]); // reserved
-        self.buf.extend_from_slice(&(total_size as u64).to_le_bytes());
+        self.buf
+            .extend_from_slice(&(total_size as u64).to_le_bytes());
         self.buf.extend_from_slice(&body);
         // End-of-collection free object (index = 0)
         self.buf.extend_from_slice(&0u16.to_le_bytes());
         self.buf.extend_from_slice(&0u16.to_le_bytes());
         self.buf.extend_from_slice(&[0u8; 4]);
-        self.buf.extend_from_slice(&(free_space as u64).to_le_bytes());
+        self.buf
+            .extend_from_slice(&(free_space as u64).to_le_bytes());
         self.buf.resize(self.buf.len() + free_space - 16, 0);
         gcol_addr
     }
@@ -412,9 +414,8 @@ impl Hdf5V0Builder {
 
 fn encode_vls_attr_msg(name: &str, str_len: u32, gcol_addr: u64, obj_idx: u32) -> Vec<u8> {
     let name_bytes = name.as_bytes();
-    let name_size = u16::try_from(name_bytes.len() + 1).unwrap_or_else(|_| {
-        panic!("HDF5 attribute name exceeds 65535 bytes: {}", name.len())
-    });
+    let name_size = u16::try_from(name_bytes.len() + 1)
+        .unwrap_or_else(|_| panic!("HDF5 attribute name exceeds 65535 bytes: {}", name.len()));
 
     let mut msg = Vec::new();
     msg.push(1); // Attribute message version 1
@@ -793,10 +794,8 @@ impl HalAlignment {
             let dna_packed = encode_hal_dna(&g.dna);
             let dna_addr = w.write_dataset(&[dna_packed.len() as u64], 1, &dna_packed);
 
-            let seqidx_bytes =
-                encode_hal_seq_index(&g.sequences, tops, bottoms, g.dna.len());
-            let seqidx_addr =
-                w.write_dataset(&[(g.sequences.len() + 1) as u64], 24, &seqidx_bytes);
+            let seqidx_bytes = encode_hal_seq_index(&g.sequences, tops, bottoms, g.dna.len());
+            let seqidx_addr = w.write_dataset(&[(g.sequences.len() + 1) as u64], 24, &seqidx_bytes);
 
             let (seqname_bytes, stride) = encode_hal_seq_names(&g.sequences);
             let seqname_addr = w.write_dataset(&[g.sequences.len() as u64], stride, &seqname_bytes);
@@ -814,7 +813,8 @@ impl HalAlignment {
 
             let (g_meta_hdr, _, _) = w.write_group(&[]);
             let rup_idx = if g.dna.len() % 2 == 1 { 4 } else { 3 };
-            let (g_rup_hdr, _, _) = w.write_group_with_attrs(&[], &[("Rup", 1, gcol_addr, rup_idx)]);
+            let (g_rup_hdr, _, _) =
+                w.write_group_with_attrs(&[], &[("Rup", 1, gcol_addr, rup_idx)]);
 
             let (g_hdr, _, _) = w.write_group(&[
                 ("DNA_ARRAY", dna_addr),

@@ -163,6 +163,64 @@ fn parse_eval_args() -> Result<Option<EvalCliArgs>> {
     }))
 }
 
+fn collect_needed_contig_names<'a>(
+    maf_by_pair: &'a HashMap<(String, String), HashSet<(usize, usize)>>,
+    sample_name: &'a str,
+    use_ref: bool,
+) -> HashSet<&'a str> {
+    maf_by_pair
+        .keys()
+        .flat_map(|(r, t)| {
+            let id = if use_ref { r.as_str() } else { t.as_str() };
+            [id, horizon_aligner::strip_sample_prefix(id, sample_name)]
+        })
+        .collect()
+}
+
+type ContigPairTruth<'a> = (
+    &'a horizon_aligner::ContigIndex,
+    &'a horizon_aligner::ContigIndex,
+    &'a HashSet<(usize, usize)>,
+);
+
+fn align_and_score_pairs(
+    aligned_pairs: Vec<ContigPairTruth<'_>>,
+    cfg: &AlignConfig,
+) -> Result<(usize, usize, usize, usize)> {
+    let pair_stats: Vec<Result<(usize, usize, usize, usize)>> = aligned_pairs
+        .into_par_iter()
+        .map(|(idx_r, idx_t, maf_set)| {
+            let mut aln = align_contig_pair_with_config(idx_r, idx_t, cfg)?;
+            aln.aligned_pairs.sort_unstable();
+            aln.aligned_pairs.dedup();
+            let overlap = aln
+                .aligned_pairs
+                .iter()
+                .filter(|pair| maf_set.contains(pair))
+                .count();
+            Ok((
+                maf_set.len(),
+                aln.aligned_pairs.len(),
+                overlap,
+                aln.macro_bubbles + aln.internal_bubbles,
+            ))
+        })
+        .collect();
+
+    let mut total_maf = 0usize;
+    let mut total_proto = 0usize;
+    let mut total_overlap = 0usize;
+    let mut total_bubbles = 0usize;
+    for res in pair_stats {
+        let (maf_len, proto_len, overlap, bubbles) = res?;
+        total_maf += maf_len;
+        total_proto += proto_len;
+        total_overlap += overlap;
+        total_bubbles += bubbles;
+    }
+    Ok((total_maf, total_proto, total_overlap, total_bubbles))
+}
+
 fn main() -> Result<()> {
     let Some(cli) = parse_eval_args()? else {
         return Ok(());
@@ -178,14 +236,8 @@ fn main() -> Result<()> {
     };
 
     let t0 = Instant::now();
-    let needed_refs: HashSet<&str> = maf_by_pair
-        .keys()
-        .flat_map(|(r, _)| [r.as_str(), horizon_aligner::strip_sample_prefix(r, &cli.ref_name)])
-        .collect();
-    let needed_tgts: HashSet<&str> = maf_by_pair
-        .keys()
-        .flat_map(|(_, t)| [t.as_str(), horizon_aligner::strip_sample_prefix(t, &cli.target_name)])
-        .collect();
+    let needed_refs = collect_needed_contig_names(&maf_by_pair, &cli.ref_name, true);
+    let needed_tgts = collect_needed_contig_names(&maf_by_pair, &cli.target_name, false);
     let ref_idx_cache: HashMap<String, _> = ref_contigs
         .par_iter()
         .filter(|(id, _)| needed_refs.contains(id.as_str()))
@@ -196,11 +248,6 @@ fn main() -> Result<()> {
         .filter(|(id, _)| needed_tgts.contains(id.as_str()))
         .map(|(id, seq)| Ok((id.clone(), prepare_contig_index_opts(seq, false)?)))
         .collect::<Result<_>>()?;
-
-    let mut total_proto = 0usize;
-    let mut total_maf = 0usize;
-    let mut total_overlap = 0usize;
-    let mut total_bubbles = 0usize;
 
     let mut pairs: Vec<MafEntry> = maf_by_pair.into_iter().collect();
     pairs.sort_by(|a, b| a.0.cmp(&b.0));
@@ -224,33 +271,8 @@ fn main() -> Result<()> {
         "no truth MAF contig pairs matched the provided FASTA inputs"
     );
 
-    let pair_stats: Vec<Result<(usize, usize, usize, usize)>> = aligned_pairs
-        .into_par_iter()
-        .map(|(idx_r, idx_t, maf_set)| {
-            let mut aln = align_contig_pair_with_config(idx_r, idx_t, &cfg)?;
-            aln.aligned_pairs.sort_unstable();
-            aln.aligned_pairs.dedup();
-            let overlap = aln
-                .aligned_pairs
-                .iter()
-                .filter(|pair| maf_set.contains(pair))
-                .count();
-            Ok((
-                maf_set.len(),
-                aln.aligned_pairs.len(),
-                overlap,
-                aln.macro_bubbles + aln.internal_bubbles,
-            ))
-        })
-        .collect();
-
-    for res in pair_stats {
-        let (maf_len, proto_len, overlap, bubbles) = res?;
-        total_maf += maf_len;
-        total_proto += proto_len;
-        total_overlap += overlap;
-        total_bubbles += bubbles;
-    }
+    let (total_maf, total_proto, total_overlap, total_bubbles) =
+        align_and_score_pairs(aligned_pairs, &cfg)?;
 
     let elapsed = t0.elapsed().as_secs_f64();
     #[allow(clippy::cast_precision_loss)]

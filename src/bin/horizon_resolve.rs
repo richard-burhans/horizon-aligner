@@ -323,8 +323,7 @@ fn compute_biedged_snarls(
         csr_eid[pv] = eid;
     }
 
-    let (is_bridge, num_bridges) =
-        tarjan_bridges(num_sides, total_edges, &head, &csr_to, &csr_eid);
+    let (is_bridge, num_bridges) = tarjan_bridges(num_sides, total_edges, &head, &csr_to, &csr_eid);
 
     // Count 2-edge-connected components by BFS ignoring bridge edges.
     let mut comp = vec![u32::MAX; num_sides];
@@ -388,7 +387,12 @@ fn resolve_window(
     stats.windows_evaluated += 1;
     let blocks: Vec<(&str, i8)> = steps
         .iter()
-        .map(|&(id, f)| (graph.id_to_seg[id as usize].as_str(), if f { 1 } else { -1 }))
+        .map(|&(id, f)| {
+            (
+                graph.id_to_seg[id as usize].as_str(),
+                if f { 1 } else { -1 },
+            )
+        })
         .collect();
 
     let mut eg = EGraph::new();
@@ -809,7 +813,8 @@ fn pass2_rewrite<W: Write>(
             continue;
         };
         let fwd_edge = (u, uf, v, vf);
-        if (!has_paths_or_walks || used_edges.contains(&fwd_edge)) && !seen_edges.contains(&fwd_edge)
+        if (!has_paths_or_walks || used_edges.contains(&fwd_edge))
+            && !seen_edges.contains(&fwd_edge)
         {
             writeln!(
                 out,

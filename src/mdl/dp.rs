@@ -133,7 +133,8 @@ pub fn calibrate_null_crc_for_gc(
     let mut x = vec![b'A'; win_len];
     let mut y = vec![b'A'; win_len];
     for draw in 0..n_cal {
-        let mut state = 0x9E37_79B9_7F4A_7C15_u64 ^ ((draw as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9));
+        let mut state =
+            0x9E37_79B9_7F4A_7C15_u64 ^ ((draw as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9));
         for buf in [&mut x, &mut y] {
             for b in buf.iter_mut() {
                 state ^= state << 13;
@@ -836,8 +837,7 @@ mod tests {
             (None, Some(1), -2.0, 0.0), // gap column (must NOT be bridged into)
             (Some(1), Some(2), 2.5, 0.9),
         ];
-        let (kept2, _) =
-            super::filter_mea_pairs_and_count_bubbles(&cols2, &mut abstain, 0.0, 2.0);
+        let (kept2, _) = super::filter_mea_pairs_and_count_bubbles(&cols2, &mut abstain, 0.0, 2.0);
         assert_eq!(kept2, vec![(0, 0), (1, 2)]);
         assert!(abstain[1], "gap column must remain abstained");
     }

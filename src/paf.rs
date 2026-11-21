@@ -195,9 +195,7 @@ impl PafRecord {
     /// Return the value of a SAM-style tag with the given prefix (e.g., `"cg:Z:"`), if present.
     #[must_use]
     pub fn tag_value(&self, prefix: &str) -> Option<&str> {
-        self.tags
-            .iter()
-            .find_map(|tag| tag.strip_prefix(prefix))
+        self.tags.iter().find_map(|tag| tag.strip_prefix(prefix))
     }
 
     /// Return the raw `cg:Z:` CIGAR string, if present.
@@ -272,8 +270,8 @@ pub fn stream_paf_records<F>(path: &str, on_record: F) -> Result<()>
 where
     F: FnMut(PafRecord) -> Result<ControlFlow<()>>,
 {
-    let reader = open_text_reader(Path::new(path))
-        .with_context(|| format!("opening PAF '{path}'"))?;
+    let reader =
+        open_text_reader(Path::new(path)).with_context(|| format!("opening PAF '{path}'"))?;
     stream_paf_reader(reader, on_record)
 }
 

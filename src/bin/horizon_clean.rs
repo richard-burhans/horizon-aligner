@@ -276,8 +276,12 @@ fn score_links_symmetrically(
         let edge = DirectedEdge::new(u, l.from_orient != b'-', v, l.to_orient != b'-');
         let rev_edge = edge.rev();
         let canon = if (edge.from, edge.from_fwd, edge.to, edge.to_fwd)
-            <= (rev_edge.from, rev_edge.from_fwd, rev_edge.to, rev_edge.to_fwd)
-        {
+            <= (
+                rev_edge.from,
+                rev_edge.from_fwd,
+                rev_edge.to,
+                rev_edge.to_fwd,
+            ) {
             edge
         } else {
             rev_edge
@@ -290,7 +294,10 @@ fn score_links_symmetrically(
                 .copied()
                 .unwrap_or(0)
                 .max(pass1.walk_support.get(&canon.rev()).copied().unwrap_or(0));
-            let cp = match (pass1.seg_flanks.get(&canon.from), pass1.seg_flanks.get(&canon.to)) {
+            let cp = match (
+                pass1.seg_flanks.get(&canon.from),
+                pass1.seg_flanks.get(&canon.to),
+            ) {
                 (Some(fu), Some(fv)) => {
                     let u3 = oriented_3p_flank(fu, canon.from_fwd);
                     let v5 = oriented_5p_flank(fv, canon.to_fwd);
@@ -790,10 +797,8 @@ mod tests {
 
     #[test]
     fn walk_split_accounts_for_link_overlap_cigar() {
-        let gfa_path = std::env::temp_dir().join(format!(
-            "horizon_clean_ov_test_{}.gfa",
-            std::process::id()
-        ));
+        let gfa_path =
+            std::env::temp_dir().join(format!("horizon_clean_ov_test_{}.gfa", std::process::id()));
         let s1 = "ATATATATATATATATATATATATATATATATATATATATATATATATATATATATATAT";
         let s2 = "GCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGC";
         let s3 = "ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT";

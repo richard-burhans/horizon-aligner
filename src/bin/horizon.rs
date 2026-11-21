@@ -41,6 +41,16 @@ const SUBCOMMANDS: &[(&str, &str, &str)] = &[
         "MDL-calibrated e-graph duplication/inversion resolver for GFA walks",
     ),
     (
+        "filter",
+        "horizon_filter",
+        "Reference-free MDL & syntenic-netting PAF alignment filter",
+    ),
+    (
+        "locus",
+        "horizon_locus",
+        "Fast per-locus alignment extractor & evolutionary distance estimator from PAF/MAF",
+    ),
+    (
         "eval",
         "horizon_eval",
         "Pairwise alignment recall/precision evaluator against reference MAF",
@@ -133,6 +143,8 @@ mod tests {
         assert_eq!(resolve_binary_name("lift"), Some("horizon_lift"));
         assert_eq!(resolve_binary_name("clean"), Some("horizon_clean"));
         assert_eq!(resolve_binary_name("resolve"), Some("horizon_resolve"));
+        assert_eq!(resolve_binary_name("filter"), Some("horizon_filter"));
+        assert_eq!(resolve_binary_name("locus"), Some("horizon_locus"));
         assert_eq!(resolve_binary_name("merge"), Some("horizon_merge"));
         assert_eq!(resolve_binary_name("guide"), Some("horizon_guide"));
         assert_eq!(resolve_binary_name("eval"), Some("horizon_eval"));

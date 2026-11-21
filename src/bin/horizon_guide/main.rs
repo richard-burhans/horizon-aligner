@@ -459,7 +459,8 @@ a score=20
 s hg38.chr1 0 20 + 20 ACGTACGTACGTACGTACGT
 s sp2.chr1 0 20 + 20 ACGTACGTACGTACGTACGT
 ";
-        let consensus = build_ancestral_consensus_contigs(&hinge_contigs, &[maf_s1, maf_s2], &[true]);
+        let consensus =
+            build_ancestral_consensus_contigs(&hinge_contigs, &[maf_s1, maf_s2], &[true]);
         assert_eq!(consensus.len(), 1);
         assert_eq!(consensus[0].0, "hg38.chr1");
         assert_eq!(consensus[0].1, b"ACGTACGTACGTACGTACGT");

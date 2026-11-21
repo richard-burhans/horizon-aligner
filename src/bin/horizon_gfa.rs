@@ -111,9 +111,13 @@ fn cmd_extract(gfa_path: &str, specs: &[ExtractSpec], max_bp: Option<usize>) -> 
                 horizon_aligner::matches_sample_prefix(&p.name, &spec.sample_prefix) && {
                     let rest = horizon_aligner::strip_sample_prefix(&p.name, &spec.sample_prefix);
                     rest == spec.seq_id
-                        || rest.strip_suffix(spec.seq_id.as_str()).is_some_and(|prefix| {
-                            prefix.ends_with('.') || prefix.ends_with('#') || prefix.ends_with(':')
-                        })
+                        || rest
+                            .strip_suffix(spec.seq_id.as_str())
+                            .is_some_and(|prefix| {
+                                prefix.ends_with('.')
+                                    || prefix.ends_with('#')
+                                    || prefix.ends_with(':')
+                            })
                 }
             }) {
                 let steps: Vec<(String, bool)> = parse_path_steps(&p.segment_names)

@@ -500,7 +500,11 @@ W\tCHM13\t0\tchr1\t0\t20\t>s1<s2
         assert_eq!(summary.lifted_split, 1);
         assert_eq!(summary.lifted_exact, 0);
         let out_str = String::from_utf8(out).expect("utf8");
-        assert_eq!(out_str.lines().count(), 2, "expected 2 split pieces, got: {out_str}");
+        assert_eq!(
+            out_str.lines().count(),
+            2,
+            "expected 2 split pieces, got: {out_str}"
+        );
     }
 
     #[test]

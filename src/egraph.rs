@@ -466,11 +466,7 @@ fn build_expr_from_best(
 /// Extract minimum-parsimony synteny expression rooted at `root` under an explicit [`MdlCostModel`].
 /// Returns `None` if `root` is out of bounds or has no extractable expression.
 #[must_use]
-pub fn extract_min_mdl_cost(
-    eg: &EGraph,
-    root: usize,
-    model: &MdlCostModel,
-) -> Option<(f64, Expr)> {
+pub fn extract_min_mdl_cost(eg: &EGraph, root: usize, model: &MdlCostModel) -> Option<(f64, Expr)> {
     if root >= eg.parent.len() {
         return None;
     }
@@ -611,8 +607,7 @@ mod tests {
 
         let mut low_div = MdlCostModel::from_egraph(&eg);
         low_div.block_stats.insert("B".to_owned(), (1000, 0.02));
-        let (cost_low, expr_low) =
-            extract_min_mdl_cost(&eg, root, &low_div).expect("extracted");
+        let (cost_low, expr_low) = extract_min_mdl_cost(&eg, root, &low_div).expect("extracted");
         assert!(
             has_dup_of(&expr_low, "B"),
             "2% div should collapse dup: {expr_low:?}"

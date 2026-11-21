@@ -135,6 +135,56 @@ fn score_from_counts_only(rec: &PafRecord, threshold_bits: f64) -> ScoreResult {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn score_match_run(
+    n: usize,
+    is_rc: bool,
+    qs: &IndexedSeq,
+    ts: &IndexedSeq,
+    pi_q: [f64; 4],
+    pi_t: [f64; 4],
+    q_pos: &mut usize,
+    t_pos: &mut usize,
+    mdl_bits: &mut f64,
+    nonrepeat_bp: &mut usize,
+) -> bool {
+    for _ in 0..n {
+        let qi = if is_rc {
+            if *q_pos == 0 {
+                return false;
+            }
+            *q_pos -= 1;
+            *q_pos
+        } else {
+            if *q_pos >= qs.seq.len() {
+                return false;
+            }
+            let cur = *q_pos;
+            *q_pos += 1;
+            cur
+        };
+        if *t_pos >= ts.seq.len() {
+            return false;
+        }
+        let ti = *t_pos;
+        *t_pos += 1;
+
+        // Down-weight SDUST-masked simple/tandem repeats so low-complexity false
+        // positives cannot accumulate positive MDL support.
+        if qs.masked[qi] && ts.masked[ti] {
+            continue;
+        }
+        *nonrepeat_bp += 1;
+        let qb = if is_rc {
+            complement_base(qs.seq[qi])
+        } else {
+            qs.seq[qi]
+        };
+        *mdl_bits += joint_pair_bits(qb, ts.seq[ti], pi_q, pi_t, IDENTITY_PRIOR);
+    }
+    true
+}
+
 fn score_paf_record(
     rec: &PafRecord,
     q_map: Option<&HashMap<String, IndexedSeq>>,
@@ -151,16 +201,18 @@ fn score_paf_record(
     let (Some(qm), Some(tm)) = (q_map, t_map) else {
         return score_from_counts_only(rec, threshold_bits);
     };
-    let (Some(qs), Some(ts)) = (
-        lookup_contig(qm, &rec.qname),
-        lookup_contig(tm, &rec.tname),
-    ) else {
+    let (Some(qs), Some(ts)) = (lookup_contig(qm, &rec.qname), lookup_contig(tm, &rec.tname))
+    else {
         return score_from_counts_only(rec, threshold_bits);
     };
     let Some(cigar_iter) = rec.cigar_ops() else {
         return score_from_counts_only(rec, threshold_bits);
     };
-    if rec.qend > qs.seq.len() || rec.tend > ts.seq.len() || rec.qstart > rec.qend || rec.tstart > rec.tend {
+    if rec.qend > qs.seq.len()
+        || rec.tend > ts.seq.len()
+        || rec.qstart > rec.qend
+        || rec.tstart > rec.tend
+    {
         return score_from_counts_only(rec, threshold_bits);
     }
 
@@ -178,40 +230,19 @@ fn score_paf_record(
         };
         match op {
             CigarOp::Match(n) | CigarOp::Equal(n) | CigarOp::Diff(n) => {
-                for _ in 0..n {
-                    let qi = if is_rc {
-                        if q_pos == 0 {
-                            return score_from_counts_only(rec, threshold_bits);
-                        }
-                        q_pos -= 1;
-                        q_pos
-                    } else {
-                        if q_pos >= qs.seq.len() {
-                            return score_from_counts_only(rec, threshold_bits);
-                        }
-                        let cur = q_pos;
-                        q_pos += 1;
-                        cur
-                    };
-                    if t_pos >= ts.seq.len() {
-                        return score_from_counts_only(rec, threshold_bits);
-                    }
-                    let ti = t_pos;
-                    t_pos += 1;
-
-                    // Down-weight SDUST-masked simple/tandem repeats so low-complexity false
-                    // positives cannot accumulate positive MDL support.
-                    if qs.masked[qi] && ts.masked[ti] {
-                        continue;
-                    }
-                    nonrepeat_bp += 1;
-                    let qb = if is_rc {
-                        complement_base(qs.seq[qi])
-                    } else {
-                        qs.seq[qi]
-                    };
-                    let tb = ts.seq[ti];
-                    mdl_bits += joint_pair_bits(qb, tb, pi_q, pi_t, IDENTITY_PRIOR);
+                if !score_match_run(
+                    n,
+                    is_rc,
+                    qs,
+                    ts,
+                    pi_q,
+                    pi_t,
+                    &mut q_pos,
+                    &mut t_pos,
+                    &mut mdl_bits,
+                    &mut nonrepeat_bp,
+                ) {
+                    return score_from_counts_only(rec, threshold_bits);
                 }
             }
             CigarOp::Ins(n) | CigarOp::SoftClip(n) => {
@@ -375,6 +406,12 @@ fn run_filter(cfg: &FilterConfig) -> Result<()> {
     Ok(())
 }
 
+fn next_arg_val<'a>(args: &'a [String], i: usize, flag: &str) -> Result<&'a str> {
+    args.get(i + 1)
+        .map(String::as_str)
+        .with_context(|| format!("missing value for {flag}"))
+}
+
 fn parse_args() -> Result<Option<FilterConfig>> {
     let args: Vec<String> = env::args().skip(1).collect();
     let mut paf_path: Option<String> = None;
@@ -397,44 +434,45 @@ fn parse_args() -> Result<Option<FilterConfig>> {
                 return Ok(None);
             }
             "--paf" | "-i" => {
-                paf_path = Some(args.get(i + 1).context("missing value for --paf")?.clone());
+                paf_path = Some(next_arg_val(&args, i, "--paf")?.to_owned());
                 i += 2;
             }
             "--query" | "-q" => {
-                query_fa = Some(args.get(i + 1).context("missing value for --query")?.clone());
+                query_fa = Some(next_arg_val(&args, i, "--query")?.to_owned());
                 i += 2;
             }
             "--target" | "-t" => {
-                target_fa = Some(args.get(i + 1).context("missing value for --target")?.clone());
+                target_fa = Some(next_arg_val(&args, i, "--target")?.to_owned());
                 i += 2;
             }
             "--seqs" | "-s" => {
-                let s = args.get(i + 1).context("missing value for --seqs")?.clone();
+                let s = next_arg_val(&args, i, "--seqs")?.to_owned();
                 query_fa = Some(s.clone());
                 target_fa = Some(s);
                 i += 2;
             }
             "--out" | "-o" => {
-                out_path = Some(args.get(i + 1).context("missing value for --out")?.clone());
+                out_path = Some(next_arg_val(&args, i, "--out")?.to_owned());
                 i += 2;
             }
             "--min-bits" => {
-                let v = args.get(i + 1).context("missing value for --min-bits")?;
-                let val: f64 = v.parse().context("parsing --min-bits")?;
+                let val: f64 = next_arg_val(&args, i, "--min-bits")?
+                    .parse()
+                    .context("parsing --min-bits")?;
                 anyhow::ensure!(val.is_finite(), "--min-bits must be finite, got {val}");
                 min_bits_override = Some(val);
                 i += 2;
             }
             "--min-nonrepeat-bp" => {
-                let v = args
-                    .get(i + 1)
-                    .context("missing value for --min-nonrepeat-bp")?;
-                min_nonrepeat_bp = v.parse().context("parsing --min-nonrepeat-bp")?;
+                min_nonrepeat_bp = next_arg_val(&args, i, "--min-nonrepeat-bp")?
+                    .parse()
+                    .context("parsing --min-nonrepeat-bp")?;
                 i += 2;
             }
             "--min-len" => {
-                let v = args.get(i + 1).context("missing value for --min-len")?;
-                min_aln_len = v.parse().context("parsing --min-len")?;
+                min_aln_len = next_arg_val(&args, i, "--min-len")?
+                    .parse()
+                    .context("parsing --min-len")?;
                 i += 2;
             }
             "--keep-all" => {
@@ -446,8 +484,9 @@ fn parse_args() -> Result<Option<FilterConfig>> {
                 i += 1;
             }
             "--max-occ" => {
-                let v = args.get(i + 1).context("missing value for --max-occ")?;
-                let k: usize = v.parse().context("parsing --max-occ")?;
+                let k: usize = next_arg_val(&args, i, "--max-occ")?
+                    .parse()
+                    .context("parsing --max-occ")?;
                 anyhow::ensure!(k >= 1, "--max-occ must be >= 1");
                 max_occ = Some(k);
                 i += 2;
@@ -488,8 +527,10 @@ mod tests {
     #[test]
     fn mdl_filter_rejects_simple_repeat_and_accepts_complex_match() {
         // 80bp complex random-like homologous region vs 80bp ATATAT... dinucleotide repeat
-        let complex = b"ACGTAGTGCTAGCATCGATCGTAGCTAGCTGATCGATCGATCGATCGTAGCTAGCTAGCATCGATCGTAGCTAGCTAGCA";
-        let repeat = b"ATATATATATATATATATATATATATATATATATATATATATATATATATATATATATATATATATATATATATATATAT";
+        let complex =
+            b"ACGTAGTGCTAGCATCGATCGTAGCTAGCTGATCGATCGATCGATCGTAGCTAGCTAGCATCGATCGTAGCTAGCTAGCA";
+        let repeat =
+            b"ATATATATATATATATATATATATATATATATATATATATATATATATATATATATATATATATATATATATATATATAT";
         let mut q_map = HashMap::new();
         q_map.insert("q_c".to_owned(), IndexedSeq::from_dna(complex.to_vec()));
         q_map.insert("q_r".to_owned(), IndexedSeq::from_dna(repeat.to_vec()));
@@ -498,14 +539,12 @@ mod tests {
         t_map.insert("t_c".to_owned(), IndexedSeq::from_dna(complex.to_vec()));
         t_map.insert("t_r".to_owned(), IndexedSeq::from_dna(repeat.to_vec()));
 
-        let paf_c = PafRecord::parse_line(
-            "q_c\t80\t0\t80\t+\tt_c\t80\t0\t80\t80\t80\t60\tcg:Z:80=",
-        )
-        .expect("paf");
-        let paf_r = PafRecord::parse_line(
-            "q_r\t80\t0\t80\t+\tt_r\t80\t0\t80\t80\t80\t60\tcg:Z:80=",
-        )
-        .expect("paf");
+        let paf_c =
+            PafRecord::parse_line("q_c\t80\t0\t80\t+\tt_c\t80\t0\t80\t80\t80\t60\tcg:Z:80=")
+                .expect("paf");
+        let paf_r =
+            PafRecord::parse_line("q_r\t80\t0\t80\t+\tt_r\t80\t0\t80\t80\t80\t60\tcg:Z:80=")
+                .expect("paf");
 
         let res_c = score_paf_record(&paf_c, Some(&q_map), Some(&t_map), None);
         let res_r = score_paf_record(&paf_r, Some(&q_map), Some(&t_map), None);

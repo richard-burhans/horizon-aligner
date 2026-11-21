@@ -51,7 +51,7 @@ cargo build --release
 ```
 
 Binaries will be placed in `target/release/`:
-* `horizon`: Unified subcommand dispatcher (`wga`, `merge`, `guide`, `gfa`, `lift`, `clean`, `resolve`, `eval`, `bench-chr1`).
+* `horizon`: Unified subcommand dispatcher (`wga`, `merge`, `guide`, `gfa`, `lift`, `clean`, `resolve`, `filter`, `locus`, `eval`, `bench-chr1`).
 * `horizon_wga`: Pairwise WGA, DAG/POA (`--graph`), and HAL inspection (`--hal-info`).
 * `horizon_merge`: Exact-coordinate multi-species MAF/rGFA merger.
 * `horizon_guide`: Progressive guide-tree aligner with HAL export.

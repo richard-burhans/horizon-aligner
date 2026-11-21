@@ -1,7 +1,7 @@
 # Horizon Suite Updates & Additions for the VGP All-to-All Alignment Project
 
 > **Target context:** [`pangenome/vgp-align-allocation/alignment-2026/main.md`](https://github.com/pangenome/vgp-align-allocation/blob/main/alignment-2026/main.md)
-> **Horizon status (`42700e1` / `9dfec4a`):** **P0–P4 complete & benchmarked on real VGP/GenomeArk + HPRC data** (`120` passing active unit tests: `86` lib + `34` bin, `1` ignored; `11` suite CLI binaries + `bench_chr1`).
+> **Horizon status (`HEAD`):** **P0–P4 complete & benchmarked on real VGP/GenomeArk + HPRC data** (`121` passing active unit tests: `87` lib + `34` bin, `1` `.hal` integration test verified via `HORIZON_TEST_HAL`; `11` suite CLI binaries + `bench_chr1`, all wired into `horizon`).
 
 ## 1. VGP Scale, Bottlenecks, and Where Horizon Fits
 
@@ -69,7 +69,7 @@ These workflows work today without new binary development:
 
 | Priority | Item | Status | Real-Data Verification |
 | :--- | :--- | :--- | :--- |
-| **P0** | `src/paf.rs` + `horizon_filter` (SDUST+MDL PAF filter & `--net`) | **Implemented** | `chr6` FastGA (`56,857` recs): `0.45s–0.48s` seq-free (`565` recs / `110.00 Mbp`) / `4.86s–4.89s` SDUST+MDL (`553` recs; 2D HPRC re-scoring pending `numpy`); GenomeArk Koala × Amphioxus (`36,601` recs, pre-`9dfec4a` `/tmp/vgp_test/`): `0.10s` (`1,976` recs, `71.6%` overlap with `FastGA_11`) and rejects `FastGA_11`'s #1 longest hit (`3,548 bp` repeat, `md:f:-210.51 hb:i:1`) |
+| **P0** | `src/paf.rs` + `horizon_filter` (SDUST+MDL PAF filter & `--net`) | **Implemented** | `chr6` FastGA (`56,857` recs): `0.45s–0.48s` seq-free (`565` recs / `110.00 Mbp`, `99.12%` exact recall, `99.65%` cond. / `99.32%` uncond. exact precision vs 2D HPRC) / `4.86s–4.95s` SDUST+MDL (`553` recs; preserves `100%` of exact `109.12 Mbp` truth coordinates); GenomeArk Koala × Amphioxus (`36,601` recs, pre-`9dfec4a` `/tmp/vgp_test/`): `0.10s` (`1,976` recs, `71.6%` overlap with `FastGA_11`) and rejects `FastGA_11`'s #1 longest hit (`3,548 bp` repeat, `md:f:-210.51 hb:i:1`) |
 | **P1** | `horizon_clean` overlap-CIGAR `W` split fix + `horizon_resolve` topological window divergence | **Implemented** | Unit-tested & verified across synthetic and HPRC `10k` subgraphs |
 | **P2** | `aa5_keys` 6-frame translated fallback in `horizon_wga --graph` (`src/mdl/dag_seed.rs`) | **Implemented** | Unit-tested & active alongside `MASK_W10` + `MASK_RY20` |
 | **P3** | `horizon_locus` (`impg query` multi-FASTA -> `.similarity.tsv`, `.maf`, `.gfa`) | **Implemented** | Avian 2-way (`386.7 kb` × `349.4 kb`): `0.83s–0.86s` (`236.7–239.3 MB` RSS); Human 4-way 25 kb: `0.41s–0.42s` (`171.8 MB` RSS, `102` MAF / `92` multi-sp); Koala × Amphioxus 25 kb: `0.26s` (`40.1 MB` RSS, `9,697/25,000` bp) |

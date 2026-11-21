@@ -250,12 +250,7 @@ fn collect_multi_shape_lcbs<F: Fn(&mut AnchorPairs)>(
         );
         (ctx.filter_uncovered)(&mut f);
         (ctx.filter_uncovered)(&mut r);
-        ctx.append_hsp_pair_lcbs(
-            &f,
-            &r,
-            base_hsp_thresh + 30 + hsp_bonus,
-            MASK_LASTZ12.len(),
-        );
+        ctx.append_hsp_pair_lcbs(&f, &r, base_hsp_thresh + 30 + hsp_bonus, MASK_LASTZ12.len());
     }
 
     let y_lz11 = FlatSeedIndex::build_with_sdust(
@@ -433,7 +428,11 @@ fn collect_ry_lcbs<F: Fn(&mut AnchorPairs)>(
         ctx.cfg.fallback_min_anchors,
         ctx.cfg.fallback_min_span,
     );
-    record_spans(ctx.spans_fwd, &ctx.combined_fwd[prev_fwd..], MASK_RY20.len());
+    record_spans(
+        ctx.spans_fwd,
+        &ctx.combined_fwd[prev_fwd..],
+        MASK_RY20.len(),
+    );
     let prev_rc = ctx.combined_rc.len();
     append_nonoverlapping_lcbs(
         ctx.combined_rc,
