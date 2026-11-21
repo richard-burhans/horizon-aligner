@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail};
 use horizon_aligner::formats::{format_maf_blocks_runs, read_fasta_contigs};
 use horizon_aligner::mdl::{AlignConfig, RunAlignment, align_contig_pair_runs};
 use horizon_aligner::merge::merge_pairwise_mafs;
-use horizon_aligner::seeding::{ContigIndex, complement_base, prepare_contig_index};
+use horizon_aligner::seeding::{ContigIndex, complement_base, prepare_contig_index_opts};
 use rayon::prelude::*;
 use std::env;
 use std::fmt::Write as _;
@@ -177,7 +177,7 @@ fn run_locus(cli: &LocusCli) -> Result<()> {
 
     let indexed: Vec<ContigIndex> = contigs
         .par_iter()
-        .map(|(_, seq)| prepare_contig_index(seq))
+        .map(|(_, seq)| prepare_contig_index_opts(seq, cli.respect_softmask))
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
     let ref_idx = if let Some(ref wanted) = cli.focal_ref {

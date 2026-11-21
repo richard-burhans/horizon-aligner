@@ -168,6 +168,28 @@ pub fn calibrate_null_crc_for_gc(
 /// `seq_x` and reversed non-collinear windows of `seq_y`, falling back to
 /// [`calibrate_null_crc_for_gc`] when fewer than `n_cal` valid ACGT windows exist.
 #[must_use]
+pub(crate) fn estimate_sampled_gc(seq_x: &[u8], seq_y: &[u8]) -> f64 {
+    let mut gc = 0usize;
+    let mut acgt = 0usize;
+    for &b in seq_x.iter().take(4096).chain(seq_y.iter().take(4096)) {
+        match b.to_ascii_uppercase() {
+            b'G' | b'C' => {
+                gc += 1;
+                acgt += 1;
+            }
+            b'A' | b'T' => acgt += 1,
+            _ => {}
+        }
+    }
+    #[allow(clippy::cast_precision_loss)]
+    if acgt > 0 {
+        gc as f64 / acgt as f64
+    } else {
+        0.5
+    }
+}
+
+#[must_use]
 pub fn calibrate_null_crc_from_seqs(
     seq_x: &[u8],
     seq_y: &[u8],
@@ -177,25 +199,8 @@ pub fn calibrate_null_crc_from_seqs(
     params: &HmmParams,
 ) -> f64 {
     const WIN: usize = 64;
+    let obs_gc = estimate_sampled_gc(seq_x, seq_y);
     if n_cal == 0 || seq_x.len() < WIN * 2 || seq_y.len() < WIN * 2 {
-        let mut gc = 0usize;
-        let mut acgt = 0usize;
-        for &b in seq_x.iter().take(4096).chain(seq_y.iter().take(4096)) {
-            match b.to_ascii_uppercase() {
-                b'G' | b'C' => {
-                    gc += 1;
-                    acgt += 1;
-                }
-                b'A' | b'T' => acgt += 1,
-                _ => {}
-            }
-        }
-        #[allow(clippy::cast_precision_loss)]
-        let obs_gc = if acgt > 0 {
-            gc as f64 / acgt as f64
-        } else {
-            0.5
-        };
         return calibrate_null_crc_for_gc(obs_gc, n_cal, alpha, base_floor_bits, params);
     }
 
@@ -237,7 +242,7 @@ pub fn calibrate_null_crc_from_seqs(
         scores.push(null_bits);
     }
     if scores.len() < n_cal {
-        return calibrate_null_crc_for_gc(0.5, n_cal, alpha, base_floor_bits, params);
+        return calibrate_null_crc_for_gc(obs_gc, n_cal, alpha, base_floor_bits, params);
     }
     calibrate_crc_threshold(&scores, alpha, base_floor_bits)
 }
@@ -414,6 +419,11 @@ pub(super) fn filter_mea_pairs_and_count_bubbles<X: Copy>(
     min_post_prob: f64,
     min_block_bits: f64,
 ) -> (Vec<(X, usize)>, usize) {
+    let min_post_prob = if min_post_prob.is_nan() {
+        0.0
+    } else {
+        min_post_prob
+    };
     let k = raw_cols.len();
     abstain.clear();
     abstain.resize(k, false);

@@ -97,13 +97,15 @@ fn score_from_counts_only(rec: &PafRecord, threshold_bits: f64) -> ScoreResult {
 
     if let Some(cigar_iter) = rec.cigar_ops() {
         let mut valid = true;
+        let mut has_match_op = false;
         for op_res in cigar_iter {
             let Ok(op) = op_res else {
                 valid = false;
                 break;
             };
             match op {
-                CigarOp::Equal(n) | CigarOp::Match(n) => eq_bp += n,
+                CigarOp::Equal(n) => eq_bp += n,
+                CigarOp::Match(_) => has_match_op = true,
                 CigarOp::Diff(n) => diff_bp += n,
                 CigarOp::Ins(n) | CigarOp::Del(n) if n > 0 => {
                     gap_opens += 1;
@@ -112,7 +114,7 @@ fn score_from_counts_only(rec: &PafRecord, threshold_bits: f64) -> ScoreResult {
                 _ => {}
             }
         }
-        if !valid || (eq_bp == 0 && diff_bp == 0) {
+        if !valid || has_match_op || (eq_bp == 0 && diff_bp == 0) {
             eq_bp = rec.matches;
             diff_bp = rec.aln_len.saturating_sub(rec.matches);
         }
@@ -186,6 +188,7 @@ fn score_match_run(
     true
 }
 
+#[allow(clippy::too_many_lines)]
 fn score_paf_record(
     rec: &PafRecord,
     q_map: Option<&HashMap<String, IndexedSeq>>,
@@ -263,12 +266,15 @@ fn score_paf_record(
             }
             CigarOp::Ins(n) | CigarOp::SoftClip(n) => {
                 if is_rc {
-                    if q_pos < n {
+                    let Some(next_q) = q_pos.checked_sub(n) else {
                         return score_from_counts_only(rec, threshold_bits);
-                    }
-                    q_pos -= n;
+                    };
+                    q_pos = next_q;
                 } else {
-                    q_pos += n;
+                    let Some(next_q) = q_pos.checked_add(n).filter(|&p| p <= qs.seq.len()) else {
+                        return score_from_counts_only(rec, threshold_bits);
+                    };
+                    q_pos = next_q;
                 }
                 if matches!(op, CigarOp::Ins(_)) && n > 0 {
                     #[allow(clippy::cast_precision_loss)]
@@ -278,7 +284,10 @@ fn score_paf_record(
                 }
             }
             CigarOp::Del(n) | CigarOp::RefSkip(n) => {
-                t_pos += n;
+                let Some(next_t) = t_pos.checked_add(n).filter(|&p| p <= ts.seq.len()) else {
+                    return score_from_counts_only(rec, threshold_bits);
+                };
+                t_pos = next_t;
                 if matches!(op, CigarOp::Del(_)) && n > 0 {
                     #[allow(clippy::cast_precision_loss)]
                     {
@@ -350,12 +359,17 @@ fn net_top_k_records(
 fn run_filter(cfg: &FilterConfig) -> Result<()> {
     let t0 = Instant::now();
     let q_map = cfg.query_fa.as_deref().map(load_fasta_map).transpose()?;
+    let same_fa = cfg.target_fa.is_some() && cfg.target_fa.as_deref() == cfg.query_fa.as_deref();
     let t_map = match cfg.target_fa.as_deref() {
-        Some(path) if cfg.query_fa.as_deref() == Some(path) => None,
+        Some(_) if same_fa => None,
         Some(path) => Some(load_fasta_map(path)?),
         None => None,
     };
-    let t_ref = t_map.as_ref().or(q_map.as_ref());
+    let t_ref = if same_fa {
+        q_map.as_ref()
+    } else {
+        t_map.as_ref()
+    };
 
     let mut out = open_text_writer(cfg.out_path.as_deref())?;
     let mut total = 0usize;
@@ -583,5 +597,21 @@ mod tests {
         let crc_floor =
             calibrate_null_crc_from_seqs(&bio_x, &bio_y, 15, 0.07, 10.0, &HmmParams::default());
         assert!(crc_floor >= 10.0);
+    }
+
+    #[test]
+    fn counts_only_does_not_treat_match_op_as_100pct_exact() {
+        let paf_m =
+            PafRecord::parse_line("q\t100\t0\t100\t+\tt\t100\t0\t100\t50\t100\t60\tcg:Z:100M")
+                .expect("paf");
+        let paf_eq =
+            PafRecord::parse_line("q\t100\t0\t100\t+\tt\t100\t0\t100\t100\t100\t60\tcg:Z:100=")
+                .expect("paf");
+        let res_m = score_from_counts_only(&paf_m, 10.0);
+        let res_eq = score_from_counts_only(&paf_eq, 10.0);
+        assert!(
+            res_m.mdl_bits < res_eq.mdl_bits,
+            "100M with 50/100 matches must score strictly lower than 100="
+        );
     }
 }

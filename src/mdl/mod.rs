@@ -402,29 +402,7 @@ fn schedule_and_run_extension(ctx: &mut AlignCtx<'_>) -> Result<ExtensionOutput,
     let crc_min_bits = if dp_jobs.is_empty() {
         ctx.effective_min_bits
     } else {
-        let mut gc_cnt = 0usize;
-        let mut acgt_cnt = 0usize;
-        for &b in ctx
-            .seq_x
-            .iter()
-            .take(4096)
-            .chain(ctx.seq_y.iter().take(4096))
-        {
-            match b.to_ascii_uppercase() {
-                b'G' | b'C' => {
-                    gc_cnt += 1;
-                    acgt_cnt += 1;
-                }
-                b'A' | b'T' => acgt_cnt += 1,
-                _ => {}
-            }
-        }
-        #[allow(clippy::cast_precision_loss)]
-        let observed_gc = if acgt_cnt > 0 {
-            gc_cnt as f64 / acgt_cnt as f64
-        } else {
-            0.5
-        };
+        let observed_gc = dp::estimate_sampled_gc(ctx.seq_x, ctx.seq_y);
         let gc_crc = dp::calibrate_null_crc_for_gc(
             observed_gc,
             15,
@@ -471,7 +449,7 @@ fn execute_dp_and_xdrop(
     xdrop_jobs: &[(bool, usize, usize, usize, usize, bool)],
     runs_vec: &mut Vec<AlignedRun>,
 ) -> usize {
-    type XDropResult = (bool, bool, Vec<(usize, usize)>);
+    type XDropResult = (bool, Vec<(usize, usize)>);
     let pv_len = ctx.seq_y.len();
     let dp_results: Vec<(bool, usize, usize, GapResult)> = dp_jobs
         .par_iter()
@@ -526,12 +504,12 @@ fn execute_dp_and_xdrop(
                     hmm_params,
                     scratch,
                 );
-                (is_rc, rev, pairs)
+                (is_rc, pairs)
             },
         )
         .collect();
 
-    for (is_rc, _rev, pairs) in xdrop_results {
+    for (is_rc, pairs) in xdrop_results {
         scratch_pairs.clear();
         for (px, py) in pairs {
             let y_orig = if is_rc { pv_len - 1 - py } else { py };

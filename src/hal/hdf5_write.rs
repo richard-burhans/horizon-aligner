@@ -599,12 +599,11 @@ fn normalize_hal_segments_for_export(hal: &HalAlignment) -> NormalizedSegments {
                     .iter()
                     .map(|&old_i| {
                         let mut seg = g.top_segments[old_i].clone();
-                        seg.parent_bottom_idx = seg.parent_bottom_idx.map(|pb| {
+                        seg.parent_bottom_idx = seg.parent_bottom_idx.and_then(|pb| {
                             g.parent
                                 .and_then(|pg| bot_invs.get(pg))
                                 .and_then(|inv| inv.get(pb))
                                 .copied()
-                                .unwrap_or(pb)
                         });
                         seg.next_paralog = seg
                             .next_paralog
@@ -625,14 +624,13 @@ fn normalize_hal_segments_for_export(hal: &HalAlignment) -> NormalizedSegments {
                         let mut seg = g.bottom_segments[old_i].clone();
                         for (c_idx, link) in seg.child_tops.iter_mut().enumerate() {
                             if let Some((old_t, rev)) = *link {
-                                let new_t = g
+                                *link = g
                                     .children
                                     .get(c_idx)
                                     .and_then(|&cg| top_invs.get(cg))
                                     .and_then(|inv| inv.get(old_t))
                                     .copied()
-                                    .unwrap_or(old_t);
-                                *link = Some((new_t, rev));
+                                    .map(|new_t| (new_t, rev));
                             }
                         }
                         seg

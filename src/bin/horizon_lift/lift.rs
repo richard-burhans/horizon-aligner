@@ -329,6 +329,28 @@ fn record_lift_path(
     }
 }
 
+fn walk_chrom_keys(w: &horizon_aligner::gfa::GfaWalk) -> (String, String, Option<String>) {
+    let full = format!("{}.{}", w.sample, w.seq_id);
+    let hap_full = if w.haplotype == "0" || w.haplotype.is_empty() {
+        None
+    } else {
+        Some(format!("{}#{}.{}", w.sample, w.haplotype, w.seq_id))
+    };
+    (full, w.seq_id.clone(), hap_full)
+}
+
+fn walk_matches_chroms(
+    seq_id: &str,
+    full: &str,
+    hap_full: Option<&str>,
+    filter: &HashSet<String>,
+) -> bool {
+    filter.is_empty()
+        || filter.contains(seq_id)
+        || filter.contains(full)
+        || hap_full.is_some_and(|h| filter.contains(h))
+}
+
 fn record_lift_walk(
     w: &horizon_aligner::gfa::GfaWalk,
     cfg: &LiftConfig<'_>,
@@ -336,55 +358,38 @@ fn record_lift_walk(
     source_paths: &mut Vec<PathRecord>,
     target_paths: &mut Vec<PathRecord>,
 ) {
-    if horizon_aligner::matches_sample_prefix(&w.sample, cfg.from_sample) {
-        let full = format!("{}.{}", w.sample, w.seq_id);
-        let hap_full = if w.haplotype == "0" || w.haplotype.is_empty() {
-            None
-        } else {
-            Some(format!("{}#{}.{}", w.sample, w.haplotype, w.seq_id))
-        };
-        if wanted_chroms.is_empty()
-            || wanted_chroms.contains(&w.seq_id)
-            || wanted_chroms.contains(&full)
-            || hap_full.as_ref().is_some_and(|h| wanted_chroms.contains(h))
-        {
-            let steps = parse_walk_steps(&w.walk)
-                .into_iter()
-                .map(|(s, fwd)| (s.to_string(), fwd))
-                .collect();
-            let mut match_keys = vec![w.seq_id.clone(), full.clone()];
-            if let Some(ref hf) = hap_full {
-                match_keys.push(hf.clone());
-            }
-            source_paths.push(PathRecord {
-                display_chrom: hap_full.unwrap_or(full),
-                match_keys,
-                start_offset: w.start,
-                steps,
-            });
+    let (full, seq_id, hap_full) = walk_chrom_keys(w);
+    if horizon_aligner::matches_sample_prefix(&w.sample, cfg.from_sample)
+        && walk_matches_chroms(&seq_id, &full, hap_full.as_deref(), wanted_chroms)
+    {
+        let steps = parse_walk_steps(&w.walk)
+            .into_iter()
+            .map(|(s, fwd)| (s.to_string(), fwd))
+            .collect();
+        let mut match_keys = vec![seq_id.clone(), full.clone()];
+        if let Some(ref hf) = hap_full {
+            match_keys.push(hf.clone());
         }
+        source_paths.push(PathRecord {
+            display_chrom: hap_full.clone().unwrap_or_else(|| full.clone()),
+            match_keys,
+            start_offset: w.start,
+            steps,
+        });
     }
-    if horizon_aligner::matches_sample_prefix(&w.sample, cfg.to_sample) {
-        let disp = if w.haplotype == "0" || w.haplotype.is_empty() {
-            format!("{}.{}", w.sample, w.seq_id)
-        } else {
-            format!("{}#{}.{}", w.sample, w.haplotype, w.seq_id)
-        };
-        if cfg.to_chroms.is_empty()
-            || cfg.to_chroms.contains(&w.seq_id)
-            || cfg.to_chroms.contains(&disp)
-        {
-            let steps = parse_walk_steps(&w.walk)
-                .into_iter()
-                .map(|(s, fwd)| (s.to_string(), fwd))
-                .collect();
-            target_paths.push(PathRecord {
-                display_chrom: disp,
-                match_keys: Vec::new(),
-                start_offset: w.start,
-                steps,
-            });
-        }
+    if horizon_aligner::matches_sample_prefix(&w.sample, cfg.to_sample)
+        && walk_matches_chroms(&seq_id, &full, hap_full.as_deref(), cfg.to_chroms)
+    {
+        let steps = parse_walk_steps(&w.walk)
+            .into_iter()
+            .map(|(s, fwd)| (s.to_string(), fwd))
+            .collect();
+        target_paths.push(PathRecord {
+            display_chrom: hap_full.unwrap_or(full),
+            match_keys: Vec::new(),
+            start_offset: w.start,
+            steps,
+        });
     }
 }
 

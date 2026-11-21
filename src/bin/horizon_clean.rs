@@ -3,7 +3,7 @@
 use anyhow::{Context, Result, bail};
 use horizon_aligner::bocpd::{BocpdScratch, bocpd_gc_profile_into};
 use horizon_aligner::gfa::{
-    GfaLink, GfaRecord, SpoolableGfaInput, open_output_writer, parse_path_steps, parse_walk_steps,
+    GfaRecord, SpoolableGfaInput, open_output_writer, parse_path_steps, parse_walk_steps,
     stream_gfa_records,
 };
 use horizon_aligner::seeding::revcomp;
@@ -170,16 +170,34 @@ fn parse_cigar_overlap_bp(cigar: &str) -> usize {
 struct CleanPass1 {
     seg_ids: HashMap<String, u32>,
     seg_flanks: HashMap<u32, SegFlank>,
-    links: Vec<GfaLink>,
+    edges: Vec<DirectedEdge>,
     walk_support: HashMap<DirectedEdge, usize>,
     link_overlaps: HashMap<DirectedEdge, usize>,
+}
+
+fn record_walk_support(
+    steps: &[(&str, bool)],
+    seg_ids: &mut HashMap<String, u32>,
+    next_seg_id: &mut u32,
+    walk_support: &mut HashMap<DirectedEdge, usize>,
+) {
+    for win in steps.windows(2) {
+        let u = intern_seg(seg_ids, next_seg_id, win[0].0);
+        let v = intern_seg(seg_ids, next_seg_id, win[1].0);
+        let e = DirectedEdge::new(u, win[0].1, v, win[1].1);
+        let rev = e.rev();
+        *walk_support.entry(e).or_insert(0) += 1;
+        if rev != e {
+            *walk_support.entry(rev).or_insert(0) += 1;
+        }
+    }
 }
 
 fn collect_clean_pass1(gfa_path: &str, flank_bp: usize) -> Result<CleanPass1> {
     let mut seg_ids = HashMap::<String, u32>::new();
     let mut next_seg_id = 0_u32;
     let mut seg_flanks = HashMap::<u32, SegFlank>::new();
-    let mut links = Vec::<GfaLink>::new();
+    let mut edges = Vec::<DirectedEdge>::new();
     let mut walk_support = HashMap::<DirectedEdge, usize>::new();
     let mut link_overlaps = HashMap::<DirectedEdge, usize>::new();
 
@@ -211,39 +229,21 @@ fn collect_clean_pass1(gfa_path: &str, flank_bp: usize) -> Result<CleanPass1> {
             GfaRecord::Link(l) => {
                 let u = intern_seg(&mut seg_ids, &mut next_seg_id, &l.from);
                 let v = intern_seg(&mut seg_ids, &mut next_seg_id, &l.to);
+                let e = DirectedEdge::new(u, l.from_orient != b'-', v, l.to_orient != b'-');
                 let ov = parse_cigar_overlap_bp(&l.overlap);
                 if ov > 0 {
-                    let e = DirectedEdge::new(u, l.from_orient != b'-', v, l.to_orient != b'-');
                     link_overlaps.entry(e).or_insert(ov);
                     link_overlaps.entry(e.rev()).or_insert(ov);
                 }
-                links.push(l);
+                edges.push(e);
             }
             GfaRecord::Path(p) => {
                 let steps = parse_path_steps(&p.segment_names);
-                for win in steps.windows(2) {
-                    let u = intern_seg(&mut seg_ids, &mut next_seg_id, win[0].0);
-                    let v = intern_seg(&mut seg_ids, &mut next_seg_id, win[1].0);
-                    let e = DirectedEdge::new(u, win[0].1, v, win[1].1);
-                    let rev = e.rev();
-                    *walk_support.entry(e).or_insert(0) += 1;
-                    if rev != e {
-                        *walk_support.entry(rev).or_insert(0) += 1;
-                    }
-                }
+                record_walk_support(&steps, &mut seg_ids, &mut next_seg_id, &mut walk_support);
             }
             GfaRecord::Walk(w) => {
                 let steps = parse_walk_steps(&w.walk);
-                for win in steps.windows(2) {
-                    let u = intern_seg(&mut seg_ids, &mut next_seg_id, win[0].0);
-                    let v = intern_seg(&mut seg_ids, &mut next_seg_id, win[1].0);
-                    let e = DirectedEdge::new(u, win[0].1, v, win[1].1);
-                    let rev = e.rev();
-                    *walk_support.entry(e).or_insert(0) += 1;
-                    if rev != e {
-                        *walk_support.entry(rev).or_insert(0) += 1;
-                    }
-                }
+                record_walk_support(&steps, &mut seg_ids, &mut next_seg_id, &mut walk_support);
             }
         }
         Ok(ControlFlow::Continue(()))
@@ -252,7 +252,7 @@ fn collect_clean_pass1(gfa_path: &str, flank_bp: usize) -> Result<CleanPass1> {
     Ok(CleanPass1 {
         seg_ids,
         seg_flanks,
-        links,
+        edges,
         walk_support,
         link_overlaps,
     })
@@ -270,10 +270,7 @@ fn score_links_symmetrically(
     let mut concat = Vec::new();
     let mut gc_prof = Vec::new();
 
-    for l in &pass1.links {
-        let u = pass1.seg_ids[&l.from];
-        let v = pass1.seg_ids[&l.to];
-        let edge = DirectedEdge::new(u, l.from_orient != b'-', v, l.to_orient != b'-');
+    for &edge in &pass1.edges {
         let rev_edge = edge.rev();
         let canon = if (edge.from, edge.from_fwd, edge.to, edge.to_fwd)
             <= (
@@ -526,7 +523,7 @@ fn clean_gfa<W: Write>(gfa_path: &str, cfg: &CleanConfig, out: &mut W) -> Result
     })?;
 
     Ok(CleanStats {
-        total_links: pass1.links.len(),
+        total_links: pass1.edges.len(),
         kept_links,
         severed_links,
         emitted_bubbles,

@@ -20,6 +20,9 @@ pub(crate) fn parse_features(path: &Path, is_gff: bool) -> Result<Vec<InputFeatu
     for (idx, line_res) in reader.lines().enumerate() {
         let line = line_res?;
         let trimmed = line.trim();
+        if is_gff && trimmed == "##FASTA" {
+            break;
+        }
         if trimmed.is_empty()
             || trimmed.starts_with('#')
             || trimmed == "track"
@@ -177,5 +180,17 @@ mod tests {
         let feats = parse_features(&p_attr, true).unwrap();
         let _ = std::fs::remove_file(&p_attr);
         assert_eq!(feats[0].name, "bar");
+    }
+
+    #[test]
+    fn parse_gff3_stops_at_fasta_directive() {
+        let p = write_temp(
+            "horizon_lift_gff_fasta",
+            "##gff-version 3\nchr1\t.\tgene\t1\t10\t.\t+\t.\tID=g1\n##FASTA\n>chr1\nACGTACGTAC\n",
+        );
+        let feats = parse_features(&p, true).unwrap();
+        let _ = std::fs::remove_file(&p);
+        assert_eq!(feats.len(), 1);
+        assert_eq!(feats[0].name, "g1");
     }
 }

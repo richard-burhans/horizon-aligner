@@ -216,7 +216,7 @@ fn main() -> Result<()> {
     };
     let t0 = Instant::now();
 
-    let indexed: Vec<IndexedSpecies> = cli
+    let mut indexed: Vec<IndexedSpecies> = cli
         .specs
         .par_iter()
         .map(|(sp, path)| {
@@ -235,82 +235,94 @@ fn main() -> Result<()> {
         .collect::<Result<Vec<_>>>()?;
 
     let hinge_idx = select_central_hinge(&indexed);
-    let (hinge_sp, hinge_contigs, hinge_indices) = &indexed[hinge_idx];
-    let cfg = AlignConfig {
-        skip_softmasked: cli.respect_softmask,
-        ..AlignConfig::default()
-    };
-
     let mut pairwise_mafs: Vec<(String, String)> = Vec::new();
-    let mut hal_queries: Vec<(String, ContigList)> = Vec::new();
+    let mut hal_query_indices: Vec<usize> = Vec::new();
     let mut hal_all_blocks: Vec<(usize, usize, usize, usize, usize, usize, bool)> = Vec::new();
     let mut sp_to_pw_idx: HashMap<usize, usize> = HashMap::new();
 
-    for (i, (qry_sp, qry_contigs, qry_indices)) in indexed.iter().enumerate() {
-        if i == hinge_idx {
-            continue;
-        }
-        let (maf_buf, hblocks) = align_species_pair(
-            hinge_contigs,
-            hinge_indices,
-            qry_contigs,
-            qry_indices,
-            &cfg,
-            cli.top_k,
-        )?;
-        if cli.write_hal {
-            let q_idx = hal_queries.len();
-            hal_queries.push((qry_sp.clone(), qry_contigs.clone()));
-            for (xi, yi, rs, qs, len, rev) in hblocks {
-                hal_all_blocks.push((q_idx, xi, yi, rs, qs, len, rev));
+    {
+        let (_, hinge_contigs, hinge_indices) = &indexed[hinge_idx];
+        let cfg = AlignConfig {
+            skip_softmasked: cli.respect_softmask,
+            ..AlignConfig::default()
+        };
+
+        for (i, (qry_sp, qry_contigs, qry_indices)) in indexed.iter().enumerate() {
+            if i == hinge_idx {
+                continue;
             }
+            let (maf_buf, hblocks) = align_species_pair(
+                hinge_contigs,
+                hinge_indices,
+                qry_contigs,
+                qry_indices,
+                &cfg,
+                cli.top_k,
+            )?;
+            if cli.write_hal {
+                let q_idx = hal_query_indices.len();
+                hal_query_indices.push(i);
+                for (xi, yi, rs, qs, len, rev) in hblocks {
+                    hal_all_blocks.push((q_idx, xi, yi, rs, qs, len, rev));
+                }
+            }
+            sp_to_pw_idx.insert(i, pairwise_mafs.len());
+            pairwise_mafs.push((qry_sp.clone(), maf_buf));
         }
-        sp_to_pw_idx.insert(i, pairwise_mafs.len());
-        pairwise_mafs.push((qry_sp.clone(), maf_buf));
+
+        if cli.progressive && indexed.len() >= 3 {
+            run_progressive_sister_rescue(
+                &indexed,
+                hinge_idx,
+                &sp_to_pw_idx,
+                &mut pairwise_mafs,
+                &cfg,
+                cli.top_k,
+            )?;
+            run_ancestral_consensus_rescue(
+                &indexed,
+                hinge_idx,
+                &sp_to_pw_idx,
+                &mut pairwise_mafs,
+                &cfg,
+                cli.top_k,
+                cli.respect_softmask,
+            )?;
+        }
     }
 
-    if cli.progressive && indexed.len() >= 3 {
-        run_progressive_sister_rescue(
-            &indexed,
-            hinge_idx,
-            &sp_to_pw_idx,
-            &mut pairwise_mafs,
-            &cfg,
-            cli.top_k,
-        )?;
-        run_ancestral_consensus_rescue(
-            &indexed,
-            hinge_idx,
-            &sp_to_pw_idx,
-            &mut pairwise_mafs,
-            &cfg,
-            cli.top_k,
-            cli.respect_softmask,
-        )?;
-    }
-
+    let hinge_sp = indexed[hinge_idx].0.clone();
     let (merged_maf, merged_gfa, total_blocks, multi_blocks) =
-        merge_pairwise_mafs(hinge_sp, &pairwise_mafs, 1000);
-    let merged_maf = prefix_hinge_species_in_maf(hinge_sp, &merged_maf);
+        merge_pairwise_mafs(&hinge_sp, &pairwise_mafs, 1000);
+    let merged_maf = prefix_hinge_species_in_maf(&hinge_sp, &merged_maf);
     let out_prefix = &cli.out_prefix;
     fs::write(format!("{out_prefix}.maf"), merged_maf)
         .with_context(|| format!("writing {out_prefix}.maf"))?;
     fs::write(format!("{out_prefix}.gfa"), merged_gfa)
         .with_context(|| format!("writing {out_prefix}.gfa"))?;
     let (hal_tree_desc, hal_bottom_segs) = if cli.write_hal {
+        let hinge_contigs = std::mem::take(&mut indexed[hinge_idx].1);
+        let hal_queries: Vec<(String, ContigList)> = hal_query_indices
+            .into_iter()
+            .map(|qi| {
+                let sp = indexed[qi].0.clone();
+                let contigs = std::mem::take(&mut indexed[qi].1);
+                (sp, contigs)
+            })
+            .collect();
         let hal = if cli.progressive && hal_queries.len() >= 2 {
             let prog_blocks =
-                extract_hal_blocks_from_pairwise_mafs(hinge_contigs, &hal_queries, &pairwise_mafs);
+                extract_hal_blocks_from_pairwise_mafs(&hinge_contigs, &hal_queries, &pairwise_mafs);
             HalAlignment::from_multi_contig_progressive_blocks(
-                hinge_sp,
-                hinge_contigs,
+                &hinge_sp,
+                &hinge_contigs,
                 &hal_queries,
                 &prog_blocks,
             )
         } else {
             HalAlignment::from_multi_contig_star_blocks(
-                hinge_sp,
-                hinge_contigs,
+                &hinge_sp,
+                &hinge_contigs,
                 &hal_queries,
                 &hal_all_blocks,
             )

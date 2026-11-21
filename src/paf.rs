@@ -154,6 +154,10 @@ impl PafRecord {
         let qlen = next_usize(&mut fields, "qlen")?;
         let qstart = next_usize(&mut fields, "qstart")?;
         let qend = next_usize(&mut fields, "qend")?;
+        anyhow::ensure!(
+            qstart <= qend && qend <= qlen,
+            "invalid PAF query coordinates {qstart}..{qend} for qlen {qlen}"
+        );
         let strand_str = fields.next().context("missing PAF field strand")?;
         let strand = match strand_str {
             "+" => '+',
@@ -164,6 +168,10 @@ impl PafRecord {
         let tlen = next_usize(&mut fields, "tlen")?;
         let tstart = next_usize(&mut fields, "tstart")?;
         let tend = next_usize(&mut fields, "tend")?;
+        anyhow::ensure!(
+            tstart <= tend && tend <= tlen,
+            "invalid PAF target coordinates {tstart}..{tend} for tlen {tlen}"
+        );
         let matches = next_usize(&mut fields, "matches")?;
         let aln_len = next_usize(&mut fields, "aln_len")?;
         let mapq_str = fields.next().context("missing PAF field mapq")?;
@@ -239,6 +247,8 @@ impl PafRecord {
     }
 }
 
+const MAX_PAF_LINE_BYTES: usize = 256 * 1024 * 1024;
+
 fn stream_paf_reader<R: BufRead, F>(mut reader: R, mut on_record: F) -> Result<()>
 where
     F: FnMut(PafRecord) -> Result<ControlFlow<()>>,
@@ -246,8 +256,13 @@ where
     let mut line = String::new();
     loop {
         line.clear();
-        if reader.read_line(&mut line)? == 0 {
+        let n = std::io::Read::take(&mut reader, (MAX_PAF_LINE_BYTES + 1) as u64)
+            .read_line(&mut line)?;
+        if n == 0 {
             break;
+        }
+        if n > MAX_PAF_LINE_BYTES {
+            bail!("PAF line exceeds {MAX_PAF_LINE_BYTES} bytes");
         }
         let trimmed = line.trim_end_matches(&['\r', '\n'][..]);
         if trimmed.is_empty() || trimmed.starts_with('#') {
@@ -303,5 +318,9 @@ mod tests {
             ]
         );
         assert_eq!(rec.format_line(&[]), line);
+
+        assert!(PafRecord::parse_line("q\t100\t60\t50\t+\tt\t100\t0\t10\t10\t10\t60").is_err());
+        assert!(PafRecord::parse_line("q\t100\t0\t101\t+\tt\t100\t0\t10\t10\t10\t60").is_err());
+        assert!(PafRecord::parse_line("q\t100\t0\t10\t+\tt\t100\t0\t101\t10\t10\t60").is_err());
     }
 }
