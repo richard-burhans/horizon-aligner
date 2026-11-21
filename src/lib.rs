@@ -6,6 +6,7 @@ pub mod egraph;
 pub mod formats;
 pub mod gfa;
 pub mod hal;
+pub mod io_util;
 pub mod mdl;
 pub mod merge;
 pub mod netting;

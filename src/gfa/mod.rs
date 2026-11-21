@@ -3,10 +3,10 @@
 //! Provides a streaming reader capable of parsing multi-gigabyte (e.g. 12 GB HPRC)
 //! pangenome graphs record-by-record without loading the full graph topology into RAM.
 
+use crate::io_util::{open_text_reader, open_text_writer};
 use anyhow::Result;
-use flate2::read::MultiGzDecoder;
-use std::fs::{File, OpenOptions};
-use std::io::{self, BufRead, BufReader, Write};
+use std::fs::OpenOptions;
+use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -78,16 +78,12 @@ impl Drop for SpoolableGfaInput {
     }
 }
 
-/// Open a buffered writer to `out_path`, or to standard output when `out_path` is `None`.
+/// Open a buffered writer to `out_path` (plain, `.gz`, or `.zst`), or to standard output when `out_path` is `None`.
 ///
 /// # Errors
 /// Returns an error if `out_path` cannot be created.
 pub fn open_output_writer(out_path: Option<&str>) -> io::Result<io::BufWriter<Box<dyn io::Write>>> {
-    let sink: Box<dyn io::Write> = match out_path {
-        Some(path) => Box::new(File::create(path)?),
-        None => Box::new(io::stdout().lock()),
-    };
-    Ok(io::BufWriter::new(sink))
+    open_text_writer(out_path).map_err(io::Error::other)
 }
 
 /// Represents a GFA Segment (S line)
@@ -115,22 +111,7 @@ impl GfaSegment {
 }
 
 fn open_reader_path(path: &Path) -> Result<Box<dyn BufRead>> {
-    if path == Path::new("-") {
-        return Ok(Box::new(BufReader::new(io::stdin())));
-    }
-    let file = File::open(path)?;
-    let is_gz = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("gz") || e.eq_ignore_ascii_case("bgz"));
-    if is_gz {
-        Ok(Box::new(BufReader::with_capacity(
-            256 * 1024,
-            MultiGzDecoder::new(file),
-        )))
-    } else {
-        Ok(Box::new(BufReader::with_capacity(256 * 1024, file)))
-    }
+    open_text_reader(path)
 }
 
 /// Represents a GFA Link (L line)
@@ -413,6 +394,7 @@ where
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use std::fs::File;
     use flate2::Compression;
     use flate2::write::GzEncoder;
     use std::io::{Cursor, Write};

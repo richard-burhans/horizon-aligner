@@ -165,57 +165,265 @@ fn count_ops(expr: &Expr) -> (usize, usize) {
     }
 }
 
+/// Compact `u32`-interned biedged pangenome graph in CSR format with 2-edge-connected
+/// snarl/bubble boundary annotations.
+struct PackedGraph {
+    seg_to_id: HashMap<String, u32>,
+    id_to_seg: Vec<String>,
+    seg_lens: Vec<usize>,
+    is_anchor: Vec<bool>,
+    num_bridges: usize,
+    num_components: usize,
+}
+
+impl PackedGraph {
+    fn get_id(&self, name: &str) -> Option<u32> {
+        self.seg_to_id.get(name).copied()
+    }
+
+    fn intern(&mut self, name: &str, len: usize) -> u32 {
+        if let Some(&id) = self.seg_to_id.get(name) {
+            if len > 0 && self.seg_lens[id as usize] == 0 {
+                self.seg_lens[id as usize] = len;
+            }
+            return id;
+        }
+        let id = u32::try_from(self.id_to_seg.len()).expect("segment count fits u32");
+        let owned = name.to_owned();
+        self.seg_to_id.insert(owned.clone(), id);
+        self.id_to_seg.push(owned);
+        self.seg_lens.push(len);
+        id
+    }
+}
+
+#[inline]
+const fn exit_side(seg: u32, fwd: bool) -> u32 {
+    2 * seg + if fwd { 1 } else { 0 }
+}
+
+#[inline]
+const fn entry_side(seg: u32, fwd: bool) -> u32 {
+    2 * seg + if fwd { 0 } else { 1 }
+}
+
+fn tarjan_bridges(
+    num_sides: usize,
+    total_edges: usize,
+    head: &[usize],
+    csr_to: &[u32],
+    csr_eid: &[usize],
+) -> (Vec<bool>, usize) {
+    let mut tin = vec![0u32; num_sides];
+    let mut low = vec![0u32; num_sides];
+    let mut is_bridge = vec![false; total_edges];
+    let mut timer = 0u32;
+    let mut num_bridges = 0usize;
+    let mut stack: Vec<(usize, usize, usize)> = Vec::new();
+
+    for root in 0..num_sides {
+        if tin[root] != 0 {
+            continue;
+        }
+        timer += 1;
+        tin[root] = timer;
+        low[root] = timer;
+        stack.push((root, usize::MAX, head[root]));
+
+        while let Some((u, peid, idx)) = stack.last_mut() {
+            let u_node = *u;
+            let parent_eid = *peid;
+            let end = head[u_node + 1];
+            if *idx < end {
+                let cur = *idx;
+                *idx += 1;
+                let v = csr_to[cur] as usize;
+                let eid = csr_eid[cur];
+                if eid == parent_eid {
+                    continue;
+                }
+                if tin[v] != 0 {
+                    low[u_node] = low[u_node].min(tin[v]);
+                } else {
+                    timer += 1;
+                    tin[v] = timer;
+                    low[v] = timer;
+                    stack.push((v, eid, head[v]));
+                }
+            } else {
+                let finished_u = u_node;
+                let finished_peid = parent_eid;
+                stack.pop();
+                if let Some(&(p, _, _)) = stack.last() {
+                    low[p] = low[p].min(low[finished_u]);
+                    if low[finished_u] > tin[p] && !is_bridge[finished_peid] {
+                        is_bridge[finished_peid] = true;
+                        num_bridges += 1;
+                    }
+                }
+            }
+        }
+    }
+    (is_bridge, num_bridges)
+}
+
+/// Build CSR adjacency for the biedged graph (black segment edges + gray link edges)
+/// and run iterative Tarjan bridge-finding to identify snarl boundary anchors.
+fn compute_biedged_snarls(
+    num_segs: usize,
+    seg_lens: &[usize],
+    seg_visits: &[u32],
+    gray_edges: &[(u32, u32)],
+    min_anchor_bp: usize,
+) -> (Vec<bool>, usize, usize) {
+    let num_sides = num_segs * 2;
+    if num_sides == 0 {
+        return (Vec::new(), 0, 0);
+    }
+
+    let total_edges = num_segs + gray_edges.len();
+    let mut deg = vec![1u32; num_sides];
+    for &(u, v) in gray_edges {
+        deg[u as usize] += 1;
+        deg[v as usize] += 1;
+    }
+
+    let mut head = vec![0usize; num_sides + 1];
+    for s in 0..num_sides {
+        head[s + 1] = head[s] + deg[s] as usize;
+    }
+    let mut csr_to = vec![0u32; head[num_sides]];
+    let mut csr_eid = vec![0usize; head[num_sides]];
+    let mut cursor = head[..num_sides].to_vec();
+
+    for v in 0..num_segs {
+        let s0 = 2 * v;
+        let s1 = s0 + 1;
+        let p0 = cursor[s0];
+        cursor[s0] += 1;
+        csr_to[p0] = u32::try_from(s1).expect("side fits u32");
+        csr_eid[p0] = v;
+
+        let p1 = cursor[s1];
+        cursor[s1] += 1;
+        csr_to[p1] = u32::try_from(s0).expect("side fits u32");
+        csr_eid[p1] = v;
+    }
+
+    for (idx, &(u, v)) in gray_edges.iter().enumerate() {
+        let eid = num_segs + idx;
+        let pu = cursor[u as usize];
+        cursor[u as usize] += 1;
+        csr_to[pu] = v;
+        csr_eid[pu] = eid;
+
+        let pv = cursor[v as usize];
+        cursor[v as usize] += 1;
+        csr_to[pv] = u;
+        csr_eid[pv] = eid;
+    }
+
+    let (is_bridge, num_bridges) =
+        tarjan_bridges(num_sides, total_edges, &head, &csr_to, &csr_eid);
+
+    // Count 2-edge-connected components by BFS ignoring bridge edges.
+    let mut comp = vec![u32::MAX; num_sides];
+    let mut num_components = 0usize;
+    let mut queue = Vec::new();
+    for start in 0..num_sides {
+        if comp[start] != u32::MAX {
+            continue;
+        }
+        let cid = u32::try_from(num_components).expect("component fits u32");
+        num_components += 1;
+        comp[start] = cid;
+        queue.push(start);
+        let mut q_head = 0usize;
+        while q_head < queue.len() {
+            let u = queue[q_head];
+            q_head += 1;
+            for cur in head[u]..head[u + 1] {
+                let eid = csr_eid[cur];
+                if is_bridge[eid] {
+                    continue;
+                }
+                let v = csr_to[cur] as usize;
+                if comp[v] == u32::MAX {
+                    comp[v] = cid;
+                    queue.push(v);
+                }
+            }
+        }
+        queue.clear();
+    }
+
+    // A segment is a snarl boundary anchor if:
+    // - its black edge is a bridge AND (shared by >=2 paths, or >= min_anchor_bp, or a graph tip), OR
+    // - it is shared by >=2 paths AND >= min_anchor_bp.
+    let mut is_anchor = vec![false; num_segs];
+    for v in 0..num_segs {
+        let black_bridge = is_bridge[v];
+        let is_tip = deg[2 * v] == 1 || deg[2 * v + 1] == 1;
+        let multi_visit = seg_visits[v] >= 2;
+        let long_seg = seg_lens[v] >= min_anchor_bp;
+        if (black_bridge && (multi_visit || long_seg || is_tip)) || (multi_visit && long_seg) {
+            is_anchor[v] = true;
+        }
+    }
+
+    (is_anchor, num_bridges, num_components)
+}
+
 fn resolve_window(
-    steps: &[(&str, bool)],
-    seg_lens: &HashMap<String, usize>,
+    steps: &[(u32, bool)],
+    graph: &PackedGraph,
     divergence: f64,
     collapse_dups: bool,
     stats: &mut ResolveStats,
-) -> (Vec<(String, bool)>, Option<String>) {
+) -> (Vec<(u32, bool)>, Option<String>) {
     if steps.len() <= 1 {
-        return (
-            steps.iter().map(|&(s, f)| (s.to_string(), f)).collect(),
-            None,
-        );
+        return (steps.to_vec(), None);
     }
 
     stats.windows_evaluated += 1;
     let blocks: Vec<(&str, i8)> = steps
         .iter()
-        .map(|&(s, f)| (s, if f { 1 } else { -1 }))
+        .map(|&(id, f)| (graph.id_to_seg[id as usize].as_str(), if f { 1 } else { -1 }))
         .collect();
 
     let mut eg = EGraph::new();
     let Some(root) = build_seq_expr(&mut eg, &blocks) else {
-        return (
-            steps.iter().map(|&(s, f)| (s.to_string(), f)).collect(),
-            None,
-        );
+        return (steps.to_vec(), None);
     };
 
     let mut model = MdlCostModel::from_egraph(&eg);
-    for &(seg, _) in steps {
-        let len_bp = seg_lens.get(seg).copied().unwrap_or(100);
+    for &(id, _) in steps {
+        let seg_name = &graph.id_to_seg[id as usize];
+        let len_bp = graph.seg_lens[id as usize].max(100);
         model
             .block_stats
-            .entry(seg.to_string())
+            .entry(seg_name.clone())
             .or_insert((len_bp, divergence));
     }
 
     let raw_cost = extract_min_mdl_cost(&eg, root, &model).map_or(0.0, |(c, _)| c);
     saturate_synteny(&mut eg, 6, 4096);
     let Some((opt_cost, expr)) = extract_min_mdl_cost(&eg, root, &model) else {
-        return (
-            steps.iter().map(|&(s, f)| (s.to_string(), f)).collect(),
-            None,
-        );
+        return (steps.to_vec(), None);
     };
 
     let (dups, _) = count_ops(&expr);
     stats.dups_detected += dups;
 
-    let mut resolved = Vec::with_capacity(steps.len());
-    flatten_expr(&expr, false, collapse_dups, &mut resolved);
+    let mut resolved_names = Vec::with_capacity(steps.len());
+    flatten_expr(&expr, false, collapse_dups, &mut resolved_names);
+    let resolved: Vec<(u32, bool)> = resolved_names
+        .iter()
+        .filter_map(|(name, f)| graph.get_id(name).map(|id| (id, *f)))
+        .collect();
+    if resolved.len() != resolved_names.len() {
+        return (steps.to_vec(), None);
+    }
 
     let invs_before = steps.iter().filter(|&&(_, f)| !f).count();
     let invs_after_uncollapsed = if collapse_dups {
@@ -223,17 +431,13 @@ fn resolve_window(
         flatten_expr(&expr, false, false, &mut uncollapsed);
         uncollapsed.iter().filter(|(_, f)| !*f).count()
     } else {
-        resolved.iter().filter(|(_, f)| !*f).count()
+        resolved.iter().filter(|&&(_, f)| !f).count()
     };
     if invs_before > invs_after_uncollapsed {
         stats.invs_cancelled += invs_before - invs_after_uncollapsed;
     }
 
-    let changed = resolved.len() != steps.len()
-        || resolved
-            .iter()
-            .zip(steps.iter())
-            .any(|((a, fa), &(b, fb))| a != b || *fa != fb);
+    let changed = resolved.len() != steps.len() || resolved != steps;
 
     if changed {
         stats.windows_simplified += 1;
@@ -245,21 +449,18 @@ fn resolve_window(
         }
         (resolved, Some(format_expr(&expr)))
     } else {
-        (
-            steps.iter().map(|&(s, f)| (s.to_string(), f)).collect(),
-            None,
-        )
+        (steps.to_vec(), None)
     }
 }
 
-fn estimate_window_divergence(steps: &[(&str, bool)], anchors: &HashSet<String>) -> f64 {
+fn estimate_window_divergence(steps: &[(u32, bool)], is_anchor: &[bool]) -> f64 {
     if steps.is_empty() {
         return 0.02;
     }
     let mut non_anchors = 0usize;
     let mut rev_steps = 0usize;
     for &(seg, fwd) in steps {
-        if !anchors.contains(seg) {
+        if !is_anchor.get(seg as usize).copied().unwrap_or(false) {
             non_anchors += 1;
         }
         if !fwd {
@@ -276,22 +477,29 @@ fn estimate_window_divergence(steps: &[(&str, bool)], anchors: &HashSet<String>)
 }
 
 fn decompose_and_resolve(
-    steps: &[(&str, bool)],
-    anchors: &HashSet<String>,
-    seg_lens: &HashMap<String, usize>,
+    steps: &[(u32, bool)],
+    graph: &PackedGraph,
     max_bubble_steps: usize,
     divergence_override: Option<f64>,
     collapse_dups: bool,
     stats: &mut ResolveStats,
-) -> (Vec<(String, bool)>, Vec<String>) {
+) -> (Vec<(u32, bool)>, Vec<String>) {
     let mut out_steps = Vec::with_capacity(steps.len());
     let mut tags = Vec::new();
     let mut i = 0usize;
     while i < steps.len() {
         let mut j = i + 1;
-        let mut saw_non_anchor = !anchors.contains(steps[i].0);
+        let mut saw_non_anchor = !graph
+            .is_anchor
+            .get(steps[i].0 as usize)
+            .copied()
+            .unwrap_or(false);
         while j < steps.len() && j - i < max_bubble_steps {
-            let is_anchor = anchors.contains(steps[j].0);
+            let is_anchor = graph
+                .is_anchor
+                .get(steps[j].0 as usize)
+                .copied()
+                .unwrap_or(false);
             let is_tandem = steps[j].0 == steps[j - 1].0;
             if is_anchor && saw_non_anchor && !is_tandem && j - i >= 2 {
                 break;
@@ -302,9 +510,9 @@ fn decompose_and_resolve(
             j += 1;
         }
         let win_div = divergence_override
-            .unwrap_or_else(|| estimate_window_divergence(&steps[i..j], anchors));
+            .unwrap_or_else(|| estimate_window_divergence(&steps[i..j], &graph.is_anchor));
         let (win_steps, win_tag) =
-            resolve_window(&steps[i..j], seg_lens, win_div, collapse_dups, stats);
+            resolve_window(&steps[i..j], graph, win_div, collapse_dups, stats);
         out_steps.extend(win_steps);
         if let Some(t) = win_tag {
             tags.push(t);
@@ -314,83 +522,124 @@ fn decompose_and_resolve(
     (out_steps, tags)
 }
 
-fn pass1_index(
-    gfa_path: &str,
-    min_anchor_bp: usize,
-) -> Result<(HashMap<String, usize>, HashSet<String>)> {
-    let mut seg_lens: HashMap<String, usize> = HashMap::new();
-    let mut seg_visits: HashMap<String, usize> = HashMap::new();
+fn record_walk_steps(
+    steps: &[(&str, bool)],
+    graph: &mut PackedGraph,
+    seg_visits: &mut Vec<u32>,
+    visit_stamp: &mut Vec<u32>,
+    stamp: u32,
+    gray_edges: &mut Vec<(u32, u32)>,
+) {
+    let mut prev: Option<(u32, bool)> = None;
+    for &(seg, fwd) in steps {
+        let id = graph.intern(seg, 0);
+        let idx = id as usize;
+        if idx >= seg_visits.len() {
+            seg_visits.resize(idx + 1, 0);
+            visit_stamp.resize(idx + 1, 0);
+        }
+        if visit_stamp[idx] != stamp {
+            visit_stamp[idx] = stamp;
+            seg_visits[idx] += 1;
+        }
+        if let Some((pu, pf)) = prev {
+            let su = exit_side(pu, pf);
+            let sv = entry_side(id, fwd);
+            gray_edges.push(if su <= sv { (su, sv) } else { (sv, su) });
+        }
+        prev = Some((id, fwd));
+    }
+}
+
+fn pass1_index(gfa_path: &str, min_anchor_bp: usize) -> Result<PackedGraph> {
+    let mut graph = PackedGraph {
+        seg_to_id: HashMap::new(),
+        id_to_seg: Vec::new(),
+        seg_lens: Vec::new(),
+        is_anchor: Vec::new(),
+        num_bridges: 0,
+        num_components: 0,
+    };
+    let mut seg_visits: Vec<u32> = Vec::new();
+    let mut visit_stamp: Vec<u32> = Vec::new();
+    let mut cur_stamp = 0u32;
+    let mut gray_edges: Vec<(u32, u32)> = Vec::new();
 
     stream_gfa_records(gfa_path, |rec| {
         match rec {
             GfaRecord::Segment(s) => {
                 let len = s.seq_len();
-                seg_lens.insert(s.name, len);
-            }
-            GfaRecord::Link(_) => {}
-            GfaRecord::Path(p) => {
-                let mut seen_in_path = HashSet::new();
-                for (seg, _) in parse_path_steps(&p.segment_names) {
-                    if seen_in_path.insert(seg) {
-                        *seg_visits.entry(seg.to_string()).or_insert(0) += 1;
-                    }
+                let id = graph.intern(&s.name, len);
+                let idx = id as usize;
+                if idx >= seg_visits.len() {
+                    seg_visits.resize(idx + 1, 0);
+                    visit_stamp.resize(idx + 1, 0);
                 }
+            }
+            GfaRecord::Link(l) => {
+                let u = graph.intern(&l.from, 0);
+                let v = graph.intern(&l.to, 0);
+                let max_idx = (u.max(v) as usize) + 1;
+                if max_idx > seg_visits.len() {
+                    seg_visits.resize(max_idx, 0);
+                    visit_stamp.resize(max_idx, 0);
+                }
+                let su = exit_side(u, l.from_orient != b'-');
+                let sv = entry_side(v, l.to_orient != b'-');
+                gray_edges.push(if su <= sv { (su, sv) } else { (sv, su) });
+            }
+            GfaRecord::Path(p) => {
+                cur_stamp += 1;
+                let steps = parse_path_steps(&p.segment_names);
+                record_walk_steps(
+                    &steps,
+                    &mut graph,
+                    &mut seg_visits,
+                    &mut visit_stamp,
+                    cur_stamp,
+                    &mut gray_edges,
+                );
             }
             GfaRecord::Walk(w) => {
-                let mut seen_in_walk = HashSet::new();
-                for (seg, _) in parse_walk_steps(&w.walk) {
-                    if seen_in_walk.insert(seg) {
-                        *seg_visits.entry(seg.to_string()).or_insert(0) += 1;
-                    }
-                }
+                cur_stamp += 1;
+                let steps = parse_walk_steps(&w.walk);
+                record_walk_steps(
+                    &steps,
+                    &mut graph,
+                    &mut seg_visits,
+                    &mut visit_stamp,
+                    cur_stamp,
+                    &mut gray_edges,
+                );
             }
         }
         Ok(ControlFlow::Continue(()))
     })?;
 
-    let mut anchors = HashSet::new();
-    for (seg, visits) in seg_visits {
-        let len = seg_lens.get(&seg).copied().unwrap_or(0);
-        if visits >= 2 || len >= min_anchor_bp {
-            anchors.insert(seg);
-        }
-    }
-    Ok((seg_lens, anchors))
+    gray_edges.sort_unstable();
+    gray_edges.dedup();
+    let (is_anchor, num_bridges, num_components) = compute_biedged_snarls(
+        graph.id_to_seg.len(),
+        &graph.seg_lens,
+        &seg_visits,
+        &gray_edges,
+        min_anchor_bp,
+    );
+    graph.is_anchor = is_anchor;
+    graph.num_bridges = num_bridges;
+    graph.num_components = num_components;
+    Ok(graph)
 }
 
 struct ResolveCtx<'a> {
-    seg_lens: &'a HashMap<String, usize>,
-    anchors: &'a HashSet<String>,
+    graph: &'a PackedGraph,
     cli: &'a CliArgs,
 }
 
-fn intern_resolve_seg(
-    seg_to_id: &mut HashMap<String, u32>,
-    id_to_seg: &mut Vec<String>,
-    name: &str,
-) -> u32 {
-    if let Some(&id) = seg_to_id.get(name) {
-        id
-    } else {
-        let id = u32::try_from(id_to_seg.len()).expect("segment count fits u32");
-        let owned = name.to_owned();
-        seg_to_id.insert(owned.clone(), id);
-        id_to_seg.push(owned);
-        id
-    }
-}
-
-fn record_interned_edges(
-    steps: &[(String, bool)],
-    seg_to_id: &mut HashMap<String, u32>,
-    id_to_seg: &mut Vec<String>,
-    used: &mut HashSet<(u32, bool, u32, bool)>,
-) {
+fn record_interned_edges(steps: &[(u32, bool)], used: &mut HashSet<(u32, bool, u32, bool)>) {
     for win in steps.windows(2) {
-        let u = intern_resolve_seg(seg_to_id, id_to_seg, &win[0].0);
-        let v = intern_resolve_seg(seg_to_id, id_to_seg, &win[1].0);
-        let uf = win[0].1;
-        let vf = win[1].1;
+        let (u, uf) = win[0];
+        let (v, vf) = win[1];
         used.insert((u, uf, v, vf));
         used.insert((v, !vf, u, !uf));
     }
@@ -399,38 +648,34 @@ fn record_interned_edges(
 fn emit_resolved_path<W: Write>(
     p: &horizon_aligner::gfa::GfaPath,
     ctx: &ResolveCtx<'_>,
-    seg_to_id: &mut HashMap<String, u32>,
-    id_to_seg: &mut Vec<String>,
     used_edges: &mut HashSet<(u32, bool, u32, bool)>,
     stats: &mut ResolveStats,
     out: &mut W,
 ) -> Result<()> {
     stats.paths_seen += 1;
-    let steps = parse_path_steps(&p.segment_names);
+    let raw_steps = parse_path_steps(&p.segment_names);
+    let steps: Vec<(u32, bool)> = raw_steps
+        .iter()
+        .filter_map(|&(s, f)| ctx.graph.get_id(s).map(|id| (id, f)))
+        .collect();
     let (resolved, _) = decompose_and_resolve(
         &steps,
-        ctx.anchors,
-        ctx.seg_lens,
+        ctx.graph,
         ctx.cli.max_bubble_steps,
         ctx.cli.divergence,
         ctx.cli.collapse_dups,
         stats,
     );
-    record_interned_edges(&resolved, seg_to_id, id_to_seg, used_edges);
+    record_interned_edges(&resolved, used_edges);
     let mut seg_str = String::new();
-    for (idx, (s, fwd)) in resolved.iter().enumerate() {
+    for (idx, &(id, fwd)) in resolved.iter().enumerate() {
         if idx > 0 {
             seg_str.push(',');
         }
-        seg_str.push_str(s);
-        seg_str.push(if *fwd { '+' } else { '-' });
+        seg_str.push_str(&ctx.graph.id_to_seg[id as usize]);
+        seg_str.push(if fwd { '+' } else { '-' });
     }
-    let same_steps = resolved.len() == steps.len()
-        && resolved
-            .iter()
-            .zip(steps.iter())
-            .all(|((a, fa), &(b, fb))| a == b && *fa == fb);
-    let overlaps = if same_steps {
+    let overlaps = if resolved == steps {
         p.overlaps.as_str()
     } else {
         "*"
@@ -442,42 +687,39 @@ fn emit_resolved_path<W: Write>(
 fn emit_resolved_walk<W: Write>(
     w: &horizon_aligner::gfa::GfaWalk,
     ctx: &ResolveCtx<'_>,
-    seg_to_id: &mut HashMap<String, u32>,
-    id_to_seg: &mut Vec<String>,
     used_edges: &mut HashSet<(u32, bool, u32, bool)>,
     stats: &mut ResolveStats,
     out: &mut W,
 ) -> Result<()> {
     stats.walks_seen += 1;
-    let steps = parse_walk_steps(&w.walk);
+    let raw_steps = parse_walk_steps(&w.walk);
+    let steps: Vec<(u32, bool)> = raw_steps
+        .iter()
+        .filter_map(|&(s, f)| ctx.graph.get_id(s).map(|id| (id, f)))
+        .collect();
     let (resolved, tags) = decompose_and_resolve(
         &steps,
-        ctx.anchors,
-        ctx.seg_lens,
+        ctx.graph,
         ctx.cli.max_bubble_steps,
         ctx.cli.divergence,
         ctx.cli.collapse_dups,
         stats,
     );
-    record_interned_edges(&resolved, seg_to_id, id_to_seg, used_edges);
+    record_interned_edges(&resolved, used_edges);
     let mut walk_str = String::new();
     let mut resolved_bp = 0usize;
     let mut all_known = true;
-    for (s, fwd) in &resolved {
-        walk_str.push(if *fwd { '>' } else { '<' });
-        walk_str.push_str(s);
-        let slen = ctx.seg_lens.get(s.as_str()).copied().unwrap_or(0);
+    for &(id, fwd) in &resolved {
+        walk_str.push(if fwd { '>' } else { '<' });
+        walk_str.push_str(&ctx.graph.id_to_seg[id as usize]);
+        let slen = ctx.graph.seg_lens[id as usize];
         if slen == 0 {
             all_known = false;
         } else {
             resolved_bp += slen;
         }
     }
-    let same_steps = resolved.len() == steps.len()
-        && resolved
-            .iter()
-            .zip(steps.iter())
-            .all(|((a, fa), &(b, fb))| a == b && *fa == fb);
+    let same_steps = resolved == steps;
     let end_pos = if !same_steps && all_known && resolved_bp > 0 {
         w.start.saturating_add(resolved_bp)
     } else {
@@ -526,19 +768,12 @@ fn emit_resolved_walk<W: Write>(
 fn pass2_rewrite<W: Write>(
     gfa_path: &str,
     out: &mut W,
-    seg_lens: &HashMap<String, usize>,
-    anchors: &HashSet<String>,
+    graph: &PackedGraph,
     cli: &CliArgs,
 ) -> Result<ResolveStats> {
-    let ctx = ResolveCtx {
-        seg_lens,
-        anchors,
-        cli,
-    };
+    let ctx = ResolveCtx { graph, cli };
     let mut stats = ResolveStats::default();
     let mut raw_links: Vec<horizon_aligner::gfa::GfaLink> = Vec::new();
-    let mut seg_to_id: HashMap<String, u32> = HashMap::new();
-    let mut id_to_seg: Vec<String> = Vec::new();
     let mut used_edges: HashSet<(u32, bool, u32, bool)> = HashSet::new();
 
     writeln!(out, "H\tVN:Z:1.1")?;
@@ -556,26 +791,10 @@ fn pass2_rewrite<W: Write>(
                 raw_links.push(l);
             }
             GfaRecord::Path(p) => {
-                emit_resolved_path(
-                    &p,
-                    &ctx,
-                    &mut seg_to_id,
-                    &mut id_to_seg,
-                    &mut used_edges,
-                    &mut stats,
-                    out,
-                )?;
+                emit_resolved_path(&p, &ctx, &mut used_edges, &mut stats, out)?;
             }
             GfaRecord::Walk(w) => {
-                emit_resolved_walk(
-                    &w,
-                    &ctx,
-                    &mut seg_to_id,
-                    &mut id_to_seg,
-                    &mut used_edges,
-                    &mut stats,
-                    out,
-                )?;
+                emit_resolved_walk(&w, &ctx, &mut used_edges, &mut stats, out)?;
             }
         }
         Ok(ControlFlow::Continue(()))
@@ -586,8 +805,9 @@ fn pass2_rewrite<W: Write>(
     for l in raw_links {
         let uf = l.from_orient != b'-';
         let vf = l.to_orient != b'-';
-        let u = intern_resolve_seg(&mut seg_to_id, &mut id_to_seg, &l.from);
-        let v = intern_resolve_seg(&mut seg_to_id, &mut id_to_seg, &l.to);
+        let (Some(u), Some(v)) = (graph.get_id(&l.from), graph.get_id(&l.to)) else {
+            continue;
+        };
         let fwd_edge = (u, uf, v, vf);
         if !has_paths_or_walks || used_edges.contains(&fwd_edge) {
             writeln!(
@@ -602,7 +822,16 @@ fn pass2_rewrite<W: Write>(
     let mut missing: Vec<(&str, bool, &str, bool, u32, u32)> = used_edges
         .into_iter()
         .filter(|e| !seen_edges.contains(e))
-        .map(|(u, uf, v, vf)| (id_to_seg[u as usize].as_str(), uf, id_to_seg[v as usize].as_str(), vf, u, v))
+        .map(|(u, uf, v, vf)| {
+            (
+                graph.id_to_seg[u as usize].as_str(),
+                uf,
+                graph.id_to_seg[v as usize].as_str(),
+                vf,
+                u,
+                v,
+            )
+        })
         .collect();
     missing.sort_unstable();
     for (u_name, uf, v_name, vf, u, v) in missing {
@@ -632,18 +861,21 @@ fn main() -> Result<()> {
     let t0 = Instant::now();
     let spooled = SpoolableGfaInput::new(&cli.gfa_in)?;
     let effective_gfa = spooled.path();
-    let (seg_lens, anchors) = pass1_index(effective_gfa, cli.min_anchor_bp)?;
+    let graph = pass1_index(effective_gfa, cli.min_anchor_bp)?;
+    let anchor_count = graph.is_anchor.iter().filter(|&&a| a).count();
 
     let mut writer = open_output_writer(cli.out_path.as_deref())?;
-    let stats = pass2_rewrite(effective_gfa, &mut writer, &seg_lens, &anchors, &cli)?;
+    let stats = pass2_rewrite(effective_gfa, &mut writer, &graph, &cli)?;
     writer.flush()?;
 
     #[allow(clippy::cast_precision_loss)]
     let hwm_mb = horizon_aligner::read_vm_hwm_kb().map_or(0.0, |kb| kb as f64 / 1024.0);
     eprintln!(
-        "segments={} anchors={} paths={} walks={} windows={} simplified={} dups_detected={} dups_collapsed={} invs_cancelled={} mdl_bits_saved={:.1} elapsed_s={:.3} peak_rss_mb={:.1}",
-        seg_lens.len(),
-        anchors.len(),
+        "segments={} anchors={} bridges={} components={} paths={} walks={} windows={} simplified={} dups_detected={} dups_collapsed={} invs_cancelled={} mdl_bits_saved={:.1} elapsed_s={:.3} peak_rss_mb={:.1}",
+        graph.id_to_seg.len(),
+        anchor_count,
+        graph.num_bridges,
+        graph.num_components,
         stats.paths_seen,
         stats.walks_seen,
         stats.windows_evaluated,
@@ -690,9 +922,10 @@ mod tests {
             min_anchor_bp: 100,
             divergence: None,
         };
-        let (seg_lens, anchors) = pass1_index(&cli.gfa_in, cli.min_anchor_bp)?;
+        let graph = pass1_index(&cli.gfa_in, cli.min_anchor_bp)?;
+        assert!(graph.num_bridges >= 2);
         let mut writer = std::io::BufWriter::new(std::fs::File::create(&gfa_out)?);
-        let stats = pass2_rewrite(&cli.gfa_in, &mut writer, &seg_lens, &anchors, &cli)?;
+        let stats = pass2_rewrite(&cli.gfa_in, &mut writer, &graph, &cli)?;
         assert_eq!(stats.walks_seen, 2);
         assert_eq!(stats.dups_detected, 2);
         assert_eq!(stats.dups_collapsed, 2);

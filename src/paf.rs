@@ -1,13 +1,13 @@
 //! Streaming Pairwise mApping Format (PAF) parser, writer, and CIGAR iterator.
 //!
-//! Supports `.paf`, multi-member BGZF `.paf.gz`, and `"-"` (`stdin`) without materializing
-//! entire alignment files in memory.
+//! Supports `.paf`, multi-member BGZF `.paf.gz`, `.paf.zst`, and `"-"` (`stdin`) without
+//! materializing entire alignment files in memory.
 
+use crate::io_util::open_text_reader;
 use anyhow::{Context, Result, bail};
-use flate2::read::MultiGzDecoder;
-use std::fs::File;
-use std::io::{self, BufRead, BufReader};
+use std::io::BufRead;
 use std::ops::ControlFlow;
+use std::path::Path;
 
 /// A single CIGAR operation decoded from a PAF `cg:Z:` tag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -262,7 +262,7 @@ where
     Ok(())
 }
 
-/// Stream PAF records from a file path (`.paf`, `.paf.gz`, or `"-"` for `stdin`).
+/// Stream PAF records from a file path (`.paf`, `.paf.gz`, `.paf.zst`, or `"-"` for `stdin`).
 ///
 /// # Errors
 ///
@@ -271,23 +271,9 @@ pub fn stream_paf_records<F>(path: &str, on_record: F) -> Result<()>
 where
     F: FnMut(PafRecord) -> Result<ControlFlow<()>>,
 {
-    if path == "-" {
-        let stdin = io::stdin();
-        let reader = BufReader::with_capacity(256 * 1024, stdin.lock());
-        return stream_paf_reader(reader, on_record);
-    }
-    let file = File::open(path).with_context(|| format!("opening PAF '{path}'"))?;
-    if std::path::Path::new(path)
-        .extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("gz"))
-    {
-        let gz = MultiGzDecoder::new(file);
-        let reader = BufReader::with_capacity(256 * 1024, gz);
-        stream_paf_reader(reader, on_record)
-    } else {
-        let reader = BufReader::with_capacity(256 * 1024, file);
-        stream_paf_reader(reader, on_record)
-    }
+    let reader = open_text_reader(Path::new(path))
+        .with_context(|| format!("opening PAF '{path}'"))?;
+    stream_paf_reader(reader, on_record)
 }
 
 #[cfg(test)]
