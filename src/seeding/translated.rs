@@ -15,7 +15,7 @@ struct Aa5Index {
 impl Aa5Index {
     fn build(seq: &[u8], max_occ: usize, skip_softmasked: bool) -> Self {
         const AA_OFFSETS: [usize; 5] = [0, 1, 2, 4, 5];
-        let max_occ = max_occ.min(u16::MAX as usize);
+        let max_occ = max_occ.min(u16::MAX as usize - 1);
         let Some(slot_len) = (max_occ > 0)
             .then(|| AA5_KEY_SPACE.checked_mul(max_occ))
             .flatten()

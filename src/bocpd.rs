@@ -73,7 +73,7 @@ pub(crate) fn logsumexp3(a: f64, b: f64, c: f64) -> f64 {
 
 /// Reusable scratch buffers for [`bocpd_gc_profile_into`].
 #[derive(Debug, Default)]
-pub(crate) struct BocpdScratch {
+pub struct BocpdScratch {
     run_probs: Vec<f64>,
     alphas: Vec<f64>,
     betas: Vec<f64>,
@@ -84,7 +84,7 @@ pub(crate) struct BocpdScratch {
 
 /// Estimate local GC probability per base using Bayesian Online Changepoint Detection,
 /// writing into `gc_est` and reusing `scratch` to avoid per-call allocations.
-pub(crate) fn bocpd_gc_profile_into(
+pub fn bocpd_gc_profile_into(
     seq: &[u8],
     hazard: f64,
     max_run: usize,

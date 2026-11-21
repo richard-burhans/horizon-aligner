@@ -166,8 +166,12 @@ impl HalAlignment {
             let Some(q_seq) = qry_seqs.get(q_idx).and_then(|s| s.get(q_ci)) else {
                 continue;
             };
-            let r_global = r_seq.offset + r_local;
-            let q_global = q_seq.offset + q_local;
+            let (Some(r_global), Some(q_global)) = (
+                r_seq.offset.checked_add(r_local),
+                q_seq.offset.checked_add(q_local),
+            ) else {
+                continue;
+            };
             by_interval
                 .entry((r_global, len))
                 .or_default()

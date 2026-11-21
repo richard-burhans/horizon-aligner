@@ -274,113 +274,131 @@ pub(crate) struct LiftSummary {
     pub(crate) unmapped: usize,
 }
 
-#[allow(clippy::too_many_lines)]
-pub(crate) fn run_lift<W1: Write, W2: Write>(
+struct LiftPaths {
+    source_paths: Vec<PathRecord>,
+    target_paths: Vec<PathRecord>,
+}
+
+fn record_lift_path(
+    p: horizon_aligner::gfa::GfaPath,
     cfg: &LiftConfig<'_>,
-    out: &mut W1,
-    mut unmapped_out: Option<&mut W2>,
-) -> Result<LiftSummary> {
-    let wanted_chroms: HashSet<String> = cfg.features.iter().map(|f| f.chrom.clone()).collect();
+    wanted_chroms: &HashSet<String>,
+    source_paths: &mut Vec<PathRecord>,
+    target_paths: &mut Vec<PathRecord>,
+) {
+    if horizon_aligner::matches_sample_prefix(&p.name, cfg.from_sample) {
+        let short = strip_sample_prefix(&p.name, cfg.from_sample).to_string();
+        if wanted_chroms.is_empty()
+            || wanted_chroms.contains(&p.name)
+            || wanted_chroms.contains(&short)
+        {
+            let steps = parse_path_steps(&p.segment_names)
+                .into_iter()
+                .map(|(s, fwd)| (s.to_string(), fwd))
+                .collect();
+            let match_keys = if short == p.name {
+                vec![p.name.clone()]
+            } else {
+                vec![p.name.clone(), short]
+            };
+            source_paths.push(PathRecord {
+                display_chrom: p.name.clone(),
+                match_keys,
+                start_offset: 0,
+                steps,
+            });
+        }
+    }
+    if horizon_aligner::matches_sample_prefix(&p.name, cfg.to_sample) {
+        let short = strip_sample_prefix(&p.name, cfg.to_sample);
+        if cfg.to_chroms.is_empty()
+            || cfg.to_chroms.contains(&p.name)
+            || cfg.to_chroms.contains(short)
+        {
+            let steps = parse_path_steps(&p.segment_names)
+                .into_iter()
+                .map(|(s, fwd)| (s.to_string(), fwd))
+                .collect();
+            target_paths.push(PathRecord {
+                display_chrom: p.name,
+                match_keys: Vec::new(),
+                start_offset: 0,
+                steps,
+            });
+        }
+    }
+}
+
+fn record_lift_walk(
+    w: &horizon_aligner::gfa::GfaWalk,
+    cfg: &LiftConfig<'_>,
+    wanted_chroms: &HashSet<String>,
+    source_paths: &mut Vec<PathRecord>,
+    target_paths: &mut Vec<PathRecord>,
+) {
+    if horizon_aligner::matches_sample_prefix(&w.sample, cfg.from_sample) {
+        let full = format!("{}.{}", w.sample, w.seq_id);
+        let hap_full = if w.haplotype == "0" || w.haplotype.is_empty() {
+            None
+        } else {
+            Some(format!("{}#{}.{}", w.sample, w.haplotype, w.seq_id))
+        };
+        if wanted_chroms.is_empty()
+            || wanted_chroms.contains(&w.seq_id)
+            || wanted_chroms.contains(&full)
+            || hap_full.as_ref().is_some_and(|h| wanted_chroms.contains(h))
+        {
+            let steps = parse_walk_steps(&w.walk)
+                .into_iter()
+                .map(|(s, fwd)| (s.to_string(), fwd))
+                .collect();
+            let mut match_keys = vec![w.seq_id.clone(), full.clone()];
+            if let Some(ref hf) = hap_full {
+                match_keys.push(hf.clone());
+            }
+            source_paths.push(PathRecord {
+                display_chrom: hap_full.unwrap_or(full),
+                match_keys,
+                start_offset: w.start,
+                steps,
+            });
+        }
+    }
+    if horizon_aligner::matches_sample_prefix(&w.sample, cfg.to_sample) {
+        let disp = if w.haplotype == "0" || w.haplotype.is_empty() {
+            format!("{}.{}", w.sample, w.seq_id)
+        } else {
+            format!("{}#{}.{}", w.sample, w.haplotype, w.seq_id)
+        };
+        if cfg.to_chroms.is_empty()
+            || cfg.to_chroms.contains(&w.seq_id)
+            || cfg.to_chroms.contains(&disp)
+        {
+            let steps = parse_walk_steps(&w.walk)
+                .into_iter()
+                .map(|(s, fwd)| (s.to_string(), fwd))
+                .collect();
+            target_paths.push(PathRecord {
+                display_chrom: disp,
+                match_keys: Vec::new(),
+                start_offset: w.start,
+                steps,
+            });
+        }
+    }
+}
+
+fn collect_lift_paths(cfg: &LiftConfig<'_>, wanted_chroms: &HashSet<String>) -> Result<LiftPaths> {
     let mut source_paths = Vec::<PathRecord>::new();
     let mut target_paths = Vec::<PathRecord>::new();
 
-    // Pass 1: collect matching source and target P/W records.
     stream_gfa_records(cfg.gfa_path, |rec| {
         match rec {
             GfaRecord::Path(p) => {
-                if horizon_aligner::matches_sample_prefix(&p.name, cfg.from_sample) {
-                    let short = strip_sample_prefix(&p.name, cfg.from_sample).to_string();
-                    if wanted_chroms.is_empty()
-                        || wanted_chroms.contains(&p.name)
-                        || wanted_chroms.contains(&short)
-                    {
-                        let steps = parse_path_steps(&p.segment_names)
-                            .into_iter()
-                            .map(|(s, fwd)| (s.to_string(), fwd))
-                            .collect();
-                        let match_keys = if short == p.name {
-                            vec![p.name.clone()]
-                        } else {
-                            vec![p.name.clone(), short]
-                        };
-                        source_paths.push(PathRecord {
-                            display_chrom: p.name.clone(),
-                            match_keys,
-                            start_offset: 0,
-                            steps,
-                        });
-                    }
-                }
-                if horizon_aligner::matches_sample_prefix(&p.name, cfg.to_sample) {
-                    let short = strip_sample_prefix(&p.name, cfg.to_sample);
-                    if cfg.to_chroms.is_empty()
-                        || cfg.to_chroms.contains(&p.name)
-                        || cfg.to_chroms.contains(short)
-                    {
-                        let steps = parse_path_steps(&p.segment_names)
-                            .into_iter()
-                            .map(|(s, fwd)| (s.to_string(), fwd))
-                            .collect();
-                        target_paths.push(PathRecord {
-                            display_chrom: p.name,
-                            match_keys: Vec::new(),
-                            start_offset: 0,
-                            steps,
-                        });
-                    }
-                }
+                record_lift_path(p, cfg, wanted_chroms, &mut source_paths, &mut target_paths);
             }
             GfaRecord::Walk(w) => {
-                if horizon_aligner::matches_sample_prefix(&w.sample, cfg.from_sample) {
-                    let full = format!("{}.{}", w.sample, w.seq_id);
-                    let hap_full = if w.haplotype == "0" || w.haplotype.is_empty() {
-                        None
-                    } else {
-                        Some(format!("{}#{}.{}", w.sample, w.haplotype, w.seq_id))
-                    };
-                    if wanted_chroms.is_empty()
-                        || wanted_chroms.contains(&w.seq_id)
-                        || wanted_chroms.contains(&full)
-                        || hap_full.as_ref().is_some_and(|h| wanted_chroms.contains(h))
-                    {
-                        let steps = parse_walk_steps(&w.walk)
-                            .into_iter()
-                            .map(|(s, fwd)| (s.to_string(), fwd))
-                            .collect();
-                        let mut match_keys = vec![w.seq_id.clone(), full.clone()];
-                        if let Some(ref hf) = hap_full {
-                            match_keys.push(hf.clone());
-                        }
-                        source_paths.push(PathRecord {
-                            display_chrom: hap_full.unwrap_or(full),
-                            match_keys,
-                            start_offset: w.start,
-                            steps,
-                        });
-                    }
-                }
-                if horizon_aligner::matches_sample_prefix(&w.sample, cfg.to_sample) {
-                    let disp = if w.haplotype == "0" || w.haplotype.is_empty() {
-                        format!("{}.{}", w.sample, w.seq_id)
-                    } else {
-                        format!("{}#{}.{}", w.sample, w.haplotype, w.seq_id)
-                    };
-                    if cfg.to_chroms.is_empty()
-                        || cfg.to_chroms.contains(&w.seq_id)
-                        || cfg.to_chroms.contains(&disp)
-                    {
-                        let steps = parse_walk_steps(&w.walk)
-                            .into_iter()
-                            .map(|(s, fwd)| (s.to_string(), fwd))
-                            .collect();
-                        target_paths.push(PathRecord {
-                            display_chrom: disp,
-                            match_keys: Vec::new(),
-                            start_offset: w.start,
-                            steps,
-                        });
-                    }
-                }
+                record_lift_walk(&w, cfg, wanted_chroms, &mut source_paths, &mut target_paths);
             }
             _ => {}
         }
@@ -393,9 +411,23 @@ pub(crate) fn run_lift<W1: Write, W2: Write>(
     if target_paths.is_empty() {
         bail!("no target paths/walks matched '{}'", cfg.to_sample);
     }
+    Ok(LiftPaths {
+        source_paths,
+        target_paths,
+    })
+}
 
+struct LiftTables {
+    seg_lens: HashMap<String, usize>,
+    source_walks: Vec<(Vec<StepSpan>, usize, usize)>,
+    source_tables: HashMap<String, Vec<usize>>,
+    target_index: HashMap<String, Vec<TargetOcc>>,
+    target_step_names: Vec<Vec<String>>,
+}
+
+fn build_lift_tables(gfa_path: &str, paths: LiftPaths) -> Result<LiftTables> {
     let mut needed_segs: HashSet<String> = HashSet::new();
-    for p in source_paths.iter().chain(target_paths.iter()) {
+    for p in paths.source_paths.iter().chain(paths.target_paths.iter()) {
         for (s, _) in &p.steps {
             needed_segs.insert(s.clone());
         }
@@ -403,7 +435,7 @@ pub(crate) fn run_lift<W1: Write, W2: Write>(
 
     // Pass 2: collect segment lengths only for needed segments (keeps RSS small on 12 GB HPRC).
     let mut seg_lens: HashMap<String, usize> = HashMap::with_capacity(needed_segs.len());
-    stream_gfa_records(cfg.gfa_path, |rec| {
+    stream_gfa_records(gfa_path, |rec| {
         if let GfaRecord::Segment(s) = rec
             && needed_segs.contains(&s.name)
         {
@@ -412,10 +444,10 @@ pub(crate) fn run_lift<W1: Write, W2: Write>(
         Ok(ControlFlow::Continue(()))
     })?;
 
-    // Build source StepSpan tables keyed by match_keys (storing walk indices to avoid cloning StepSpans).
-    let mut source_walks: Vec<(Vec<StepSpan>, usize, usize)> = Vec::with_capacity(source_paths.len());
+    let mut source_walks: Vec<(Vec<StepSpan>, usize, usize)> =
+        Vec::with_capacity(paths.source_paths.len());
     let mut source_tables: HashMap<String, Vec<usize>> = HashMap::new();
-    for p in source_paths {
+    for p in paths.source_paths {
         let start_off = p.start_offset;
         let mut cur = start_off;
         let mut spans = Vec::with_capacity(p.steps.len());
@@ -437,11 +469,10 @@ pub(crate) fn run_lift<W1: Write, W2: Write>(
         }
     }
 
-    // Build target segment -> TargetOcc index.
     let mut target_index: HashMap<String, Vec<TargetOcc>> =
         HashMap::with_capacity(needed_segs.len());
-    let mut target_step_names: Vec<Vec<String>> = Vec::with_capacity(target_paths.len());
-    for (path_idx, p) in target_paths.into_iter().enumerate() {
+    let mut target_step_names: Vec<Vec<String>> = Vec::with_capacity(paths.target_paths.len());
+    for (path_idx, p) in paths.target_paths.into_iter().enumerate() {
         let mut cur = p.start_offset;
         let mut names = Vec::with_capacity(p.steps.len());
         for (step_idx, (seg, is_fwd)) in p.steps.into_iter().enumerate() {
@@ -461,6 +492,49 @@ pub(crate) fn run_lift<W1: Write, W2: Write>(
         target_step_names.push(names);
     }
 
+    Ok(LiftTables {
+        seg_lens,
+        source_walks,
+        source_tables,
+        target_index,
+        target_step_names,
+    })
+}
+
+fn merged_mapped_bp(pieces: &[LiftedPiece]) -> usize {
+    if pieces.is_empty() {
+        return 0;
+    }
+    let mut covered: Vec<(usize, usize)> = pieces
+        .iter()
+        .filter(|p| p.src_end > p.src_start)
+        .map(|p| (p.src_start, p.src_end))
+        .collect();
+    covered.sort_unstable();
+    let mut total = 0usize;
+    let mut cur_s = 0usize;
+    let mut cur_e = 0usize;
+    for (s, e) in covered {
+        if s > cur_e {
+            total += cur_e - cur_s;
+            cur_s = s;
+            cur_e = e;
+        } else {
+            cur_e = cur_e.max(e);
+        }
+    }
+    total + (cur_e - cur_s)
+}
+
+pub(crate) fn run_lift<W1: Write, W2: Write>(
+    cfg: &LiftConfig<'_>,
+    out: &mut W1,
+    mut unmapped_out: Option<&mut W2>,
+) -> Result<LiftSummary> {
+    let wanted_chroms: HashSet<String> = cfg.features.iter().map(|f| f.chrom.clone()).collect();
+    let paths = collect_lift_paths(cfg, &wanted_chroms)?;
+    let tables = build_lift_tables(cfg.gfa_path, paths)?;
+
     let mut summary = LiftSummary {
         lifted_exact: 0,
         lifted_partial: 0,
@@ -469,7 +543,7 @@ pub(crate) fn run_lift<W1: Write, W2: Write>(
     };
 
     for feat in cfg.features {
-        let Some(src_walk_idxs) = source_tables.get(&feat.chrom) else {
+        let Some(src_walk_idxs) = tables.source_tables.get(&feat.chrom) else {
             summary.unmapped += 1;
             if let Some(u) = unmapped_out.as_deref_mut() {
                 writeln!(
@@ -485,41 +559,19 @@ pub(crate) fn run_lift<W1: Write, W2: Write>(
         let mut best_failed_frac = 0.0_f64;
 
         for &w_idx in src_walk_idxs {
-            let (ref src_steps, s0, s1) = source_walks[w_idx];
+            let (ref src_steps, s0, s1) = tables.source_walks[w_idx];
             if feat.end <= s0 || feat.start >= s1 {
                 continue;
             }
             let pieces = lift_feature(
                 feat,
                 src_steps,
-                &seg_lens,
-                &target_index,
-                &target_step_names,
+                &tables.seg_lens,
+                &tables.target_index,
+                &tables.target_step_names,
                 cfg.bridge_bp,
             );
-            let mapped_bp = if pieces.is_empty() {
-                0
-            } else {
-                let mut covered: Vec<(usize, usize)> = pieces
-                    .iter()
-                    .filter(|p| p.src_end > p.src_start)
-                    .map(|p| (p.src_start, p.src_end))
-                    .collect();
-                covered.sort_unstable();
-                let mut total = 0usize;
-                let mut cur_s = 0usize;
-                let mut cur_e = 0usize;
-                for (s, e) in covered {
-                    if s > cur_e {
-                        total += cur_e - cur_s;
-                        cur_s = s;
-                        cur_e = e;
-                    } else {
-                        cur_e = cur_e.max(e);
-                    }
-                }
-                total + (cur_e - cur_s)
-            };
+            let mapped_bp = merged_mapped_bp(&pieces);
             #[allow(clippy::cast_precision_loss)]
             let frac = mapped_bp as f64 / total_bp as f64;
             if pieces.is_empty() || frac < cfg.min_frac {

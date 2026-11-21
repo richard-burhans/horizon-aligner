@@ -332,6 +332,9 @@ pub(crate) fn build_ancestral_consensus_contigs(
         .iter()
         .enumerate()
         .map(|(ci, (name, ref_seq))| {
+            if counts[ci].is_empty() {
+                return (name.clone(), Vec::new());
+            }
             let mut cons = Vec::with_capacity(ref_seq.len());
             for (pos, &rb) in ref_seq.iter().enumerate() {
                 let c = counts[ci][pos];

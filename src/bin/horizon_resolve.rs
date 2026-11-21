@@ -332,11 +332,171 @@ fn pass1_index(
     Ok((seg_lens, anchors))
 }
 
+struct ResolveCtx<'a> {
+    seg_lens: &'a HashMap<String, usize>,
+    anchors: &'a HashSet<String>,
+    cli: &'a CliArgs,
+}
+
+fn intern_resolve_seg(
+    seg_to_id: &mut HashMap<String, u32>,
+    id_to_seg: &mut Vec<String>,
+    name: &str,
+) -> u32 {
+    if let Some(&id) = seg_to_id.get(name) {
+        id
+    } else {
+        let id = u32::try_from(id_to_seg.len()).expect("segment count fits u32");
+        let owned = name.to_owned();
+        seg_to_id.insert(owned.clone(), id);
+        id_to_seg.push(owned);
+        id
+    }
+}
+
+fn record_interned_edges(
+    steps: &[(String, bool)],
+    seg_to_id: &mut HashMap<String, u32>,
+    id_to_seg: &mut Vec<String>,
+    used: &mut HashSet<(u32, bool, u32, bool)>,
+) {
+    for win in steps.windows(2) {
+        let u = intern_resolve_seg(seg_to_id, id_to_seg, &win[0].0);
+        let v = intern_resolve_seg(seg_to_id, id_to_seg, &win[1].0);
+        let uf = win[0].1;
+        let vf = win[1].1;
+        used.insert((u, uf, v, vf));
+        used.insert((v, !vf, u, !uf));
+    }
+}
+
+fn emit_resolved_path<W: Write>(
+    p: &horizon_aligner::gfa::GfaPath,
+    ctx: &ResolveCtx<'_>,
+    seg_to_id: &mut HashMap<String, u32>,
+    id_to_seg: &mut Vec<String>,
+    used_edges: &mut HashSet<(u32, bool, u32, bool)>,
+    stats: &mut ResolveStats,
+    out: &mut W,
+) -> Result<()> {
+    stats.paths_seen += 1;
+    let steps = parse_path_steps(&p.segment_names);
+    let (resolved, _) = decompose_and_resolve(
+        &steps,
+        ctx.anchors,
+        ctx.seg_lens,
+        ctx.cli.max_bubble_steps,
+        ctx.cli.divergence,
+        ctx.cli.collapse_dups,
+        stats,
+    );
+    record_interned_edges(&resolved, seg_to_id, id_to_seg, used_edges);
+    let mut seg_str = String::new();
+    for (idx, (s, fwd)) in resolved.iter().enumerate() {
+        if idx > 0 {
+            seg_str.push(',');
+        }
+        seg_str.push_str(s);
+        seg_str.push(if *fwd { '+' } else { '-' });
+    }
+    let same_steps = resolved.len() == steps.len()
+        && resolved
+            .iter()
+            .zip(steps.iter())
+            .all(|((a, fa), &(b, fb))| a == b && *fa == fb);
+    let overlaps = if same_steps {
+        p.overlaps.as_str()
+    } else {
+        "*"
+    };
+    writeln!(out, "P\t{}\t{}\t{}", p.name, seg_str, overlaps)?;
+    Ok(())
+}
+
+fn emit_resolved_walk<W: Write>(
+    w: &horizon_aligner::gfa::GfaWalk,
+    ctx: &ResolveCtx<'_>,
+    seg_to_id: &mut HashMap<String, u32>,
+    id_to_seg: &mut Vec<String>,
+    used_edges: &mut HashSet<(u32, bool, u32, bool)>,
+    stats: &mut ResolveStats,
+    out: &mut W,
+) -> Result<()> {
+    stats.walks_seen += 1;
+    let steps = parse_walk_steps(&w.walk);
+    let (resolved, tags) = decompose_and_resolve(
+        &steps,
+        ctx.anchors,
+        ctx.seg_lens,
+        ctx.cli.max_bubble_steps,
+        ctx.cli.divergence,
+        ctx.cli.collapse_dups,
+        stats,
+    );
+    record_interned_edges(&resolved, seg_to_id, id_to_seg, used_edges);
+    let mut walk_str = String::new();
+    let mut resolved_bp = 0usize;
+    let mut all_known = true;
+    for (s, fwd) in &resolved {
+        walk_str.push(if *fwd { '>' } else { '<' });
+        walk_str.push_str(s);
+        let slen = ctx.seg_lens.get(s.as_str()).copied().unwrap_or(0);
+        if slen == 0 {
+            all_known = false;
+        } else {
+            resolved_bp += slen;
+        }
+    }
+    let same_steps = resolved.len() == steps.len()
+        && resolved
+            .iter()
+            .zip(steps.iter())
+            .all(|((a, fa), &(b, fb))| a == b && *fa == fb);
+    let end_pos = if !same_steps && all_known && resolved_bp > 0 {
+        w.start.saturating_add(resolved_bp)
+    } else {
+        w.end
+    };
+    let extra_tags: String = if let Some(ref raw_tags) = w.tags {
+        let kept: Vec<&str> = raw_tags
+            .split('\t')
+            .filter(|t| !(ctx.cli.tag_walks && !tags.is_empty() && t.starts_with("EG:Z:")))
+            .collect();
+        if kept.is_empty() {
+            String::new()
+        } else {
+            format!("\t{}", kept.join("\t"))
+        }
+    } else {
+        String::new()
+    };
+    if ctx.cli.tag_walks && !tags.is_empty() {
+        writeln!(
+            out,
+            "W\t{}\t{}\t{}\t{}\t{}\t{}{}\tEG:Z:{}",
+            w.sample,
+            w.haplotype,
+            w.seq_id,
+            w.start,
+            end_pos,
+            walk_str,
+            extra_tags,
+            tags.join(";")
+        )?;
+    } else {
+        writeln!(
+            out,
+            "W\t{}\t{}\t{}\t{}\t{}\t{}{}",
+            w.sample, w.haplotype, w.seq_id, w.start, end_pos, walk_str, extra_tags
+        )?;
+    }
+    Ok(())
+}
+
 /// Pass 2: rewrite `P`/`W` records and emit only `L` links still traversed by resolved walks.
 ///
-/// Note: buffers `L` lines in `raw_l_lines` so unused links can be pruned after all `P`/`W` lines
+/// Note: buffers `L` lines in `raw_links` so unused links can be pruned after all `P`/`W` lines
 /// are seen; memory scales with the number of `L` records in the input GFA.
-#[allow(clippy::too_many_lines)]
 fn pass2_rewrite<W: Write>(
     gfa_path: &str,
     out: &mut W,
@@ -344,19 +504,16 @@ fn pass2_rewrite<W: Write>(
     anchors: &HashSet<String>,
     cli: &CliArgs,
 ) -> Result<ResolveStats> {
+    let ctx = ResolveCtx {
+        seg_lens,
+        anchors,
+        cli,
+    };
     let mut stats = ResolveStats::default();
     let mut raw_links: Vec<horizon_aligner::gfa::GfaLink> = Vec::new();
-    let mut used_edges: HashSet<(String, bool, String, bool)> = HashSet::new();
-
-    let record_edges = |steps: &[(String, bool)],
-                        used: &mut HashSet<(String, bool, String, bool)>| {
-        for win in steps.windows(2) {
-            let (ref u, uf) = win[0];
-            let (ref v, vf) = win[1];
-            used.insert((u.clone(), uf, v.clone(), vf));
-            used.insert((v.clone(), !vf, u.clone(), !uf));
-        }
-    };
+    let mut seg_to_id: HashMap<String, u32> = HashMap::new();
+    let mut id_to_seg: Vec<String> = Vec::new();
+    let mut used_edges: HashSet<(u32, bool, u32, bool)> = HashSet::new();
 
     writeln!(out, "H\tVN:Z:1.1")?;
     stream_gfa_records(gfa_path, |rec| {
@@ -373,142 +530,64 @@ fn pass2_rewrite<W: Write>(
                 raw_links.push(l);
             }
             GfaRecord::Path(p) => {
-                stats.paths_seen += 1;
-                let steps = parse_path_steps(&p.segment_names);
-                let (resolved, _) = decompose_and_resolve(
-                    &steps,
-                    anchors,
-                    seg_lens,
-                    cli.max_bubble_steps,
-                    cli.divergence,
-                    cli.collapse_dups,
+                emit_resolved_path(
+                    &p,
+                    &ctx,
+                    &mut seg_to_id,
+                    &mut id_to_seg,
+                    &mut used_edges,
                     &mut stats,
-                );
-                record_edges(&resolved, &mut used_edges);
-                let mut seg_str = String::new();
-                for (idx, (s, fwd)) in resolved.iter().enumerate() {
-                    if idx > 0 {
-                        seg_str.push(',');
-                    }
-                    seg_str.push_str(s);
-                    seg_str.push(if *fwd { '+' } else { '-' });
-                }
-                let same_steps = resolved.len() == steps.len()
-                    && resolved
-                        .iter()
-                        .zip(steps.iter())
-                        .all(|((a, fa), &(b, fb))| a == b && *fa == fb);
-                let overlaps = if same_steps {
-                    p.overlaps.as_str()
-                } else {
-                    "*"
-                };
-                writeln!(out, "P\t{}\t{}\t{}", p.name, seg_str, overlaps)?;
+                    out,
+                )?;
             }
             GfaRecord::Walk(w) => {
-                stats.walks_seen += 1;
-                let steps = parse_walk_steps(&w.walk);
-                let (resolved, tags) = decompose_and_resolve(
-                    &steps,
-                    anchors,
-                    seg_lens,
-                    cli.max_bubble_steps,
-                    cli.divergence,
-                    cli.collapse_dups,
+                emit_resolved_walk(
+                    &w,
+                    &ctx,
+                    &mut seg_to_id,
+                    &mut id_to_seg,
+                    &mut used_edges,
                     &mut stats,
-                );
-                record_edges(&resolved, &mut used_edges);
-                let mut walk_str = String::new();
-                let mut resolved_bp = 0usize;
-                let mut all_known = true;
-                for (s, fwd) in &resolved {
-                    walk_str.push(if *fwd { '>' } else { '<' });
-                    walk_str.push_str(s);
-                    let slen = seg_lens.get(s.as_str()).copied().unwrap_or(0);
-                    if slen == 0 {
-                        all_known = false;
-                    } else {
-                        resolved_bp += slen;
-                    }
-                }
-                let same_steps = resolved.len() == steps.len()
-                    && resolved
-                        .iter()
-                        .zip(steps.iter())
-                        .all(|((a, fa), &(b, fb))| a == b && *fa == fb);
-                let end_pos = if !same_steps && all_known && resolved_bp > 0 {
-                    w.start.saturating_add(resolved_bp)
-                } else {
-                    w.end
-                };
-                let extra_tags: String = if let Some(ref raw_tags) = w.tags {
-                    let kept: Vec<&str> = raw_tags
-                        .split('\t')
-                        .filter(|t| !(cli.tag_walks && !tags.is_empty() && t.starts_with("EG:Z:")))
-                        .collect();
-                    if kept.is_empty() {
-                        String::new()
-                    } else {
-                        format!("\t{}", kept.join("\t"))
-                    }
-                } else {
-                    String::new()
-                };
-                if cli.tag_walks && !tags.is_empty() {
-                    writeln!(
-                        out,
-                        "W\t{}\t{}\t{}\t{}\t{}\t{}{}\tEG:Z:{}",
-                        w.sample,
-                        w.haplotype,
-                        w.seq_id,
-                        w.start,
-                        end_pos,
-                        walk_str,
-                        extra_tags,
-                        tags.join(";")
-                    )?;
-                } else {
-                    writeln!(
-                        out,
-                        "W\t{}\t{}\t{}\t{}\t{}\t{}{}",
-                        w.sample, w.haplotype, w.seq_id, w.start, end_pos, walk_str, extra_tags
-                    )?;
-                }
+                    out,
+                )?;
             }
         }
         Ok(ControlFlow::Continue(()))
     })?;
 
     let has_paths_or_walks = stats.paths_seen + stats.walks_seen > 0;
-    let mut seen_edges: HashSet<(String, bool, String, bool)> = HashSet::new();
+    let mut seen_edges: HashSet<(u32, bool, u32, bool)> = HashSet::new();
     for l in raw_links {
         let uf = l.from_orient != b'-';
         let vf = l.to_orient != b'-';
-        let fwd_edge = (l.from.clone(), uf, l.to.clone(), vf);
+        let u = intern_resolve_seg(&mut seg_to_id, &mut id_to_seg, &l.from);
+        let v = intern_resolve_seg(&mut seg_to_id, &mut id_to_seg, &l.to);
+        let fwd_edge = (u, uf, v, vf);
         if !has_paths_or_walks || used_edges.contains(&fwd_edge) {
             writeln!(
                 out,
                 "L\t{}\t{}\t{}\t{}\t{}",
                 l.from, l.from_orient as char, l.to, l.to_orient as char, l.overlap
             )?;
-            seen_edges.insert((l.to, !vf, l.from, !uf));
+            seen_edges.insert((v, !vf, u, !uf));
             seen_edges.insert(fwd_edge);
         }
     }
-    let mut missing: Vec<(String, bool, String, bool)> = used_edges
+    let mut missing: Vec<(&str, bool, &str, bool, u32, u32)> = used_edges
         .into_iter()
         .filter(|e| !seen_edges.contains(e))
+        .map(|(u, uf, v, vf)| (id_to_seg[u as usize].as_str(), uf, id_to_seg[v as usize].as_str(), vf, u, v))
         .collect();
-    missing.sort();
-    for (u, uf, v, vf) in missing {
-        let rc = (v.clone(), !vf, u.clone(), !uf);
-        if !seen_edges.contains(&(u.clone(), uf, v.clone(), vf)) && !seen_edges.contains(&rc) {
+    missing.sort_unstable();
+    for (u_name, uf, v_name, vf, u, v) in missing {
+        let rc = (v, !vf, u, !uf);
+        if !seen_edges.contains(&(u, uf, v, vf)) && !seen_edges.contains(&rc) {
             writeln!(
                 out,
                 "L\t{}\t{}\t{}\t{}\t0M",
-                u,
+                u_name,
                 if uf { '+' } else { '-' },
-                v,
+                v_name,
                 if vf { '+' } else { '-' }
             )?;
             seen_edges.insert((u, uf, v, vf));

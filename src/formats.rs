@@ -1,7 +1,8 @@
 //! GFA v1.1, MAF v1, FASTA I/O, and e-graph paralog resolution helpers.
 
 use crate::egraph;
-use crate::mdl::{AlignedRun, ContigAlignment, RunAlignment};
+use crate::mdl::{ContigAlignment, RunAlignment};
+use crate::netting::{partition_colinear_blocks, partition_colinear_run_groups};
 use crate::seeding::complement_base;
 use std::fmt::Write as _;
 
@@ -83,8 +84,6 @@ fn emit_gfa_blocks(
 }
 
 /// Emit detailed GFA v1.1 block segments, Horizon-Bubble nodes, and links for a contig pair.
-///
-/// Requires `aln.aligned_pairs` to be sorted in non-decreasing order of reference coordinate `x`.
 #[must_use]
 pub fn format_gfa_blocks(name_x: &str, name_y: &str, aln: &ContigAlignment) -> String {
     if aln.aligned_pairs.is_empty() {
@@ -138,24 +137,6 @@ pub(crate) fn collect_windowed_duplications(
     }
 }
 
-/// Bucket colinear alignment blocks into `bin_bp` reference windows and return
-/// deduplicated block labels collapsed by the e-graph duplication/inversion rules.
-///
-/// Requires `aln.aligned_pairs` to be sorted in non-decreasing order of reference coordinate `x`.
-#[must_use]
-pub fn resolve_alignment_duplications(aln: &ContigAlignment, bin_bp: usize) -> Vec<String> {
-    let bins: Vec<(String, i8)> = partition_colinear_blocks(&aln.aligned_pairs)
-        .into_iter()
-        .map(|(blk, is_rev)| {
-            let b_idx = blk[0].0 / bin_bp.max(1);
-            (format!("B{b_idx}"), if is_rev { -1 } else { 1 })
-        })
-        .collect();
-    let mut dups = std::collections::BTreeSet::new();
-    collect_windowed_duplications(&bins, &mut dups);
-    dups.into_iter().collect()
-}
-
 /// Format e-graph-resolved paralog annotations as GFA v1.1 comment/tag lines.
 #[must_use]
 pub fn format_gfa_paralog_tags(name_x: &str, name_y: &str, dups: &[String]) -> String {
@@ -163,91 +144,6 @@ pub fn format_gfa_paralog_tags(name_x: &str, name_y: &str, dups: &[String]) -> S
         return String::new();
     }
     format!("# EG:Z:{name_x}__{name_y}\t{}\n", dups.join(","))
-}
-
-/// Partition aligned pairs into colinear runs of at least 12 bases (sorting by `x` if unsorted).
-fn partition_colinear_blocks(pairs: &[(usize, usize)]) -> Vec<(Vec<(usize, usize)>, bool)> {
-    type ActiveChain = (Vec<(usize, usize)>, Option<bool>);
-    let sorted_storage: Vec<(usize, usize)>;
-    let ordered: &[(usize, usize)] = if pairs.windows(2).all(|w| w[0].0 <= w[1].0) {
-        pairs
-    } else {
-        let mut tmp = pairs.to_vec();
-        tmp.sort_unstable_by_key(|&(x, _)| x);
-        sorted_storage = tmp;
-        &sorted_storage
-    };
-    let mut blocks: Vec<(Vec<(usize, usize)>, bool)> = Vec::new();
-    let mut active: Vec<ActiveChain> = Vec::new();
-
-    for &(x, y) in ordered {
-        let mut i = 0;
-        while i < active.len() {
-            let px = active[i].0.last().map_or(x, |&(px, _)| px);
-            if x.saturating_sub(px) > 20 {
-                let (chain, rev_opt) = active.swap_remove(i);
-                if chain.len() >= 12 {
-                    blocks.push((chain, rev_opt.unwrap_or(false)));
-                }
-            } else {
-                i += 1;
-            }
-        }
-
-        let mut best_idx: Option<usize> = None;
-        let mut best_dist = usize::MAX;
-        let mut best_is_rev = false;
-        for (idx, (chain, cur_rev)) in active.iter().enumerate() {
-            if let Some(&(px, py)) = chain.last()
-                && x > px
-                && (x - px) <= 20
-            {
-                let fwd = y > py && (y - py) <= 20;
-                let rev = py > y && (py - y) <= 20;
-                let matches = match cur_rev {
-                    None => fwd || rev,
-                    Some(false) => fwd,
-                    Some(true) => rev,
-                };
-                if matches {
-                    let dist = (x - px) + y.abs_diff(py);
-                    if dist < best_dist {
-                        best_dist = dist;
-                        best_idx = Some(idx);
-                        best_is_rev = rev && !fwd;
-                    }
-                }
-            }
-        }
-
-        if let Some(idx) = best_idx {
-            if active[idx].1.is_none() {
-                active[idx].1 = Some(best_is_rev);
-            }
-            active[idx].0.push((x, y));
-        } else {
-            if active.len() >= 32
-                && let Some((oldest_idx, _)) = active
-                    .iter()
-                    .enumerate()
-                    .min_by_key(|(_, (c, _))| c.last().map_or(0, |&(px, _)| px))
-            {
-                let (chain, rev_opt) = active.swap_remove(oldest_idx);
-                if chain.len() >= 12 {
-                    blocks.push((chain, rev_opt.unwrap_or(false)));
-                }
-            }
-            active.push((vec![(x, y)], None));
-        }
-    }
-
-    for (chain, rev_opt) in active {
-        if chain.len() >= 12 {
-            blocks.push((chain, rev_opt.unwrap_or(false)));
-        }
-    }
-    blocks.sort_unstable_by_key(|(b, _)| (b[0].0, b[0].1));
-    blocks
 }
 
 /// Emit a compact GFA v1.1 summary segment for a [`RunAlignment`].
@@ -298,235 +194,6 @@ pub fn resolve_alignment_duplications_runs(aln: &RunAlignment, bin_bp: usize) ->
     let mut dups = std::collections::BTreeSet::new();
     collect_windowed_duplications(&bins, &mut dups);
     dups.into_iter().collect()
-}
-
-fn free_subintervals(
-    occupied: &std::collections::BTreeMap<usize, usize>,
-    lo: usize,
-    hi: usize,
-    out: &mut Vec<(usize, usize)>,
-) {
-    out.clear();
-    if lo >= hi {
-        return;
-    }
-    let mut cur = lo;
-    if let Some((&_s, &e)) = occupied.range(..lo).next_back()
-        && e > cur
-    {
-        cur = e;
-    }
-    for (&s, &e) in occupied.range(lo..hi) {
-        if cur >= hi {
-            break;
-        }
-        if s > cur {
-            out.push((cur, s.min(hi)));
-        }
-        cur = cur.max(e);
-    }
-    if cur < hi {
-        out.push((cur, hi));
-    }
-}
-
-fn mark_occupied(occupied: &mut std::collections::BTreeMap<usize, usize>, mut lo: usize, mut hi: usize) {
-    if lo >= hi {
-        return;
-    }
-    let mut to_remove = Vec::new();
-    if let Some((&ps, &pe)) = occupied.range(..=lo).next_back()
-        && pe >= lo
-    {
-        lo = lo.min(ps);
-        hi = hi.max(pe);
-        to_remove.push(ps);
-    }
-    for (&s, &e) in occupied.range(lo..=hi) {
-        lo = lo.min(s);
-        hi = hi.max(e);
-        to_remove.push(s);
-    }
-    for k in to_remove {
-        occupied.remove(&k);
-    }
-    occupied.insert(lo, hi);
-}
-
-/// Net overlapping [`AlignedRun`]s within a contig pair to strict 1-to-1 coverage
-/// by prioritizing the longest colinear run-groups first and clipping overlapping bases.
-#[must_use]
-pub fn net_one_to_one_runs(runs: &[AlignedRun], len_x: usize, len_y: usize) -> Vec<AlignedRun> {
-    use std::collections::BTreeMap;
-    if runs.is_empty() || len_x == 0 || len_y == 0 {
-        return Vec::new();
-    }
-    let mut blocks: Vec<(usize, Vec<AlignedRun>)> = partition_colinear_run_groups(runs)
-        .into_iter()
-        .map(|(grp, _)| {
-            let total_bp: usize = grp.iter().map(|r| r.len).sum();
-            (total_bp, grp)
-        })
-        .collect();
-    blocks.sort_unstable_by_key(|(bp, grp)| (std::cmp::Reverse(*bp), grp[0].x_start));
-
-    let mut used_x: BTreeMap<usize, usize> = BTreeMap::new();
-    let mut used_y: BTreeMap<usize, usize> = BTreeMap::new();
-    let mut free_x = Vec::new();
-    let mut free_y = Vec::new();
-    let mut kept: Vec<AlignedRun> = Vec::with_capacity(runs.len());
-
-    for (_, grp) in blocks {
-        for r in grp {
-            if r.len == 0 || r.x_start >= len_x {
-                continue;
-            }
-            let valid_len = if r.is_rc {
-                r.len.min(r.y_start + 1).min(len_x - r.x_start)
-            } else {
-                r.len.min(len_x - r.x_start).min(len_y.saturating_sub(r.y_start))
-            };
-            if valid_len < 6 {
-                continue;
-            }
-            let x_lo = r.x_start;
-            let x_hi = r.x_start + valid_len;
-            free_subintervals(&used_x, x_lo, x_hi, &mut free_x);
-            if free_x.is_empty() {
-                continue;
-            }
-            let (y_lo, y_hi) = if r.is_rc {
-                (r.y_start + 1 - valid_len, (r.y_start + 1).min(len_y))
-            } else {
-                (r.y_start, (r.y_start + valid_len).min(len_y))
-            };
-            free_subintervals(&used_y, y_lo, y_hi, &mut free_y);
-            if free_y.is_empty() {
-                continue;
-            }
-
-            // Intersect free_x (projected to k-offsets) with free_y (projected to k-offsets).
-            let mut ix = 0usize;
-            let mut iy = 0usize;
-            while ix < free_x.len() && iy < free_y.len() {
-                let kx0 = free_x[ix].0 - r.x_start;
-                let kx1 = free_x[ix].1 - r.x_start;
-                let (ky0, ky1) = if r.is_rc {
-                    let rev_idx = free_y.len() - 1 - iy;
-                    let (ya, yb) = free_y[rev_idx];
-                    (r.y_start + 1 - yb, r.y_start + 1 - ya)
-                } else {
-                    let (ya, yb) = free_y[iy];
-                    (ya - r.y_start, yb - r.y_start)
-                };
-                let k0 = kx0.max(ky0);
-                let k1 = kx1.min(ky1);
-                if k1 >= k0 + 6 {
-                    let sub_len = k1 - k0;
-                    let sx = r.x_start + k0;
-                    let sy = if r.is_rc { r.y_start - k0 } else { r.y_start + k0 };
-                    mark_occupied(&mut used_x, sx, sx + sub_len);
-                    if r.is_rc {
-                        mark_occupied(&mut used_y, sy + 1 - sub_len, sy + 1);
-                    } else {
-                        mark_occupied(&mut used_y, sy, sy + sub_len);
-                    }
-                    kept.push(AlignedRun {
-                        x_start: sx,
-                        y_start: sy,
-                        len: sub_len,
-                        is_rc: r.is_rc,
-                    });
-                }
-                if kx1 <= ky1 {
-                    ix += 1;
-                } else {
-                    iy += 1;
-                }
-            }
-        }
-    }
-    kept.sort_unstable_by_key(|r| (r.x_start, r.y_start, r.is_rc));
-    kept
-}
-
-/// Partition [`AlignedRun`]s into colinear block groups of at least 12 bases.
-fn partition_colinear_run_groups(runs: &[AlignedRun]) -> Vec<(Vec<AlignedRun>, bool)> {
-    let ordered: std::borrow::Cow<'_, [AlignedRun]> =
-        if runs.windows(2).all(|w| w[0].x_start <= w[1].x_start) {
-            std::borrow::Cow::Borrowed(runs)
-        } else {
-            let mut copy = runs.to_vec();
-            copy.sort_unstable_by_key(|r| (r.x_start, r.y_start, r.is_rc));
-            std::borrow::Cow::Owned(copy)
-        };
-
-    let mut blocks: Vec<(Vec<AlignedRun>, bool)> = Vec::new();
-    let mut active: Vec<Vec<AlignedRun>> = Vec::new();
-    let retire_chain = |ch: Vec<AlignedRun>, out: &mut Vec<(Vec<AlignedRun>, bool)>| {
-        let total_bp: usize = ch.iter().map(|x| x.len).sum();
-        if total_bp >= 12 {
-            let is_rev = ch[0].is_rc;
-            out.push((ch, is_rev));
-        }
-    };
-    for &r in ordered.iter() {
-        if r.len == 0 || (r.is_rc && r.y_start + 1 < r.len) {
-            continue;
-        }
-        let mut idx = 0usize;
-        while idx < active.len() {
-            let last = active[idx][active[idx].len() - 1];
-            if last.x_start + last.len + 40 < r.x_start {
-                let ch = active.swap_remove(idx);
-                retire_chain(ch, &mut blocks);
-            } else {
-                idx += 1;
-            }
-        }
-        let mut placed = false;
-        for ch in &mut active {
-            let prev = ch[ch.len() - 1];
-            if prev.is_rc != r.is_rc {
-                continue;
-            }
-            let prev_x_end = prev.x_start + prev.len;
-            if r.x_start < prev_x_end || r.x_start - prev_x_end > 40 {
-                continue;
-            }
-            let ok_y = if r.is_rc {
-                let Some(prev_y_lim) = (prev.y_start + 1).checked_sub(prev.len) else {
-                    continue;
-                };
-                r.y_start < prev_y_lim && (prev_y_lim - 1 - r.y_start) <= 40
-            } else {
-                let prev_y_lim = prev.y_start + prev.len;
-                r.y_start >= prev_y_lim && (r.y_start - prev_y_lim) <= 40
-            };
-            if ok_y {
-                ch.push(r);
-                placed = true;
-                break;
-            }
-        }
-        if !placed {
-            if active.len() >= 32
-                && let Some((oldest_idx, _)) = active.iter().enumerate().min_by_key(|(_, ch)| {
-                    let last = ch[ch.len() - 1];
-                    last.x_start + last.len
-                })
-            {
-                let ch = active.swap_remove(oldest_idx);
-                retire_chain(ch, &mut blocks);
-            }
-            active.push(vec![r]);
-        }
-    }
-    for ch in active {
-        retire_chain(ch, &mut blocks);
-    }
-    blocks.sort_by_key(|(grp, _)| grp[0].x_start);
-    blocks
 }
 
 /// Group run-encoded alignments into colinear MAF blocks and emit standard MAF v1 text.
@@ -625,8 +292,6 @@ pub fn format_maf_blocks_runs(
 }
 
 /// Group aligned `(x, y)` pairs into colinear MAF blocks and emit standard MAF v1 text.
-///
-/// Requires `aln.aligned_pairs` to be sorted in non-decreasing order of reference coordinate `x`.
 #[must_use]
 #[allow(clippy::too_many_arguments)]
 pub fn format_maf_blocks(
@@ -855,12 +520,13 @@ pub fn parse_two_row_maf_blocks(maf_text: &str) -> Vec<(MafRow, MafRow)> {
                 .is_some_and(|r| r.starts_with(char::is_whitespace))
         {
             if rows.len() >= 2 {
-                let mut drain = rows.drain(..2);
+                let mut drain = rows.drain(..);
                 if let (Some(r1), Some(r2)) = (drain.next(), drain.next()) {
                     blocks.push((r1, r2));
                 }
+            } else {
+                rows.clear();
             }
-            rows.clear();
             continue;
         }
         if let Some((row, _)) = parse_maf_s_line(trimmed) {
@@ -868,7 +534,7 @@ pub fn parse_two_row_maf_blocks(maf_text: &str) -> Vec<(MafRow, MafRow)> {
         }
     }
     if rows.len() >= 2 {
-        let mut drain = rows.drain(..2);
+        let mut drain = rows.drain(..);
         if let (Some(r1), Some(r2)) = (drain.next(), drain.next()) {
             blocks.push((r1, r2));
         }
@@ -930,72 +596,5 @@ mod tests {
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].0.src, "hg38.chr1");
         assert_eq!(blocks[0].1.src, "mm10.chr1");
-    }
-
-    #[test]
-    fn partition_colinear_blocks_preserves_overlapping_chains() {
-        let mut pairs = Vec::new();
-        for i in 0..15 {
-            pairs.push((100 + i, 200 + i));
-            pairs.push((100 + i, 500 - i));
-        }
-        let blocks = super::partition_colinear_blocks(&pairs);
-        assert_eq!(blocks.len(), 2);
-        assert!(!blocks[0].1);
-        assert!(blocks[1].1);
-        assert_eq!(blocks[0].0.len(), 15);
-        assert_eq!(blocks[1].0.len(), 15);
-    }
-
-    #[test]
-    fn net_one_to_one_runs_keeps_longest_and_clips_overlaps() {
-        let runs = vec![
-            super::AlignedRun {
-                x_start: 10,
-                y_start: 20,
-                len: 30,
-                is_rc: false,
-            },
-            super::AlignedRun {
-                x_start: 25,
-                y_start: 80,
-                len: 20,
-                is_rc: false,
-            },
-        ];
-        let netted = super::net_one_to_one_runs(&runs, 100, 120);
-        assert_eq!(netted.len(), 1);
-        assert_eq!(netted[0].x_start, 10);
-        assert_eq!(netted[0].len, 30);
-    }
-
-    #[test]
-    fn partition_colinear_run_groups_handles_unsorted_and_malformed_rc() {
-        let runs = vec![
-            super::AlignedRun {
-                x_start: 100,
-                y_start: 200,
-                len: 15,
-                is_rc: false,
-            },
-            super::AlignedRun {
-                x_start: 10,
-                y_start: 2,
-                len: 15,
-                is_rc: true,
-            },
-            super::AlignedRun {
-                x_start: 20,
-                y_start: 50,
-                len: 15,
-                is_rc: false,
-            },
-        ];
-        let groups = super::partition_colinear_run_groups(&runs);
-        assert_eq!(groups.len(), 2);
-        assert_eq!(groups[0].0[0].x_start, 20);
-        assert!(!groups[0].1);
-        assert_eq!(groups[1].0[0].x_start, 100);
-        assert!(!groups[1].1);
     }
 }

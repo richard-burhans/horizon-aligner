@@ -683,8 +683,12 @@ fn load_gfa_dag(path: &std::path::Path) -> Result<Vec<GraphNode>> {
     let mut indeg: Vec<usize> = vec![0; n];
 
     for (u, v) in directed_edges {
-        if !adj[u].contains(&v) {
-            adj[u].push(v);
+        adj[u].push(v);
+    }
+    for nbrs in &mut adj {
+        nbrs.sort_unstable();
+        nbrs.dedup();
+        for &v in nbrs.iter() {
             indeg[v] += 1;
         }
     }

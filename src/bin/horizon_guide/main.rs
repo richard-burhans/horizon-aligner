@@ -269,6 +269,12 @@ fn main() -> Result<()> {
         pairwise_mafs.push((qry_sp.clone(), maf_buf));
     }
 
+    if cli.progressive && cli.write_hal {
+        eprintln!(
+            "[horizon_guide] note: --hal exports direct star-tree blocks; --progressive rescue is reflected in .maf/.gfa"
+        );
+    }
+
     if cli.progressive && indexed.len() >= 3 {
         run_progressive_sister_rescue(
             &indexed,
@@ -470,5 +476,16 @@ s sp3.chr1 0 20 + 20 ACGTACGTACGTACGTACGT
         // 100% overlap with existing direct MAF is deduplicated away.
         let deduped = remap_consensus_maf_to_hinge(&hinge_contigs, cons_to_target, maf_s1);
         assert_eq!(deduped, "");
+
+        // Mixed need_contig = [false, true] must not panic on skipped contigs.
+        let mixed_contigs = vec![
+            ("hg38.chr1".to_string(), b"ACGTACGTACGTACGTACGT".to_vec()),
+            ("hg38.chr2".to_string(), b"TTTTTTTTTTTTTTTTTTTT".to_vec()),
+        ];
+        let mixed_cons =
+            build_ancestral_consensus_contigs(&mixed_contigs, &[maf_s1, maf_s2], &[false, true]);
+        assert_eq!(mixed_cons.len(), 2);
+        assert_eq!(mixed_cons[0].1, [] as [u8; 0]);
+        assert_eq!(mixed_cons[1].1, b"TTTTTTTTTTTTTTTTTTTT");
     }
 }

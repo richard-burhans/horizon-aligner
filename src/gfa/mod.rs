@@ -133,14 +133,6 @@ fn open_reader_path(path: &Path) -> Result<Box<dyn BufRead>> {
     }
 }
 
-/// Open a GFA/text path (plain, `.gz`/`.bgz`, or `"-"` for stdin) as a buffered line reader.
-///
-/// # Errors
-/// Returns an error if the file cannot be opened.
-pub fn open_line_reader(path: &str) -> Result<Box<dyn BufRead>> {
-    open_reader_path(Path::new(path))
-}
-
 /// Represents a GFA Link (L line)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GfaLink {

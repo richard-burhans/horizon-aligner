@@ -135,7 +135,15 @@ fn project_block_interval(
     project_block_interval_with_cursor(blk, &mut cursor, lo, hi)
 }
 
-type ThreadedQueryRow = (String, String, usize, usize, char, usize, String);
+struct ThreadedQueryRow {
+    sp: String,
+    qry_contig: String,
+    qry_start: usize,
+    qry_size: usize,
+    qry_strand: char,
+    qry_src_size: usize,
+    seq: String,
+}
 
 fn thread_interval_columns(
     ref_bases: &[u8],
@@ -174,16 +182,14 @@ fn thread_interval_columns(
     let rows = sp_proj
         .iter()
         .zip(q_outs)
-        .map(|((sp, qc, st, proj), qseq)| {
-            (
-                sp.clone(),
-                qc.clone(),
-                proj.qry_start,
-                proj.qry_size,
-                *st,
-                proj.qry_src_size,
-                qseq,
-            )
+        .map(|((sp, qc, st, proj), qseq)| ThreadedQueryRow {
+            sp: sp.clone(),
+            qry_contig: qc.clone(),
+            qry_start: proj.qry_start,
+            qry_size: proj.qry_size,
+            qry_strand: *st,
+            qry_src_size: proj.qry_src_size,
+            seq: qseq,
         })
         .collect();
     (ref_out, rows)
@@ -195,45 +201,43 @@ fn parse_pairwise_maf_blocks(
     step_bp: usize,
     by_contig: &mut std::collections::BTreeMap<String, Vec<PairwiseMafBlock>>,
 ) -> std::collections::BTreeSet<String> {
-    type RawRow = (String, usize, usize, char, usize, String);
-    let mut cur_rows: Vec<RawRow> = Vec::new();
+    let mut cur_rows: Vec<(crate::formats::MafRow, usize)> = Vec::new();
     let mut tokens_by_contig: std::collections::BTreeMap<String, Vec<(usize, String, i8)>> =
         std::collections::BTreeMap::new();
 
     let flush =
-        |rows: &mut Vec<RawRow>,
+        |rows: &mut Vec<(crate::formats::MafRow, usize)>,
          by_contig: &mut std::collections::BTreeMap<String, Vec<PairwiseMafBlock>>,
          tokens_by_contig: &mut std::collections::BTreeMap<String, Vec<(usize, String, i8)>>| {
             if rows.len() >= 2 {
-                let r = &rows[0];
-                let q = &rows[1];
-                if r.3 != '+' || r.5.len() != q.5.len() {
-                    rows.clear();
+                let mut it = rows.drain(..);
+                let (r, r_size) = it.next().expect("rows >= 2");
+                let (q, _q_size) = it.next().expect("rows >= 2");
+                if r.strand != '+' || r.seq.len() != q.seq.len() {
                     return;
                 }
-                let Some(ref_end) = r.1.checked_add(r.2) else {
-                    rows.clear();
+                let Some(ref_end) = r.start.checked_add(r_size) else {
                     return;
                 };
-                let b_idx = r.1 / step_bp;
+                let b_idx = r.start / step_bp;
                 tokens_by_contig
-                    .entry(r.0.clone())
+                    .entry(r.src.clone())
                     .or_default()
-                    .push((r.1, format!("B{b_idx}"), if q.3 == '-' { -1 } else { 1 }));
+                    .push((r.start, format!("B{b_idx}"), if q.strand == '-' { -1 } else { 1 }));
                 by_contig
-                    .entry(r.0.clone())
+                    .entry(r.src)
                     .or_default()
                     .push(PairwiseMafBlock {
-                        ref_start: r.1,
+                        ref_start: r.start,
                         ref_end,
-                        ref_src_size: r.4,
+                        ref_src_size: r.src_size,
                         qry_species: query_sp.to_owned(),
-                        qry_contig: q.0.clone(),
-                        qry_start: q.1,
-                        qry_strand: q.3,
-                        qry_src_size: q.4,
-                        ref_seq: r.5.as_bytes().to_vec(),
-                        qry_seq: q.5.as_bytes().to_vec(),
+                        qry_contig: q.src,
+                        qry_start: q.start,
+                        qry_strand: q.strand,
+                        qry_src_size: q.src_size,
+                        ref_seq: r.seq.into_bytes(),
+                        qry_seq: q.seq.into_bytes(),
                     });
             }
             rows.clear();
@@ -254,8 +258,8 @@ fn parse_pairwise_maf_blocks(
                 .is_some_and(|r| r.starts_with(char::is_whitespace))
         {
             flush(&mut cur_rows, by_contig, &mut tokens_by_contig);
-        } else if let Some((row, size)) = crate::formats::parse_maf_s_line(line) {
-            cur_rows.push((row.src, row.start, size, row.strand, row.src_size, row.seq));
+        } else if let Some(parsed) = crate::formats::parse_maf_s_line(line) {
+            cur_rows.push(parsed);
         }
     }
     flush(&mut cur_rows, by_contig, &mut tokens_by_contig);
@@ -270,47 +274,140 @@ fn parse_pairwise_maf_blocks(
     sp_dups
 }
 
-#[allow(clippy::too_many_arguments)]
+struct MergeOut {
+    maf_out: String,
+    gfa_out: String,
+    total_blocks: usize,
+    multi_species_blocks: usize,
+}
+
 fn emit_merged_block(
     ref_contig: &str,
-    lo: usize,
-    hi: usize,
+    (lo, hi): (usize, usize),
     ref_src_size: usize,
     ref_sub: &str,
     sp_rows: &[ThreadedQueryRow],
-    maf_out: &mut String,
-    gfa_out: &mut String,
+    out: &mut MergeOut,
     prev_seg: &mut Option<String>,
 ) {
-    let _ = writeln!(maf_out, "a score={}.0", sp_rows.len() + 1);
+    let _ = writeln!(out.maf_out, "a score={}.0", sp_rows.len() + 1);
     let _ = writeln!(
-        maf_out,
+        out.maf_out,
         "s {ref_contig} {lo} {} + {ref_src_size} {ref_sub}",
         hi - lo
     );
-    for (sp, qc, qs, qz, st, qsrc, qseq) in sp_rows {
-        let stripped = crate::formats::strip_sample_prefix(qc, sp);
-        let _ = writeln!(maf_out, "s {sp}.{stripped} {qs} {qz} {st} {qsrc} {qseq}");
+    for row in sp_rows {
+        let stripped = crate::formats::strip_sample_prefix(&row.qry_contig, &row.sp);
+        let _ = writeln!(
+            out.maf_out,
+            "s {}.{stripped} {} {} {} {} {}",
+            row.sp, row.qry_start, row.qry_size, row.qry_strand, row.qry_src_size, row.seq
+        );
     }
-    maf_out.push('\n');
+    out.maf_out.push('\n');
 
     let seg_id = format!("ms_{ref_contig}_{lo}_{hi}");
     let _ = writeln!(
-        gfa_out,
+        out.gfa_out,
         "S\t{seg_id}\t*\tLN:i:{}\tSP:i:{}\tSN:Z:{ref_contig}\tSO:i:{lo}\tSR:i:0",
         hi - lo,
         sp_rows.len() + 1
     );
     if let Some(prev) = prev_seg.as_ref() {
-        let _ = writeln!(gfa_out, "L\t{prev}\t+\t{seg_id}\t+\t0M");
+        let _ = writeln!(out.gfa_out, "L\t{prev}\t+\t{seg_id}\t+\t0M");
     }
     *prev_seg = Some(seg_id);
+}
+
+fn merge_contig_blocks(ref_contig: &str, mut blocks: Vec<PairwiseMafBlock>, out: &mut MergeOut) {
+    let mut prev_seg: Option<String> = None;
+    blocks.sort_unstable_by_key(|b| (b.ref_start, b.ref_end));
+    let mut bounds: Vec<usize> = blocks
+        .iter()
+        .flat_map(|b| [b.ref_start, b.ref_end])
+        .collect();
+    bounds.sort_unstable();
+    bounds.dedup();
+
+    let mut active: Vec<(usize, BlockCursor)> = Vec::new();
+    let mut next_idx = 0usize;
+
+    for w in bounds.windows(2) {
+        let (lo, hi) = (w[0], w[1]);
+        if lo >= hi {
+            continue;
+        }
+        while next_idx < blocks.len() && blocks[next_idx].ref_start <= lo {
+            if blocks[next_idx].ref_end >= hi {
+                active.push((
+                    next_idx,
+                    BlockCursor {
+                        col_idx: 0,
+                        ref_pos: blocks[next_idx].ref_start,
+                        qry_consumed: 0,
+                    },
+                ));
+            }
+            next_idx += 1;
+        }
+        active.retain(|&(idx, _)| blocks[idx].ref_end >= hi);
+        if active.is_empty() {
+            continue;
+        }
+
+        let mut ref_src_size_opt: Option<usize> = None;
+        let mut ref_bases_opt: Option<Vec<u8>> = None;
+        // Net overlapping alignments per query species by highest match score in [lo, hi).
+        let mut best_by_sp: std::collections::BTreeMap<
+            String,
+            (isize, String, char, ProjectedInterval),
+        > = std::collections::BTreeMap::new();
+        for (idx, cursor) in &mut active {
+            let blk = &blocks[*idx];
+            if let Some(proj) = project_block_interval_with_cursor(blk, cursor, lo, hi) {
+                ref_src_size_opt.get_or_insert(blk.ref_src_size);
+                if ref_bases_opt.is_none() {
+                    ref_bases_opt = Some(proj.ref_bases.clone());
+                }
+                let score = interval_match_score(&proj);
+                match best_by_sp.get(&blk.qry_species) {
+                    Some((best_sc, _, _, _)) if *best_sc >= score => {}
+                    _ => {
+                        best_by_sp.insert(
+                            blk.qry_species.clone(),
+                            (score, blk.qry_contig.clone(), blk.qry_strand, proj),
+                        );
+                    }
+                }
+            }
+        }
+        let sp_proj: Vec<(String, String, char, ProjectedInterval)> = best_by_sp
+            .into_iter()
+            .map(|(sp, (_, ctg, strand, proj))| (sp, ctg, strand, proj))
+            .collect();
+        let (Some(ref_src_size), Some(ref_bases)) = (ref_src_size_opt, ref_bases_opt) else {
+            continue;
+        };
+        let (ref_sub, sp_rows) = thread_interval_columns(&ref_bases, &sp_proj);
+        out.total_blocks += 1;
+        if sp_rows.len() >= 2 {
+            out.multi_species_blocks += 1;
+        }
+        emit_merged_block(
+            ref_contig,
+            (lo, hi),
+            ref_src_size,
+            &ref_sub,
+            &sp_rows,
+            out,
+            &mut prev_seg,
+        );
+    }
 }
 
 /// Merge multiple pairwise MAF texts anchored on `ref_species` using exact reference-interval
 /// splitting and base-level threading into multi-species MAF v1 + GFA v1.1 + e-graph paralog tags.
 #[must_use]
-#[allow(clippy::too_many_lines)]
 pub fn merge_pairwise_mafs(
     ref_species: &str,
     pairwise_mafs: &[(String, String)],
@@ -330,105 +427,25 @@ pub fn merge_pairwise_mafs(
             .extend(sp_dups);
     }
 
-    let mut maf_out = String::from("##maf version=1 scoring=horizon_merge\n");
-    let mut gfa_out = String::from("H\tVN:Z:1.1\n");
-    let mut total_blocks = 0usize;
-    let mut multi_species_blocks = 0usize;
+    let mut out = MergeOut {
+        maf_out: String::from("##maf version=1 scoring=horizon_merge\n"),
+        gfa_out: String::from("H\tVN:Z:1.1\n"),
+        total_blocks: 0,
+        multi_species_blocks: 0,
+    };
 
-    for (ref_contig, mut blocks) in by_contig {
-        let mut prev_seg: Option<String> = None;
-        blocks.sort_unstable_by_key(|b| (b.ref_start, b.ref_end));
-        let mut bounds: Vec<usize> = blocks
-            .iter()
-            .flat_map(|b| [b.ref_start, b.ref_end])
-            .collect();
-        bounds.sort_unstable();
-        bounds.dedup();
-
-        let mut active: Vec<(usize, BlockCursor)> = Vec::new();
-        let mut next_idx = 0usize;
-
-        for w in bounds.windows(2) {
-            let (lo, hi) = (w[0], w[1]);
-            if lo >= hi {
-                continue;
-            }
-            while next_idx < blocks.len() && blocks[next_idx].ref_start <= lo {
-                if blocks[next_idx].ref_end >= hi {
-                    active.push((
-                        next_idx,
-                        BlockCursor {
-                            col_idx: 0,
-                            ref_pos: blocks[next_idx].ref_start,
-                            qry_consumed: 0,
-                        },
-                    ));
-                }
-                next_idx += 1;
-            }
-            active.retain(|&(idx, _)| blocks[idx].ref_end >= hi);
-            if active.is_empty() {
-                continue;
-            }
-
-            let mut ref_src_size_opt: Option<usize> = None;
-            let mut ref_bases_opt: Option<Vec<u8>> = None;
-            // Net overlapping alignments per query species by highest match score in [lo, hi).
-            let mut best_by_sp: BTreeMap<String, (isize, String, char, ProjectedInterval)> =
-                BTreeMap::new();
-            for (idx, cursor) in &mut active {
-                let blk = &blocks[*idx];
-                if let Some(proj) = project_block_interval_with_cursor(blk, cursor, lo, hi) {
-                    ref_src_size_opt.get_or_insert(blk.ref_src_size);
-                    if ref_bases_opt.is_none() {
-                        ref_bases_opt = Some(proj.ref_bases.clone());
-                    }
-                    let score = interval_match_score(&proj);
-                    match best_by_sp.get(&blk.qry_species) {
-                        Some((best_sc, _, _, _)) if *best_sc >= score => {}
-                        _ => {
-                            best_by_sp.insert(
-                                blk.qry_species.clone(),
-                                (score, blk.qry_contig.clone(), blk.qry_strand, proj),
-                            );
-                        }
-                    }
-                }
-            }
-            let sp_proj: Vec<(String, String, char, ProjectedInterval)> = best_by_sp
-                .into_iter()
-                .map(|(sp, (_, ctg, strand, proj))| (sp, ctg, strand, proj))
-                .collect();
-            let (Some(ref_src_size), Some(ref_bases)) = (ref_src_size_opt, ref_bases_opt) else {
-                continue;
-            };
-            let (ref_sub, sp_rows) = thread_interval_columns(&ref_bases, &sp_proj);
-            total_blocks += 1;
-            if sp_rows.len() >= 2 {
-                multi_species_blocks += 1;
-            }
-            emit_merged_block(
-                &ref_contig,
-                lo,
-                hi,
-                ref_src_size,
-                &ref_sub,
-                &sp_rows,
-                &mut maf_out,
-                &mut gfa_out,
-                &mut prev_seg,
-            );
-        }
+    for (ref_contig, blocks) in by_contig {
+        merge_contig_blocks(&ref_contig, blocks, &mut out);
     }
 
     for (sp, dups) in dups_by_species {
         if !dups.is_empty() {
             let joined: Vec<&str> = dups.iter().map(String::as_str).collect();
-            let _ = writeln!(gfa_out, "# EG:Z:{ref_species}__{sp}\t{}", joined.join(","));
+            let _ = writeln!(out.gfa_out, "# EG:Z:{ref_species}__{sp}\t{}", joined.join(","));
         }
     }
 
-    (maf_out, gfa_out, total_blocks, multi_species_blocks)
+    (out.maf_out, out.gfa_out, out.total_blocks, out.multi_species_blocks)
 }
 
 fn interval_match_score(proj: &ProjectedInterval) -> isize {

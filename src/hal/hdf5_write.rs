@@ -564,29 +564,81 @@ fn normalize_hal_segments_for_export(hal: &HalAlignment) -> NormalizedSegments {
             .iter()
             .any(|g| g.parent != Some(0) || !g.children.is_empty())
     {
-        // Non-star tree: preserve existing segment links while ensuring sorted order.
-        let mut tops_by_genome: Vec<Vec<HalTopSegment>> = hal
-            .genomes
-            .iter()
-            .map(|g| {
-                let mut t = g.top_segments.clone();
-                t.sort_by_key(|s| s.start);
-                t
-            })
-            .collect();
-        let mut bottoms_by_genome: Vec<Vec<HalBottomSegment>> = hal
-            .genomes
-            .iter()
-            .map(|g| {
-                let mut b = g.bottom_segments.clone();
-                b.sort_by_key(|s| s.start);
-                b
-            })
-            .collect();
-        for g in &mut tops_by_genome {
-            let _ = g.len();
+        // Non-star tree: sort segments per genome and remap all cross-genome indices.
+        let mut top_orders: Vec<Vec<usize>> = Vec::with_capacity(n_genomes);
+        let mut top_invs: Vec<Vec<usize>> = Vec::with_capacity(n_genomes);
+        let mut bot_orders: Vec<Vec<usize>> = Vec::with_capacity(n_genomes);
+        let mut bot_invs: Vec<Vec<usize>> = Vec::with_capacity(n_genomes);
+        for g in &hal.genomes {
+            let mut t_ord: Vec<usize> = (0..g.top_segments.len()).collect();
+            t_ord.sort_by_key(|&i| g.top_segments[i].start);
+            let mut t_inv = vec![0usize; g.top_segments.len()];
+            for (new_i, &old_i) in t_ord.iter().enumerate() {
+                t_inv[old_i] = new_i;
+            }
+            top_orders.push(t_ord);
+            top_invs.push(t_inv);
+
+            let mut b_ord: Vec<usize> = (0..g.bottom_segments.len()).collect();
+            b_ord.sort_by_key(|&i| g.bottom_segments[i].start);
+            let mut b_inv = vec![0usize; g.bottom_segments.len()];
+            for (new_i, &old_i) in b_ord.iter().enumerate() {
+                b_inv[old_i] = new_i;
+            }
+            bot_orders.push(b_ord);
+            bot_invs.push(b_inv);
         }
-        let _ = &mut bottoms_by_genome;
+
+        let tops_by_genome: Vec<Vec<HalTopSegment>> = hal
+            .genomes
+            .iter()
+            .enumerate()
+            .map(|(gi, g)| {
+                top_orders[gi]
+                    .iter()
+                    .map(|&old_i| {
+                        let mut seg = g.top_segments[old_i].clone();
+                        seg.parent_bottom_idx = seg.parent_bottom_idx.map(|pb| {
+                            g.parent
+                                .and_then(|pg| bot_invs.get(pg))
+                                .and_then(|inv| inv.get(pb))
+                                .copied()
+                                .unwrap_or(pb)
+                        });
+                        seg.next_paralog = seg
+                            .next_paralog
+                            .and_then(|np| top_invs[gi].get(np).copied());
+                        seg
+                    })
+                    .collect()
+            })
+            .collect();
+        let bottoms_by_genome: Vec<Vec<HalBottomSegment>> = hal
+            .genomes
+            .iter()
+            .enumerate()
+            .map(|(gi, g)| {
+                bot_orders[gi]
+                    .iter()
+                    .map(|&old_i| {
+                        let mut seg = g.bottom_segments[old_i].clone();
+                        for (c_idx, link) in seg.child_tops.iter_mut().enumerate() {
+                            if let Some((old_t, rev)) = *link {
+                                let new_t = g
+                                    .children
+                                    .get(c_idx)
+                                    .and_then(|&cg| top_invs.get(cg))
+                                    .and_then(|inv| inv.get(old_t))
+                                    .copied()
+                                    .unwrap_or(old_t);
+                                *link = Some((new_t, rev));
+                            }
+                        }
+                        seg
+                    })
+                    .collect()
+            })
+            .collect();
         return NormalizedSegments {
             tops_by_genome,
             bottoms_by_genome,
@@ -690,12 +742,17 @@ fn normalize_hal_segments_for_export(hal: &HalAlignment) -> NormalizedSegments {
     let mut tops_by_genome = vec![Vec::new(); n_genomes];
     let mut bottoms_by_genome = vec![Vec::new(); n_genomes];
     for (c_idx, &child_g_idx) in root.children.iter().enumerate() {
-        tops_by_genome[child_g_idx] = finalize_child_top_segments(
-            &hal.genomes[child_g_idx].sequences,
-            std::mem::take(&mut placed_tops[c_idx]),
-            c_idx,
-            &mut new_bottoms,
-        );
+        let Some(child_g) = hal.genomes.get(child_g_idx) else {
+            continue;
+        };
+        if let Some(dst) = tops_by_genome.get_mut(child_g_idx) {
+            *dst = finalize_child_top_segments(
+                &child_g.sequences,
+                std::mem::take(&mut placed_tops[c_idx]),
+                c_idx,
+                &mut new_bottoms,
+            );
+        }
     }
     bottoms_by_genome[0] = new_bottoms;
 

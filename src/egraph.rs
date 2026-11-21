@@ -403,17 +403,6 @@ impl MdlCostModel {
         }
     }
 
-    /// Incremental bit cost of collapsing a second copy via `dup(expr)`.
-    #[must_use]
-    pub fn dup_cost(&self, child_cost: f64, child_expr: &Expr) -> f64 {
-        let residual_bits = if self.block_stats.is_empty() {
-            0.0
-        } else {
-            Self::expr_residual_bits(child_expr, &self.block_stats)
-        };
-        child_cost + self.dup_header_bits + residual_bits
-    }
-
     fn block_residual_bits(&self, label: &str) -> f64 {
         if self.block_stats.is_empty() {
             return 0.0;
@@ -431,31 +420,6 @@ impl MdlCostModel {
             }
         } else {
             0.0
-        }
-    }
-
-    fn expr_residual_bits(expr: &Expr, stats: &HashMap<String, (usize, f64)>) -> f64 {
-        match expr {
-            Expr::Block(lbl) => {
-                if let Some(&(len_bp, div)) = stats.get(lbl) {
-                    let p = if div.is_finite() {
-                        div.clamp(1e-6, 0.75)
-                    } else {
-                        0.75
-                    };
-                    let h2 = -p * p.log2() - (1.0 - p) * (1.0 - p).log2() + p * 3.0_f64.log2();
-                    #[allow(clippy::cast_precision_loss)]
-                    {
-                        (len_bp as f64) * h2
-                    }
-                } else {
-                    0.0
-                }
-            }
-            Expr::Inv(inner) | Expr::Dup(inner) => Self::expr_residual_bits(inner, stats),
-            Expr::Seq(a, b) => {
-                Self::expr_residual_bits(a, stats) + Self::expr_residual_bits(b, stats)
-            }
         }
     }
 }

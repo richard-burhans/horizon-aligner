@@ -16,10 +16,12 @@ mod dag;
 mod dag_seed;
 mod dp;
 mod fallback;
+mod runs;
 mod xdrop;
 pub use dag::*;
 pub use dag_seed::*;
 pub use dp::*;
+pub use runs::*;
 pub use xdrop::*;
 
 /// Karlin-Altschul / MDL random-search threshold coefficient (`~0.5 * log2(N*M)` + overhead).
@@ -291,21 +293,20 @@ pub fn align_contig_pair_runs(
 
     let lcb_gate_bits = effective_min_bits.max(search_space_bits);
 
-    let mut ext = schedule_and_run_extension(
+    let mut ctx = AlignCtx {
         seq_x,
         seq_y,
         seq_y_rc,
-        &lcbs_fwd,
-        &lcbs_rc,
-        &mut spans_fwd,
-        &mut spans_rc,
+        lcbs_fwd: &lcbs_fwd,
+        lcbs_rc: &lcbs_rc,
+        spans_fwd: &mut spans_fwd,
+        spans_rc: &mut spans_rc,
         span,
-        MAX_GAP_BP,
-        MAX_LOCAL_RESCUE_BP,
         effective_min_bits,
         lcb_gate_bits,
         cfg,
-    )?;
+    };
+    let mut ext = schedule_and_run_extension(&mut ctx)?;
 
     if profile {
         eprintln!(
@@ -351,45 +352,47 @@ struct ExtensionOutput {
     n_xdrop_jobs: usize,
 }
 
-#[allow(clippy::too_many_arguments)]
-fn schedule_and_run_extension(
-    seq_x: &[u8],
-    seq_y: &[u8],
-    seq_y_rc: &[u8],
-    lcbs_fwd: &[Vec<(usize, usize)>],
-    lcbs_rc: &[Vec<(usize, usize)>],
-    spans_fwd: &mut std::collections::HashMap<(usize, usize), usize>,
-    spans_rc: &mut std::collections::HashMap<(usize, usize), usize>,
+struct AlignCtx<'a> {
+    seq_x: &'a [u8],
+    seq_y: &'a [u8],
+    seq_y_rc: &'a [u8],
+    lcbs_fwd: &'a [Vec<(usize, usize)>],
+    lcbs_rc: &'a [Vec<(usize, usize)>],
+    spans_fwd: &'a mut std::collections::HashMap<(usize, usize), usize>,
+    spans_rc: &'a mut std::collections::HashMap<(usize, usize), usize>,
     span: usize,
-    max_gap_bp: usize,
-    max_local_rescue_bp: usize,
     effective_min_bits: f64,
     lcb_gate_bits: f64,
-    cfg: &AlignConfig,
-) -> Result<ExtensionOutput, AlignError> {
+    cfg: &'a AlignConfig,
+}
+
+fn schedule_and_run_extension(ctx: &mut AlignCtx<'_>) -> Result<ExtensionOutput, AlignError> {
     let mut runs_vec: Vec<AlignedRun> = Vec::new();
     let mut dp_jobs: Vec<(bool, usize, usize, usize, usize)> = Vec::new();
     let mut xdrop_jobs: Vec<(bool, usize, usize, usize, usize, bool)> = Vec::new();
     let mut macro_bubbles = 0usize;
 
     for (is_rc, lcb_list, y_work, anchor_spans) in [
-        (false, lcbs_fwd, seq_y, &mut *spans_fwd),
-        (true, lcbs_rc, seq_y_rc, &mut *spans_rc),
+        (false, ctx.lcbs_fwd, ctx.seq_y, &mut *ctx.spans_fwd),
+        (true, ctx.lcbs_rc, ctx.seq_y_rc, &mut *ctx.spans_rc),
     ] {
-        let rescued_inter =
-            fallback::rescue_inter_lcb_gaps(seq_x, y_work, lcb_list, anchor_spans, span)?;
+        let rescued_inter = fallback::rescue_inter_lcb_gaps(
+            ctx.seq_x,
+            y_work,
+            lcb_list,
+            anchor_spans,
+            ctx.span,
+        )?;
         macro_bubbles += schedule_strand_lcb_jobs(
             is_rc,
-            seq_x,
+            ctx.seq_x,
             y_work,
             lcb_list,
             &rescued_inter,
             anchor_spans,
-            span,
-            max_gap_bp,
-            max_local_rescue_bp,
-            cfg.max_ext,
-            lcb_gate_bits,
+            ctx.span,
+            ctx.cfg.max_ext,
+            ctx.lcb_gate_bits,
             &mut runs_vec,
             &mut dp_jobs,
             &mut xdrop_jobs,
@@ -397,20 +400,11 @@ fn schedule_and_run_extension(
     }
 
     // Estimate divergence-adaptive Pair-HMM parameters empirically from LCB anchors (with Beta prior shrinkage).
-    let hmm_params = estimate_hmm_params(
-        seq_x,
-        seq_y,
-        seq_y_rc,
-        lcbs_fwd,
-        lcbs_rc,
-        spans_fwd,
-        spans_rc,
-        span,
-    );
+    let hmm_params = estimate_hmm_params(ctx);
     // Calibrate finite-sample Conformal Risk Control floor (n_cal = 15, alpha = 0.07) at observed GC.
     let mut gc_cnt = 0usize;
     let mut acgt_cnt = 0usize;
-    for &b in seq_x.iter().take(4096).chain(seq_y.iter().take(4096)) {
+    for &b in ctx.seq_x.iter().take(4096).chain(ctx.seq_y.iter().take(4096)) {
         match b.to_ascii_uppercase() {
             b'G' | b'C' => {
                 gc_cnt += 1;
@@ -426,16 +420,19 @@ fn schedule_and_run_extension(
     } else {
         0.5
     };
-    let crc_min_bits = dp::calibrate_null_crc_for_gc(observed_gc, 15, 0.07, effective_min_bits, &hmm_params);
+    let crc_min_bits = dp::calibrate_null_crc_for_gc(
+        observed_gc,
+        15,
+        0.07,
+        ctx.effective_min_bits,
+        &hmm_params,
+    );
 
     let t_dp_start = std::time::Instant::now();
     let internal_bubbles = execute_dp_and_xdrop(
-        seq_x,
-        seq_y,
-        seq_y_rc,
+        ctx,
         crc_min_bits,
         &hmm_params,
-        cfg,
         &dp_jobs,
         &xdrop_jobs,
         &mut runs_vec,
@@ -451,33 +448,29 @@ fn schedule_and_run_extension(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 fn execute_dp_and_xdrop(
-    seq_x: &[u8],
-    seq_y: &[u8],
-    seq_y_rc: &[u8],
+    ctx: &AlignCtx<'_>,
     effective_min_bits: f64,
     hmm_params: &HmmParams,
-    cfg: &AlignConfig,
     dp_jobs: &[(bool, usize, usize, usize, usize)],
     xdrop_jobs: &[(bool, usize, usize, usize, usize, bool)],
     runs_vec: &mut Vec<AlignedRun>,
 ) -> usize {
     type XDropResult = (bool, bool, Vec<(usize, usize)>);
-    let pv_len = seq_y.len();
+    let pv_len = ctx.seq_y.len();
     let dp_results: Vec<(bool, usize, usize, GapResult)> = dp_jobs
         .par_iter()
         .map_init(
             dp::DpScratch::default,
             |scratch, &(is_rc, x0, x1, y0, y1)| {
-                let y_work = if is_rc { seq_y_rc } else { seq_y };
+                let y_work = if is_rc { ctx.seq_y_rc } else { ctx.seq_y };
                 let res = dp::banded_mdl_gap_with_scratch(
-                    &seq_x[x0..x1],
+                    &ctx.seq_x[x0..x1],
                     &y_work[y0..y1],
-                    cfg.band_w,
+                    ctx.cfg.band_w,
                     effective_min_bits,
                     hmm_params,
-                    cfg.min_post_prob,
+                    ctx.cfg.min_post_prob,
                     scratch,
                 );
                 (is_rc, x0, y0, res)
@@ -506,14 +499,14 @@ fn execute_dp_and_xdrop(
         .map_init(
             xdrop::XDropScratch::default,
             |scratch, &(is_rc, x0, x1, y0, y1, rev)| {
-                let y_work = if is_rc { seq_y_rc } else { seq_y };
+                let y_work = if is_rc { ctx.seq_y_rc } else { ctx.seq_y };
                 let pairs = xdrop::mdl_xdrop_extend_with_scratch(
-                    &seq_x[x0..x1],
+                    &ctx.seq_x[x0..x1],
                     &y_work[y0..y1],
                     x0,
                     y0,
                     rev,
-                    cfg.max_ext,
+                    ctx.cfg.max_ext,
                     XDROP_BAND_W,
                     hmm_params,
                     scratch,
@@ -543,14 +536,14 @@ fn schedule_strand_lcb_jobs(
     rescued_inter: &[Vec<(usize, usize)>],
     anchor_spans: &std::collections::HashMap<(usize, usize), usize>,
     default_span: usize,
-    max_gap_bp: usize,
-    max_local_rescue_bp: usize,
     max_ext: usize,
     effective_min_bits: f64,
     runs_vec: &mut Vec<AlignedRun>,
     dp_jobs: &mut Vec<(bool, usize, usize, usize, usize)>,
     xdrop_jobs: &mut Vec<(bool, usize, usize, usize, usize, bool)>,
 ) -> Result<usize, AlignError> {
+    let max_gap_bp = MAX_GAP_BP;
+    let max_local_rescue_bp = MAX_LOCAL_RESCUE_BP;
     let pv_len = y_work.len();
     let span_for = |pt: (usize, usize)| anchor_spans.get(&pt).copied().unwrap_or(default_span);
     let mut macro_bubbles = 0usize;
@@ -738,17 +731,7 @@ fn lcb_passes_mdl_gate<F: Fn((usize, usize)) -> usize>(
 }
 
 /// Estimate divergence-adaptive Pair-HMM parameters from LCB anchors with Bayesian shrinkage.
-#[allow(clippy::too_many_arguments)]
-fn estimate_hmm_params(
-    seq_x: &[u8],
-    seq_y: &[u8],
-    seq_y_rc: &[u8],
-    lcbs_fwd: &[Vec<(usize, usize)>],
-    lcbs_rc: &[Vec<(usize, usize)>],
-    spans_fwd: &std::collections::HashMap<(usize, usize), usize>,
-    spans_rc: &std::collections::HashMap<(usize, usize), usize>,
-    default_span: usize,
-) -> HmmParams {
+fn estimate_hmm_params(ctx: &AlignCtx<'_>) -> HmmParams {
     let mut matches = 0usize;
     let mut total_bases = 0usize;
     let mut indel_events = 0usize;
@@ -756,15 +739,15 @@ fn estimate_hmm_params(
     let mut total_span = 0usize;
 
     'outer: for (y_work, lcbs, anchor_spans) in [
-        (seq_y, lcbs_fwd, spans_fwd),
-        (seq_y_rc, lcbs_rc, spans_rc),
+        (ctx.seq_y, ctx.lcbs_fwd, &*ctx.spans_fwd),
+        (ctx.seq_y_rc, ctx.lcbs_rc, &*ctx.spans_rc),
     ] {
         for lcb in lcbs {
             for &(ax, ay) in lcb.iter().take(64) {
-                let span = anchor_spans.get(&(ax, ay)).copied().unwrap_or(default_span);
-                if ax + span <= seq_x.len() && ay + span <= y_work.len() {
+                let span = anchor_spans.get(&(ax, ay)).copied().unwrap_or(ctx.span);
+                if ax + span <= ctx.seq_x.len() && ay + span <= y_work.len() {
                     for off in 0..span {
-                        let bx = seq_x[ax + off].to_ascii_uppercase();
+                        let bx = ctx.seq_x[ax + off].to_ascii_uppercase();
                         let by = y_work[ay + off].to_ascii_uppercase();
                         if matches!(bx, b'A' | b'C' | b'G' | b'T')
                             && matches!(by, b'A' | b'C' | b'G' | b'T')
@@ -852,7 +835,24 @@ mod tests {
         ));
 
         let empty = std::collections::HashMap::new();
-        let params = estimate_hmm_params(x, y, y, &[lcb], &[], &empty, &empty, 4);
+        let mut spans_fwd = empty.clone();
+        let mut spans_rc = empty;
+        let cfg = AlignConfig::default();
+        let lcbs_fwd = vec![lcb];
+        let ctx = AlignCtx {
+            seq_x: x,
+            seq_y: y,
+            seq_y_rc: y,
+            lcbs_fwd: &lcbs_fwd,
+            lcbs_rc: &[],
+            spans_fwd: &mut spans_fwd,
+            spans_rc: &mut spans_rc,
+            span: 4,
+            effective_min_bits: 8.0,
+            lcb_gate_bits: 8.0,
+            cfg: &cfg,
+        };
+        let params = estimate_hmm_params(&ctx);
         assert!((0.60..=0.72).contains(&params.identity_prior));
     }
 }

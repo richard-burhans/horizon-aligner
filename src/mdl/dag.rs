@@ -226,7 +226,7 @@ pub fn align_seq_to_dag_mdl(
             return GraphAlignment {
                 path_nodes: Vec::new(),
                 kept_pairs: Vec::new(),
-                bubbles: 1,
+                bubbles: usize::from(m >= 6),
                 score_bits: 0.0,
             };
         };
@@ -238,7 +238,7 @@ pub fn align_seq_to_dag_mdl(
             return GraphAlignment {
                 path_nodes: Vec::new(),
                 kept_pairs: Vec::new(),
-                bubbles: 1,
+                bubbles: usize::from(m >= 6),
                 score_bits: 0.0,
             };
         };
@@ -321,7 +321,7 @@ pub fn align_seq_to_dag_mdl(
         return GraphAlignment {
             path_nodes: Vec::new(),
             kept_pairs: Vec::new(),
-            bubbles: 1,
+            bubbles: usize::from(m >= 6),
             score_bits,
         };
     }
@@ -341,7 +341,7 @@ pub fn align_seq_to_dag_mdl(
         return GraphAlignment {
             path_nodes: Vec::new(),
             kept_pairs: Vec::new(),
-            bubbles: 1,
+            bubbles: usize::from(m >= 6),
             score_bits,
         };
     };
@@ -397,7 +397,7 @@ pub fn align_seq_to_dag_mdl(
                 } else {
                     NEG_INF
                 };
-                let allow_iy = i > 0 || nodes[u].preds.is_empty();
+                let allow_iy = i > 0 || unique_preds[u].is_empty();
                 let iy_open = if allow_iy && j < m {
                     biy[u].get(i, j + 1) + go
                 } else {
@@ -496,7 +496,7 @@ pub fn align_seq_to_dag_mdl(
         return GraphAlignment {
             path_nodes: Vec::new(),
             kept_pairs: Vec::new(),
-            bubbles: 1,
+            bubbles: usize::from(m >= 6),
             score_bits,
         };
     }

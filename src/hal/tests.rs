@@ -625,7 +625,7 @@ fn hdf5_dataspace_v2_and_filter_pipeline_v1_chunked_dataset() {
     // Build a minimal v0 dataset at 0x20 using:
     // - Dataspace v2 (0x0001): ndims=1, flags=0, type=1, dim=4
     // - DataLayout v3 chunked (0x0008): chunk_dim=4, btree_addr=0x100
-    // - FilterPipeline v1 (0x000b): deflate (id=1) + custom filter (id=256)
+    // - FilterPipeline v1 (0x000b): deflate (id=1)
     let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
     encoder.write_all(b"TGCA").expect("compress");
     let compressed = encoder.finish().expect("finish zlib");
@@ -817,4 +817,117 @@ fn hal_to_maf_handles_cyclic_next_paralog_without_duplicate_rows() {
     let maf = hal.to_maf_for_genome("hg38").expect("maf");
     let q1_rows = maf.lines().filter(|l| l.starts_with("s q1 ")).count();
     assert_eq!(q1_rows, 2, "cyclic next_paralog must emit each paralog once:\n{maf}");
+}
+
+fn read_hal_array_bytes(bytes: &[u8], genome: &str, dataset: &str) -> Vec<u8> {
+    let sb = read_hdf5_superblock(bytes).expect("superblock");
+    let root_addr = sb.root_group_addr.expect("root addr");
+    let mut cursor = std::io::Cursor::new(bytes);
+    let root_entries = read_hdf5_v0_group_entries_seek(&mut cursor, root_addr)
+        .expect("root entries")
+        .expect("some entries");
+    let grp = root_entries
+        .iter()
+        .find(|e| e.name == genome)
+        .expect("genome group");
+    let ds_entries = read_hdf5_v0_group_entries_seek(&mut cursor, grp.object_header_addr)
+        .expect("genome ds")
+        .expect("some ds");
+    let ds_obj = ds_entries
+        .iter()
+        .find(|e| e.name == dataset)
+        .expect("dataset");
+    read_hdf5_v0_dataset_bytes_seek(&mut cursor, ds_obj.object_header_addr)
+        .expect("ds read")
+        .expect("ds bytes")
+}
+
+#[test]
+fn non_star_unsorted_segments_remap_cross_references_on_hdf5_export() {
+    let hal = HalAlignment {
+        tree_newick: "(leaf1,leaf2)root;".to_owned(),
+        genomes: vec![
+            HalGenome {
+                name: "root".to_owned(),
+                dna: b"ACGTACGT".to_vec(),
+                sequences: vec![HalSequence {
+                    name: "chr1".to_owned(),
+                    offset: 0,
+                    length: 8,
+                }],
+                top_segments: Vec::new(),
+                bottom_segments: vec![
+                    HalBottomSegment {
+                        start: 4,
+                        length: 4,
+                        child_tops: vec![Some((1, false)), None],
+                    },
+                    HalBottomSegment {
+                        start: 0,
+                        length: 4,
+                        child_tops: vec![Some((0, false)), None],
+                    },
+                ],
+                parent: None,
+                children: vec![1, 2],
+            },
+            HalGenome {
+                name: "leaf1".to_owned(),
+                dna: b"ACGTACGT".to_vec(),
+                sequences: vec![HalSequence {
+                    name: "chr1".to_owned(),
+                    offset: 0,
+                    length: 8,
+                }],
+                top_segments: vec![
+                    HalTopSegment {
+                        start: 4,
+                        length: 4,
+                        parent_bottom_idx: Some(1),
+                        parent_reversed: false,
+                        next_paralog: None,
+                    },
+                    HalTopSegment {
+                        start: 0,
+                        length: 4,
+                        parent_bottom_idx: Some(0),
+                        parent_reversed: false,
+                        next_paralog: None,
+                    },
+                ],
+                bottom_segments: Vec::new(),
+                parent: Some(0),
+                children: Vec::new(),
+            },
+            HalGenome {
+                name: "leaf2".to_owned(),
+                dna: b"AAAA".to_vec(),
+                sequences: vec![HalSequence {
+                    name: "chr1".to_owned(),
+                    offset: 0,
+                    length: 4,
+                }],
+                top_segments: vec![HalTopSegment {
+                    start: 0,
+                    length: 4,
+                    parent_bottom_idx: None,
+                    parent_reversed: false,
+                    next_paralog: None,
+                }],
+                bottom_segments: Vec::new(),
+                parent: Some(0),
+                children: Vec::new(),
+            },
+        ],
+    };
+    let bytes = hal.to_hdf5_bytes();
+    let bots = decode_hal_bottom_array(&read_hal_array_bytes(&bytes, "root", "BOTTOM_ARRAY"), 2);
+    let tops = decode_hal_top_array(&read_hal_array_bytes(&bytes, "leaf1", "TOP_ARRAY"));
+
+    // After sorting by start: root bot[0] (start=0) was old bot[1] -> leaf1 old top[0] (start=4) -> new top[1].
+    // And leaf1 top[0] (start=0) was old top[1] -> root old bot[0] (start=4) -> new bot[1].
+    assert_eq!(bots[0].0, 0);
+    assert_eq!(bots[0].3[0], (1, false));
+    assert_eq!(tops[0].0, 0);
+    assert_eq!(tops[0].3, 1);
 }

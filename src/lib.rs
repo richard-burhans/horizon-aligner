@@ -8,16 +8,18 @@ pub mod gfa;
 pub mod hal;
 pub mod mdl;
 pub mod merge;
+pub mod netting;
 pub mod seeding;
 
 pub use bocpd::bocpd_gc_profile;
 pub use formats::{
     MafRow, format_gfa_blocks, format_gfa_blocks_runs, format_gfa_paralog_tags,
     format_gfa_summary, format_gfa_summary_runs, format_maf_blocks, format_maf_blocks_runs,
-    matches_sample_prefix, net_one_to_one_runs, parse_maf_s_line, parse_two_row_maf_blocks,
-    read_fasta_contigs, read_vm_hwm_kb, resolve_alignment_duplications,
-    resolve_alignment_duplications_runs, resolve_lcb_duplications, strip_sample_prefix,
+    matches_sample_prefix, parse_maf_s_line, parse_two_row_maf_blocks, read_fasta_contigs,
+    read_vm_hwm_kb, resolve_alignment_duplications_runs, resolve_lcb_duplications,
+    strip_sample_prefix,
 };
+pub use netting::net_one_to_one_runs;
 pub use mdl::{
     AlignConfig, AlignedRun, ContigAlignment, DagSeedIndex, GapResult, GraphAlignment, GraphNode,
     HmmParams, RunAlignment, align_contig_pair, align_contig_pair_indexed,
