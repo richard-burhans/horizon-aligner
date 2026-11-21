@@ -16,9 +16,9 @@ def main() -> None:
     parser.add_argument("--paf", type=Path, default=Path("/tmp/chr6_fastga.paf"))
     parser.add_argument("--query-fa", type=Path, default=Path("/tmp/hprc_grch38_chr6.fa"))
     parser.add_argument("--target-fa", type=Path, default=Path("/tmp/hprc_chm13_chr6.fa"))
-    parser.add_argument("--truth", type=Path, default=Path("/tmp/hprc_chr6_truth_segments.tsv"))
     parser.add_argument("--locus-fa", type=Path, default=None, help="Optional multi-FASTA for horizon_locus")
     args = parser.parse_args()
+    truth_tsv = Path("/tmp/hprc_chr6_truth_segments.tsv")
 
     cargo = os.environ.get("CARGO", "/home/agent/.cargo/bin/cargo")
     subprocess.run(
@@ -39,9 +39,9 @@ def main() -> None:
                 check=True,
             )
             print(f"horizon_filter --net: {time.perf_counter() - t0:.2f}s")
-            if args.truth.exists():
+            if truth_tsv.exists():
                 subprocess.run(
-                    [sys.executable, str(scorer), "--paf", str(net_paf), "--truth", str(args.truth), "--all-records"],
+                    [sys.executable, str(scorer), "--paf", str(net_paf), "--all-records"],
                     check=True,
                 )
 
@@ -60,9 +60,9 @@ def main() -> None:
                     check=True,
                 )
                 print(f"horizon_filter --net (SDUST+MDL): {time.perf_counter() - t0:.2f}s")
-                if args.truth.exists():
+                if truth_tsv.exists():
                     subprocess.run(
-                        [sys.executable, str(scorer), "--paf", str(mdl_paf), "--truth", str(args.truth), "--all-records"],
+                        [sys.executable, str(scorer), "--paf", str(mdl_paf), "--all-records"],
                         check=True,
                     )
 

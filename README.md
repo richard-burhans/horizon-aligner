@@ -5,7 +5,7 @@ A pure-Rust **information-theoretic genome alignment and pangenome suite** combi
 ## Key Capabilities
 
 - **Pairwise & DAG/POA MDL alignment (`horizon_wga`):** Canonical `fwd.min(rc)` spaced-seed (`11-of-15`) indexing in `FlatSeedIndex` (`12 bytes/entry` + 16-bit prefix buckets) with SDUST repeat masking, Rayon-parallel `LASTZ12`/`LASTZ11` transition seeding, `w=10`/`w=9`, 1-bit `R/Y`, and 6-frame `AA5` fallback seeding, driving flat `BandLayout` Pair-HMM forward-backward alignment (`src/mdl/dp.rs`) and seeded DAG/POA alignment (`horizon_wga --graph`, `src/mdl/dag.rs`).
-- **Calibrated epistemic abstention (Horizon Bubbles):** Intervals falling below the search-space-scaled MDL floor (`0.55 log2(N*M)` + fixed `10.0`-bit conformal floor) or `min_post_prob` abstain explicitly as `# HB:Z:` / `HB:i:1` Horizon Bubbles rather than forcing spurious base pairs.
+- **Calibrated epistemic abstention (Horizon Bubbles):** Intervals falling below the online GC-conditioned Conformal Risk Control floor (`calibrate_null_crc_for_gc`, floored by `max(10.0, 0.55 log2(N*M))` bits) or `min_post_prob` abstain explicitly as `# HB:Z:` / `HB:i:1` Horizon Bubbles rather than forcing spurious base pairs.
 - **Streaming `12 GB+` GFA & PAF pangenome toolkit (`src/gfa/mod.rs`, `src/paf.rs`, `src/io_util.rs`, `src/coord.rs`):**
   - Transparent plain, `.gz`/`.bgz`, `.zst`/`.zstd`, and `stdin`/`stdout` streaming across GFA, PAF, FASTA, and MAF (`src/io_util.rs`).
   - `horizon_gfa`: Single-pass counter-only BGZF/gzip/zstd `stats` (`196.93 s`, `96.9 MB` RSS across `81.4M` segments / `3.29 Gbp`) and two-pass chromosome `extract`.

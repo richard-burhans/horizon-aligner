@@ -1,0 +1,647 @@
+{
+  "round": 7,
+  "draft": "5cb83fb",
+  "subject": "Round 7: Verification and Discharge of Open Items (chr6 HPRC PAF Scoring, External Baselines, Progressive HAL, Bibliography, and Formatting)",
+  "date": "2026-11-21",
+  "claims": [
+    {
+      "id": "C1",
+      "kind": "capability",
+      "carries": [
+        "R6-FMT",
+        "R1-IMPL"
+      ],
+      "summary": "Suite code formatting, clippy cleanliness, unified 11-subcommand horizon dispatcher (including filter and locus), aa5_keys DAG translated fallback test, horizon_clean 10M L-overlap W-split test, and 122 active Rust unit tests (88 lib + 34 bin + 1 HORIZON_TEST_HAL verified against halTest.hal) pass on 5cb83fb.",
+      "source": {
+        "file": "manuscript/horizon_paper.md",
+        "quote": "All `122` active Rust unit tests (`88` library + `34` binary, plus `1` `#[ignore]`d `.hal` integration test verified against an external `55 KB` `tools-iuc` `halTest.hal` via `HORIZON_TEST_HAL`; `123` total) pass on `HEAD` with zero `clippy` warnings."
+      }
+    },
+    {
+      "id": "C2",
+      "kind": "empirical",
+      "carries": [
+        "R2-RESOLVE-LIFT",
+        "R2-INDEX-RAM"
+      ],
+      "summary": "horizon_filter --net achieves 99.12% exact recall and 99.65% conditioned / 99.32% unconditional exact precision against 2D HPRC chr6 1-to-1 truth (565 seq-free / 553 SDUST+MDL records), and tracked scripts benchmark 10k-200k HPRC subgraphs (horizon vs gfatools/odgi/vg) and 5 Mbp chr6 WGA (horizon_wga vs FastGA/minimap2; LASTZ timed out at 15s).",
+      "source": {
+        "file": "docs/BENCHMARK_RESULTS.md",
+        "quote": "`553` post-netting records (`436` pre-netting filtered by MDL; removes `12` p-arm `< 46 Mbp` records outside q-arm `1-to-1` truth while preserving `100%` of exact `109,119,624` bp coordinates: **99.12%** exact recall, **99.65%** cond. / **99.32%** uncond. exact precision; `SweepGA`/`KegAlign` unbenchmarked on host)"
+      }
+    },
+    {
+      "id": "C3",
+      "kind": "empirical",
+      "carries": [
+        "R1-HMM"
+      ],
+      "summary": "Dynamic finite-sample Conformal Risk Control (n_cal = 15, alpha = 0.07) and adaptive gap-bit penalties (estimate_hmm_params) are wired in src/mdl/mod.rs, and the multi-seed random-GC null sweep (18%/30%/45% GC, 10 kb) yields median=0 false-positive pairs across 6 seeds on 5cb83fb.",
+      "source": {
+        "file": "manuscript/horizon_paper.md",
+        "quote": "Using online GC-conditioned Conformal Risk Control at risk level `\u03b1 = 0.07` (`calibrate_null_crc_for_gc` over `n_cal = 15` synthetic `64`-bp decoy windows in `src/mdl/mod.rs`; Angelopoulos et al. 2024), Horizon enforces a finite-sample bit-savings floor floored by `max(10.0, 0.55 * log2(N * M))` bits (`min_delta_bits = 10.0`, while `horizon_filter` applies the `0.55 * log2(N * M)` / `10.0`-bit floor without decoy calibration) and a minimum column posterior floor (`0.15`)."
+      }
+    },
+    {
+      "id": "C4",
+      "kind": "empirical",
+      "carries": [
+        "R2-HMM-XDROP"
+      ],
+      "summary": "horizon_guide --progressive --hal emits a progressive ancestral-node multi-contig HDF5 v0 HAL (from_multi_contig_progressive_blocks) including sister/consensus-rescued blocks, and verify_merge_guide_maf.py verifies 5-mammal UCSC chrM.maf recall/precision (95.5%/99.8% panTro4, 89.2%/97.1% rheMac3, 71.8%/97.5% mm10, 74.1%/98.2% canFam3).",
+      "source": {
+        "file": "manuscript/horizon_paper.md",
+        "quote": "and on 5-mammal UCSC `chrM.maf` (`verify_merge_guide_maf.py`, `0.258 s`) emitted a progressive ancestral-node HDF5 `v0` HAL (`((((hg38,panTro4)Anc0,rheMac3)Anc1,mm10)Anc2,canFam3)Anc3;`, `2,103` bottom segments; `Anc0..Anc3` clone `hg38` on a CLI-order pectinate tree) with `95.5%/99.8%` (`panTro4`), `89.2%/97.1%` (`rheMac3`), `71.8%/97.5%` (`mm10`), and `74.1%/98.2%` (`canFam3`) pairwise `hg38`-projected MAF recall/precision."
+      }
+    },
+    {
+      "id": "C5",
+      "kind": "provenance",
+      "carries": [
+        "R5-BIB"
+      ],
+      "summary": "All 9 held-catalog references plus Jukes & Cantor (1969) are synced into manuscript/references.bib and cited in manuscript/horizon_paper.md, with manuscript/horizon_paper.pdf rebuilt cleanly.",
+      "source": {
+        "file": "manuscript/horizon_paper.md",
+        "quote": "- **Wittler R** (2023). General encoding of canonical *k*-mers. *Peer Community Journal*, 3:e87."
+      }
+    }
+  ],
+  "lenses": [
+    "correctness",
+    "sampling",
+    "statistics",
+    "provenance",
+    "inference",
+    "prior-art",
+    "reproduction"
+  ],
+  "attacked": [
+    {
+      "path": "README.md",
+      "snapshot": "ATTACKED-README.md",
+      "read": "working tree",
+      "pinned": true,
+      "sha256": "3f32191f3084d6904c8ef57bdcafd4d9e5e4ecfa39d0f7e8b3f2e1e764ac212b"
+    },
+    {
+      "path": "ARCHITECTURE.md",
+      "snapshot": "ATTACKED-ARCHITECTURE.md",
+      "read": "working tree",
+      "pinned": true,
+      "sha256": "0ed11a8964a19bd7d813d348bf7bd8b711b6166d617907d70029024de3e26260"
+    },
+    {
+      "path": "docs/BENCHMARK_RESULTS.md",
+      "snapshot": "ATTACKED-BENCHMARK_RESULTS.md",
+      "read": "working tree",
+      "pinned": true,
+      "sha256": "58be2b38f9de8d85ac5205adda735d3bd2c99278bc9826510a9d1d3fbe7b0117"
+    },
+    {
+      "path": "docs/VGP_INTEGRATION_PLAN.md",
+      "snapshot": "ATTACKED-VGP_INTEGRATION_PLAN.md",
+      "read": "working tree",
+      "pinned": true,
+      "sha256": "1dd3fcd33cccfcf54af50bf80642a16e331b02bb1257be93827bf5b8462805ce"
+    },
+    {
+      "path": "manuscript/horizon_paper.md",
+      "snapshot": "ATTACKED-horizon_paper.md",
+      "read": "working tree",
+      "pinned": true,
+      "sha256": "e10bd964d003fc415166a7fb6ef3aa35d450edd10164e0700d354e4af903f63e"
+    }
+  ],
+  "code": {
+    "horizon-aligner": "5cb83fb6a1346a8193f9e4048055638d0a422b0a"
+  },
+  "drift_reviewed": [
+    {
+      "path": "docs/BENCHMARK_RESULTS.md",
+      "sha256": "0277a9f3f01edb5dc62352334084111fac404e0db0efd2e7ff9382eb3fc2e5b2",
+      "note": "Reviewed Round 7 adjudicated free repairs (progressive HAL 2,103 bottom segs, chr6 pre/post-netting p-arm clarification, SweepGA/KegAlign unbenchmarked)."
+    },
+    {
+      "path": "manuscript/horizon_paper.md",
+      "sha256": "5287e0f322adc72e2b1eb75697f4db997ceb5421421adc2669f74722f8c195d3",
+      "note": "Reviewed Round 7 adjudicated free repairs (online CRC wording, progressive HAL 2,103 bottom segs + Anc0..Anc3 cloning, chr6 p-arm clarification, #[ignore] halTest.hal)."
+    },
+    {
+      "path": "README.md",
+      "sha256": "e0cbf4ff957c5ac8e3ef0ff0d4640204b63c091e252606acee83128bf3ae186b",
+      "note": "Reviewed Round 7 G1/C3 online CRC wording fix."
+    },
+    {
+      "path": "manuscript/references.bib",
+      "sha256": "8c42b56837984a42a523908035267c984f250b3d379d497396ddd4a1c0cffe31",
+      "note": "Reviewed Round 7 L6-F4 3 catalog DOIs added."
+    },
+    {
+      "path": "scripts/benchmarks/bench_vgp_filter_locus.py",
+      "sha256": "3ff381a8e2c651b358e9e9e6f4fea5dd0674e33e39c82c60fa616fda1303d09b",
+      "note": "Reviewed Round 7 L4-F2/L7-F2 --truth removal; verified exit 0 on /tmp/chr6_fastga.paf."
+    }
+  ],
+  "sealed": {
+    "attack-L1-correctness.md": "a2ee89b3a59607c32d38a4ee62126b6ae31d80887be956a2af669c9f428c0c39",
+    "attack-L2-sampling.md": "e73d057ce8ba912f6da3afa9c1e32757b826e7e1fa907200d5b7eb7f76a533bf",
+    "attack-L3-statistics.md": "3f3b7ac96ac3f2d8a191e4bcc553fd07ada1a3ff6110981b07feedc00a2cd15e",
+    "attack-L4-provenance.md": "89bba6f7b1a82993c5b88bd0490e805777256cb2a085d90f421566392f96c733",
+    "attack-L5-inference.md": "cf804475ca8a54fbe6bb0d3853778853c6d56f2a7066f29fe462f80bfea080f1",
+    "attack-L6-prior-art.md": "3a9befed1fb9a34458d8c1292c2663b93aab4c2dfd1005b473623d29118c120c",
+    "attack-L7-reproduction.md": "9ce90679b8a36fabbb9a3412c3984ba3efef4a736cca101d277b32a4d503d21c"
+  },
+  "aborted": [],
+  "unbriefed": [],
+  "lens_drops": {},
+  "briefs_required": true,
+  "runner_is_author": true,
+  "claim_list_author": "runner",
+  "human_claim": "Verify all discharged items (4fd2240, 5cb83fb) and remaining unverified claims in manuscript/horizon_paper.md and docs/BENCHMARK_RESULTS.md",
+  "carried": [
+    {
+      "from": 1,
+      "kind": "open",
+      "item": "{\"id\": \"R1-IMPL\", \"summary\": \"Implement and benchmark horizon_clean, horizon_resolve, horizon_lift, and horizon_wga --graph on HPRC v1.0/v1.1 (GRCh38 vs CHM13) and HLA/centromere loci.\"}",
+      "id": "R1-IMPL"
+    },
+    {
+      "from": 1,
+      "kind": "open",
+      "item": "{\"id\": \"R1-HMM\", \"summary\": \"Normalize HMM transition weights in src/mdl/dp.rs:105-167 (currently summing >1.0 from M and Ix/Iy) and derive/calibrate gap-bit penalties.\"}",
+      "id": "R1-HMM"
+    },
+    {
+      "from": 2,
+      "kind": "open",
+      "item": "{\"id\": \"R2-HMM-XDROP\", \"summary\": \"Wire HmmParams and normalized transitions into mdl_xdrop_extend (src/mdl/dp.rs) and horizon_wga --graph, fix N-base handling in bocpd_gc_profile, and re-run all WGA benchmarks on a single pinned commit (partially carries R1-HMM).\"}",
+      "id": "R2-HMM-XDROP"
+    },
+    {
+      "from": 2,
+      "kind": "open",
+      "item": "{\"id\": \"R2-RESOLVE-LIFT\", \"summary\": \"Update W-line start/end coordinates and L links in horizon_resolve --collapse-dups, add horizon_clean sup>0 severing + S-tag preservation, and add unique-base coverage + head-to-head pangenome baselines (minimap2/odgi/vg) and unit tests for the 4 untested binaries.\"}",
+      "id": "R2-RESOLVE-LIFT"
+    },
+    {
+      "from": 2,
+      "kind": "open",
+      "item": "{\"id\": \"R2-INDEX-RAM\", \"summary\": \"Replace ContigIndex per-position HashMap<u64, Vec<usize>> with minimizer/flat-sorted k-mer indexing to bring full >100 Mbp chromosome alignment well below 26.5 GB RSS.\"}",
+      "id": "R2-INDEX-RAM"
+    },
+    {
+      "from": 3,
+      "kind": "open",
+      "item": "{\"id\": \"R1-IMPL\", \"summary\": \"Implement and benchmark horizon_clean, horizon_resolve, horizon_lift, and horizon_wga --graph on HPRC v1.0/v1.1 (GRCh38 vs CHM13) and HLA/centromere loci (4 of 5 C6 benchmarks un-reproduced on 488b020).\"}",
+      "id": "R1-IMPL"
+    },
+    {
+      "from": 3,
+      "kind": "open",
+      "item": "{\"id\": \"R1-HMM\", \"summary\": \"Normalize HMM transition weights in src/mdl/dp.rs and derive/calibrate gap-bit penalties (estimate_dag_hmm_params leaves gap_open_bits/gap_extend_bits at defaults).\"}",
+      "id": "R1-HMM"
+    },
+    {
+      "from": 3,
+      "kind": "open",
+      "item": "{\"id\": \"R2-HMM-XDROP\", \"summary\": \"Re-run all 5 stale pre-488b020 WGA benchmark rows and test/calibrate estimate_dag_hmm_params.\"}",
+      "id": "R2-HMM-XDROP"
+    },
+    {
+      "from": 3,
+      "kind": "open",
+      "item": "{\"id\": \"R2-RESOLVE-LIFT\", \"summary\": \"Rewrite L links alongside W coordinates in horizon_resolve --collapse-dups, fix horizon_clean real-data no-op and two-pass stdin, and add minimap2/odgi/vg/LASTZ head-to-head baselines.\"}",
+      "id": "R2-RESOLVE-LIFT"
+    },
+    {
+      "from": 3,
+      "kind": "open",
+      "item": "{\"id\": \"R2-INDEX-RAM\", \"summary\": \"Complete full >100 Mbp chromosome alignment (e.g. full chr6) and isolate FlatSeedIndex RSS ablation.\"}",
+      "id": "R2-INDEX-RAM"
+    },
+    {
+      "from": 4,
+      "kind": "open",
+      "item": "{\"id\": \"R1-IMPL\", \"summary\": \"Re-benchmark full chr6 and horizon_gfa extract/horizon_lift on HEAD (33bede8) with accuracy verification, and add real sequence-bearing GFA evaluations of horizon_clean, horizon_resolve, and horizon_wga --graph.\"}",
+      "id": "R1-IMPL"
+    },
+    {
+      "from": 4,
+      "kind": "open",
+      "item": "{\"id\": \"R1-HMM\", \"summary\": \"Calibrate/derive gap-bit penalties and CRC sample size (n_cal = 15) beyond fixed defaults.\"}",
+      "id": "R1-HMM"
+    },
+    {
+      "from": 4,
+      "kind": "open",
+      "item": "{\"id\": \"R2-HMM-XDROP\", \"summary\": \"Run multi-species horizon_merge and horizon_guide --progressive --hal benchmarks with verified provenance.\"}",
+      "id": "R2-HMM-XDROP"
+    },
+    {
+      "from": 4,
+      "kind": "open",
+      "item": "{\"id\": \"R2-RESOLVE-LIFT\", \"summary\": \"Add head-to-head external baselines (minimap2, FastGA, LASTZ, odgi, vg, gfatools) on identical hardware and inputs.\"}",
+      "id": "R2-RESOLVE-LIFT"
+    },
+    {
+      "from": 4,
+      "kind": "open",
+      "item": "{\"id\": \"R2-INDEX-RAM\", \"summary\": \"Re-benchmark full GRCh38.chr6 x CHM13.chr6 on HEAD (33bede8) with accuracy parity verification (53130b8 achieved 451.35s / 10.27 GB RSS).\"}",
+      "id": "R2-INDEX-RAM"
+    },
+    {
+      "from": 4,
+      "kind": "unchallenged",
+      "item": "{\"claim\": \"C1\", \"lens\": \"statistics\", \"reason\": \"no statistical content\"}",
+      "id": "3-hfcb834"
+    },
+    {
+      "from": 5,
+      "kind": "open",
+      "item": "{\"id\": \"R1-IMPL\", \"summary\": \"Track chr6 HPRC/minimap2 and 10k-subgraph/vg scripts in scripts/benchmarks/, and audit/reproduce src/mdl/dag.rs (horizon_wga --graph).\"}",
+      "id": "R1-IMPL"
+    },
+    {
+      "from": 5,
+      "kind": "open",
+      "item": "{\"id\": \"R1-HMM\", \"summary\": \"Run a tracked multi-seed random-GC (18%, 30%, 45%) false-positive sweep and implement/calibrate dynamic n_cal=15 CRC & gap-bit penalties beyond fixed defaults.\"}",
+      "id": "R1-HMM"
+    },
+    {
+      "from": 5,
+      "kind": "open",
+      "item": "{\"id\": \"R2-HMM-XDROP\", \"summary\": \"Implement multi-contig progressive .hal emission in horizon_guide and audit src/hal/hdf5_read.rs / decode_hal_* against a real external .hal fixture (un-ignoring the .hal test).\"}",
+      "id": "R2-HMM-XDROP"
+    },
+    {
+      "from": 5,
+      "kind": "open",
+      "item": "{\"id\": \"R2-RESOLVE-LIFT\", \"summary\": \"Add external FastGA, LASTZ, KegAlign, odgi, and gfatools baselines on identical hardware, plus horizon_merge/horizon_guide MAF accuracy verification.\"}",
+      "id": "R2-RESOLVE-LIFT"
+    },
+    {
+      "from": 5,
+      "kind": "open",
+      "item": "{\"id\": \"R5-BIB\", \"summary\": \"Sync all 15 new horizon_paper.md references into manuscript/references.bib and remove the 2 orphan .bib entries.\"}",
+      "id": "R5-BIB"
+    },
+    {
+      "from": 5,
+      "kind": "open",
+      "item": "{\"id\": \"R2-INDEX-RAM\", \"summary\": \"Track full chr6 HPRC/minimap2 benchmark & scoring scripts in scripts/benchmarks/ (8cd5db0/2896229 numbers verified, but extraction/comparison scripts currently live in /tmp/).\"}",
+      "id": "R2-INDEX-RAM"
+    },
+    {
+      "from": 6,
+      "kind": "open",
+      "item": "{\"id\": \"R1-IMPL\", \"summary\": \"Track chr6 HPRC/minimap2, 10k-subgraph/vg, and VGP horizon_filter/horizon_locus scripts & inputs in scripts/benchmarks/ and docs/BENCHMARK_DATASETS.md, and verify horizon_wga --graph aa5_keys and horizon_clean non-0M L-overlap W-splits.\"}",
+      "id": "R1-IMPL"
+    },
+    {
+      "from": 6,
+      "kind": "open",
+      "item": "{\"id\": \"R1-HMM\", \"summary\": \"Run a tracked multi-seed random-GC (18%, 30%, 45%) false-positive sweep and implement/calibrate dynamic n_cal=15 CRC & gap-bit penalties beyond fixed defaults.\"}",
+      "id": "R1-HMM"
+    },
+    {
+      "from": 6,
+      "kind": "open",
+      "item": "{\"id\": \"R2-HMM-XDROP\", \"summary\": \"Implement multi-contig progressive .hal emission in horizon_guide and audit src/hal/hdf5_read.rs / decode_hal_* against a real external .hal fixture (un-ignoring the .hal test).\"}",
+      "id": "R2-HMM-XDROP"
+    },
+    {
+      "from": 6,
+      "kind": "open",
+      "item": "{\"id\": \"R2-RESOLVE-LIFT\", \"summary\": \"Install numpy to re-score 42700e1 horizon_filter 565/553 chr6 outputs against 2D HPRC truth, add external SweepGA/impg/FastGA/LASTZ/KegAlign/odgi/gfatools baselines, and wire horizon_filter/horizon_locus into the horizon dispatcher.\"}",
+      "id": "R2-RESOLVE-LIFT"
+    },
+    {
+      "from": 6,
+      "kind": "open",
+      "item": "{\"id\": \"R5-BIB\", \"summary\": \"Add held-catalog citations (li_2026_finding, frith_2011_tantan, garrison_2024_building, andreace_2023_comparing, romain_2026_inversions-pangenome-graphs, kazemi_2022_nthash2, marcais_2024_knonical, wittler_2023_canonical-kmer-encoding, chen_2010_comparative, impg, wfmash, JC69) to manuscript/horizon_paper.md and manuscript/references.bib.\"}",
+      "id": "R5-BIB"
+    },
+    {
+      "from": 6,
+      "kind": "open",
+      "item": "{\"id\": \"R2-INDEX-RAM\", \"summary\": \"Track full chr6 HPRC/minimap2 benchmark & scoring scripts in scripts/benchmarks/ (currently defaulting to /tmp/).\"}",
+      "id": "R2-INDEX-RAM"
+    },
+    {
+      "from": 6,
+      "kind": "open",
+      "item": "{\"id\": \"R6-FMT\", \"summary\": \"Run cargo fmt across the 22 Rust files with formatting diffs flagged by L7.\"}",
+      "id": "R6-FMT"
+    }
+  ],
+  "dropped": [
+    {
+      "id": "3-hfcb834",
+      "reason": "no statistical content in C1; structural artifact carried from Round 4"
+    }
+  ],
+  "corrections": [
+    {
+      "id": "COR-1",
+      "file": "scripts/benchmarks/bench_vgp_filter_locus.py",
+      "absent": "\"--truth\", str(args.truth)",
+      "present": "[sys.executable, str(scorer), \"--paf\", str(net_paf), \"--all-records\"]",
+      "note": "Removed invalid --truth CLI flag passed to score_paf_vs_hprc.py (L4-F2, L7-F2).",
+      "status": "applied"
+    },
+    {
+      "id": "COR-2",
+      "file": "manuscript/horizon_paper.md",
+      "absent": "constant bit-savings floor `\u03bb\u0302 = 10.0` bits",
+      "present": "Using online GC-conditioned Conformal Risk Control at risk level `\u03b1 = 0.07` (`calibrate_null_crc_for_gc` over `n_cal = 15` synthetic `64`-bp decoy windows in `src/mdl/mod.rs`; Angelopoulos et al. 2024), Horizon enforces a finite-sample bit-savings floor floored by `max(10.0, 0.55 * log2(N * M))` bits",
+      "note": "Fixed C3 CRC wording in horizon_paper.md:22,40.",
+      "status": "applied"
+    },
+    {
+      "id": "COR-3",
+      "file": "manuscript/horizon_paper.md",
+      "absent": "single-contig star-tree HDF5 `v0` HAL stub (`4` bottom segments)",
+      "present": "a progressive ancestral-node HDF5 `v0` HAL (`2,103` bottom segments on `5`-mammal UCSC `chrM.maf` in `0.258 s`)",
+      "note": "Updated Abstract & Results progressive HAL wording, Anc0..Anc3 hg38 cloning, chr6 p-arm < 46 Mbp clarification, and #[ignore] halTest.hal note; rebuilt horizon_paper.pdf.",
+      "status": "applied"
+    },
+    {
+      "id": "COR-4",
+      "file": "README.md",
+      "absent": "(`0.55 log2(N*M)` + fixed `10.0`-bit conformal floor)",
+      "present": "(`calibrate_null_crc_for_gc`, floored by `max(10.0, 0.55 log2(N*M))` bits)",
+      "note": "Fixed G1/C3 CRC wording in README.md:8.",
+      "status": "applied"
+    },
+    {
+      "id": "COR-5",
+      "file": "docs/BENCHMARK_RESULTS.md",
+      "absent": "`4` HAL bottom segments",
+      "present": "`2,103` bottom segments",
+      "note": "Replaced stale 4-segment HAL stub with 5cb83fb progressive HAL (2,103 bottom segments), clarified 436 pre-netting vs 12 post-netting p-arm records, and noted SweepGA/KegAlign unbenchmarked.",
+      "status": "applied"
+    },
+    {
+      "id": "COR-6",
+      "file": "manuscript/references.bib",
+      "absent": "journal={arXiv preprint arXiv:0710.3742},\n  year={2007}\n}",
+      "present": "doi={10.48550/arXiv.0710.3742}",
+      "note": "Added 3 catalog DOIs for adams2007bayesian, angelopoulos2024conformal, and chiaromonte2002scoring (L6-F4).",
+      "status": "applied"
+    }
+  ],
+  "findings": [
+    {
+      "lens": "correctness",
+      "id": "F1",
+      "flaw": "C3: horizon_paper.md:22,40 & README.md:8 falsely claimed fixed lambda=10.0 offline CRC instead of online calibrate_null_crc_for_gc."
+    },
+    {
+      "lens": "correctness",
+      "id": "F2",
+      "flaw": "C1: real_hal_decode_from_env is #[ignore]d by default and uses external tools-iuc halTest.hal."
+    },
+    {
+      "lens": "sampling",
+      "id": "F1",
+      "flaw": "C2: chr6 horizon_filter 12 removed records (565->553) are on p-arm <46 Mbp outside q-arm HPRC 1-to-1 truth."
+    },
+    {
+      "lens": "statistics",
+      "id": "F1",
+      "flaw": "C2: score_paf_vs_hprc.py reports conditioned precision (99.65%); unconditional (99.32%) is derived."
+    },
+    {
+      "lens": "provenance",
+      "id": "F1",
+      "flaw": "C2: bench_vgp_filter_locus.py passed invalid --truth arg to score_paf_vs_hprc.py (fixed)."
+    },
+    {
+      "lens": "inference",
+      "id": "F1",
+      "flaw": "C4: horizon_guide progressive HAL clones hg38 into Anc0..Anc3 on CLI-order pectinate tree; verify_merge_guide_maf.py scores pairwise MAF."
+    },
+    {
+      "lens": "prior-art",
+      "id": "F1",
+      "flaw": "C5: 3 catalog DOIs (adams2007bayesian, angelopoulos2024conformal, chiaromonte2002scoring) missing from references.bib (added)."
+    },
+    {
+      "lens": "reproduction",
+      "id": "F1",
+      "flaw": "C4: horizon_paper.md:10 & BENCHMARK_RESULTS.md:11,58 still carried stale 4-segment star-tree HAL stub (updated)."
+    }
+  ],
+  "open": [
+    {
+      "id": "R7-SWEEPGA",
+      "summary": "Install/benchmark SweepGA, impg, and KegAlign head-to-head on identical hardware (currently unavailable on host; narrowed residual of R2-RESOLVE-LIFT)."
+    },
+    {
+      "id": "R7-CRC-BIO",
+      "summary": "Calibrate CRC on biological empirical negatives beyond 64-bp synthetic decoys and wire decoy CRC into horizon_filter (narrowed residual of R1-HMM)."
+    },
+    {
+      "id": "R7-HAL-ANC",
+      "summary": "Infer ancestral sequences for Anc0..Anc3 (beyond hg38 cloning on pectinate tree), un-ignore real_hal_decode_from_env with a tracked fixture, and benchmark multi-hundred-GB external .hal alignments (narrowed residual of R2-HMM-XDROP)."
+    }
+  ],
+  "unchallenged": [],
+  "discharges": {
+    "1": [
+      {
+        "id": "R1-IMPL",
+        "item": "{\"id\": \"R1-IMPL\", \"summary\": \"Implement and benchmark horizon_clean, horizon_resolve, horizon_lift, and horizon_wga --graph on HPRC v1.0/v1.1 (GRCh38 vs CHM13) and HLA/centromere loci.\"}",
+        "evidence": "HPRC 10k-subgraph, full chr6 HPRC/minimap2, and VGP horizon_filter/horizon_locus benchmarks tracked in scripts/benchmarks/ and verified; aa5_keys unit test (src/mdl/dag_seed.rs:414) and 10M L-overlap W-split test (src/bin/horizon_clean.rs:799) pass."
+      },
+      {
+        "id": "R1-HMM",
+        "item": "{\"id\": \"R1-HMM\", \"summary\": \"Normalize HMM transition weights in src/mdl/dp.rs:105-167 (currently summing >1.0 from M and Ix/Iy) and derive/calibrate gap-bit penalties.\"}",
+        "evidence": "Normalized Pair-HMM transitions, mdl_xdrop_extend_with_params, N-base BOCPD fix, bench_random_gc_crc.py (median=0 FP pairs across 6 seeds), and dynamic calibrate_null_crc_for_gc/estimate_hmm_params completed; narrowed biological CRC calibration residual kept in R7 open."
+      }
+    ],
+    "2": [
+      {
+        "id": "R2-HMM-XDROP",
+        "item": "{\"id\": \"R2-HMM-XDROP\", \"summary\": \"Wire HmmParams and normalized transitions into mdl_xdrop_extend (src/mdl/dp.rs) and horizon_wga --graph, fix N-base handling in bocpd_gc_profile, and re-run all WGA benchmarks on a single pinned commit (partially carries R1-HMM).\"}",
+        "evidence": "mdl_xdrop_extend_with_params, multi-contig progressive HAL emission (from_multi_contig_progressive_blocks), verify_merge_guide_maf.py 5-mammal chrM.maf verification, and real_hal_decode_from_env (halTest.hal) completed; narrowed ancestral sequence inference & large .hal residual kept in R7 open."
+      },
+      {
+        "id": "R2-RESOLVE-LIFT",
+        "item": "{\"id\": \"R2-RESOLVE-LIFT\", \"summary\": \"Update W-line start/end coordinates and L links in horizon_resolve --collapse-dups, add horizon_clean sup>0 severing + S-tag preservation, and add unique-base coverage + head-to-head pangenome baselines (minimap2/odgi/vg) and unit tests for the 4 untested binaries.\"}",
+        "evidence": "horizon_resolve W-end/L-link updates, horizon_clean L-overlap W-splits, numpy 2D HPRC chr6 scoring (99.12% recall / 99.65% cond. prec.), FastGA/minimap2/LASTZ/odgi/gfatools/vg baselines, and horizon dispatcher wiring completed; narrowed SweepGA/impg/KegAlign residual kept in R7 open."
+      },
+      {
+        "id": "R2-INDEX-RAM",
+        "item": "{\"id\": \"R2-INDEX-RAM\", \"summary\": \"Replace ContigIndex per-position HashMap<u64, Vec<usize>> with minimizer/flat-sorted k-mer indexing to bring full >100 Mbp chromosome alignment well below 26.5 GB RSS.\"}",
+        "evidence": "FlatSeedIndex brought full GRCh38.chr6 x CHM13.chr6 below 10.3 GB RSS (258.88-304.53s) and all chr6/HPRC/minimap2 benchmark & scoring scripts are tracked in scripts/benchmarks/."
+      }
+    ],
+    "3": [
+      {
+        "id": "R1-IMPL",
+        "item": "{\"id\": \"R1-IMPL\", \"summary\": \"Implement and benchmark horizon_clean, horizon_resolve, horizon_lift, and horizon_wga --graph on HPRC v1.0/v1.1 (GRCh38 vs CHM13) and HLA/centromere loci (4 of 5 C6 benchmarks un-reproduced on 488b020).\"}",
+        "evidence": "HPRC 10k-subgraph, full chr6 HPRC/minimap2, and VGP horizon_filter/horizon_locus benchmarks tracked in scripts/benchmarks/ and verified; aa5_keys unit test (src/mdl/dag_seed.rs:414) and 10M L-overlap W-split test (src/bin/horizon_clean.rs:799) pass."
+      },
+      {
+        "id": "R1-HMM",
+        "item": "{\"id\": \"R1-HMM\", \"summary\": \"Normalize HMM transition weights in src/mdl/dp.rs and derive/calibrate gap-bit penalties (estimate_dag_hmm_params leaves gap_open_bits/gap_extend_bits at defaults).\"}",
+        "evidence": "Normalized Pair-HMM transitions, mdl_xdrop_extend_with_params, N-base BOCPD fix, bench_random_gc_crc.py (median=0 FP pairs across 6 seeds), and dynamic calibrate_null_crc_for_gc/estimate_hmm_params completed; narrowed biological CRC calibration residual kept in R7 open."
+      },
+      {
+        "id": "R2-HMM-XDROP",
+        "item": "{\"id\": \"R2-HMM-XDROP\", \"summary\": \"Re-run all 5 stale pre-488b020 WGA benchmark rows and test/calibrate estimate_dag_hmm_params.\"}",
+        "evidence": "mdl_xdrop_extend_with_params, multi-contig progressive HAL emission (from_multi_contig_progressive_blocks), verify_merge_guide_maf.py 5-mammal chrM.maf verification, and real_hal_decode_from_env (halTest.hal) completed; narrowed ancestral sequence inference & large .hal residual kept in R7 open."
+      },
+      {
+        "id": "R2-RESOLVE-LIFT",
+        "item": "{\"id\": \"R2-RESOLVE-LIFT\", \"summary\": \"Rewrite L links alongside W coordinates in horizon_resolve --collapse-dups, fix horizon_clean real-data no-op and two-pass stdin, and add minimap2/odgi/vg/LASTZ head-to-head baselines.\"}",
+        "evidence": "horizon_resolve W-end/L-link updates, horizon_clean L-overlap W-splits, numpy 2D HPRC chr6 scoring (99.12% recall / 99.65% cond. prec.), FastGA/minimap2/LASTZ/odgi/gfatools/vg baselines, and horizon dispatcher wiring completed; narrowed SweepGA/impg/KegAlign residual kept in R7 open."
+      },
+      {
+        "id": "R2-INDEX-RAM",
+        "item": "{\"id\": \"R2-INDEX-RAM\", \"summary\": \"Complete full >100 Mbp chromosome alignment (e.g. full chr6) and isolate FlatSeedIndex RSS ablation.\"}",
+        "evidence": "FlatSeedIndex brought full GRCh38.chr6 x CHM13.chr6 below 10.3 GB RSS (258.88-304.53s) and all chr6/HPRC/minimap2 benchmark & scoring scripts are tracked in scripts/benchmarks/."
+      }
+    ],
+    "4": [
+      {
+        "id": "R1-IMPL",
+        "item": "{\"id\": \"R1-IMPL\", \"summary\": \"Re-benchmark full chr6 and horizon_gfa extract/horizon_lift on HEAD (33bede8) with accuracy verification, and add real sequence-bearing GFA evaluations of horizon_clean, horizon_resolve, and horizon_wga --graph.\"}",
+        "evidence": "HPRC 10k-subgraph, full chr6 HPRC/minimap2, and VGP horizon_filter/horizon_locus benchmarks tracked in scripts/benchmarks/ and verified; aa5_keys unit test (src/mdl/dag_seed.rs:414) and 10M L-overlap W-split test (src/bin/horizon_clean.rs:799) pass."
+      },
+      {
+        "id": "R1-HMM",
+        "item": "{\"id\": \"R1-HMM\", \"summary\": \"Calibrate/derive gap-bit penalties and CRC sample size (n_cal = 15) beyond fixed defaults.\"}",
+        "evidence": "Normalized Pair-HMM transitions, mdl_xdrop_extend_with_params, N-base BOCPD fix, bench_random_gc_crc.py (median=0 FP pairs across 6 seeds), and dynamic calibrate_null_crc_for_gc/estimate_hmm_params completed; narrowed biological CRC calibration residual kept in R7 open."
+      },
+      {
+        "id": "R2-HMM-XDROP",
+        "item": "{\"id\": \"R2-HMM-XDROP\", \"summary\": \"Run multi-species horizon_merge and horizon_guide --progressive --hal benchmarks with verified provenance.\"}",
+        "evidence": "mdl_xdrop_extend_with_params, multi-contig progressive HAL emission (from_multi_contig_progressive_blocks), verify_merge_guide_maf.py 5-mammal chrM.maf verification, and real_hal_decode_from_env (halTest.hal) completed; narrowed ancestral sequence inference & large .hal residual kept in R7 open."
+      },
+      {
+        "id": "R2-RESOLVE-LIFT",
+        "item": "{\"id\": \"R2-RESOLVE-LIFT\", \"summary\": \"Add head-to-head external baselines (minimap2, FastGA, LASTZ, odgi, vg, gfatools) on identical hardware and inputs.\"}",
+        "evidence": "horizon_resolve W-end/L-link updates, horizon_clean L-overlap W-splits, numpy 2D HPRC chr6 scoring (99.12% recall / 99.65% cond. prec.), FastGA/minimap2/LASTZ/odgi/gfatools/vg baselines, and horizon dispatcher wiring completed; narrowed SweepGA/impg/KegAlign residual kept in R7 open."
+      },
+      {
+        "id": "R2-INDEX-RAM",
+        "item": "{\"id\": \"R2-INDEX-RAM\", \"summary\": \"Re-benchmark full GRCh38.chr6 x CHM13.chr6 on HEAD (33bede8) with accuracy parity verification (53130b8 achieved 451.35s / 10.27 GB RSS).\"}",
+        "evidence": "FlatSeedIndex brought full GRCh38.chr6 x CHM13.chr6 below 10.3 GB RSS (258.88-304.53s) and all chr6/HPRC/minimap2 benchmark & scoring scripts are tracked in scripts/benchmarks/."
+      }
+    ],
+    "5": [
+      {
+        "id": "R1-IMPL",
+        "item": "{\"id\": \"R1-IMPL\", \"summary\": \"Track chr6 HPRC/minimap2 and 10k-subgraph/vg scripts in scripts/benchmarks/, and audit/reproduce src/mdl/dag.rs (horizon_wga --graph).\"}",
+        "evidence": "HPRC 10k-subgraph, full chr6 HPRC/minimap2, and VGP horizon_filter/horizon_locus benchmarks tracked in scripts/benchmarks/ and verified; aa5_keys unit test (src/mdl/dag_seed.rs:414) and 10M L-overlap W-split test (src/bin/horizon_clean.rs:799) pass."
+      },
+      {
+        "id": "R1-HMM",
+        "item": "{\"id\": \"R1-HMM\", \"summary\": \"Run a tracked multi-seed random-GC (18%, 30%, 45%) false-positive sweep and implement/calibrate dynamic n_cal=15 CRC & gap-bit penalties beyond fixed defaults.\"}",
+        "evidence": "Normalized Pair-HMM transitions, mdl_xdrop_extend_with_params, N-base BOCPD fix, bench_random_gc_crc.py (median=0 FP pairs across 6 seeds), and dynamic calibrate_null_crc_for_gc/estimate_hmm_params completed; narrowed biological CRC calibration residual kept in R7 open."
+      },
+      {
+        "id": "R2-HMM-XDROP",
+        "item": "{\"id\": \"R2-HMM-XDROP\", \"summary\": \"Implement multi-contig progressive .hal emission in horizon_guide and audit src/hal/hdf5_read.rs / decode_hal_* against a real external .hal fixture (un-ignoring the .hal test).\"}",
+        "evidence": "mdl_xdrop_extend_with_params, multi-contig progressive HAL emission (from_multi_contig_progressive_blocks), verify_merge_guide_maf.py 5-mammal chrM.maf verification, and real_hal_decode_from_env (halTest.hal) completed; narrowed ancestral sequence inference & large .hal residual kept in R7 open."
+      },
+      {
+        "id": "R2-RESOLVE-LIFT",
+        "item": "{\"id\": \"R2-RESOLVE-LIFT\", \"summary\": \"Add external FastGA, LASTZ, KegAlign, odgi, and gfatools baselines on identical hardware, plus horizon_merge/horizon_guide MAF accuracy verification.\"}",
+        "evidence": "horizon_resolve W-end/L-link updates, horizon_clean L-overlap W-splits, numpy 2D HPRC chr6 scoring (99.12% recall / 99.65% cond. prec.), FastGA/minimap2/LASTZ/odgi/gfatools/vg baselines, and horizon dispatcher wiring completed; narrowed SweepGA/impg/KegAlign residual kept in R7 open."
+      },
+      {
+        "id": "R5-BIB",
+        "item": "{\"id\": \"R5-BIB\", \"summary\": \"Sync all 15 new horizon_paper.md references into manuscript/references.bib and remove the 2 orphan .bib entries.\"}",
+        "evidence": "All 9 held-catalog entries + Jukes & Cantor (1969) added in 4fd2240; 3 catalog DOIs added to references.bib in Round 7; horizon_paper.pdf rebuilt cleanly."
+      },
+      {
+        "id": "R2-INDEX-RAM",
+        "item": "{\"id\": \"R2-INDEX-RAM\", \"summary\": \"Track full chr6 HPRC/minimap2 benchmark & scoring scripts in scripts/benchmarks/ (8cd5db0/2896229 numbers verified, but extraction/comparison scripts currently live in /tmp/).\"}",
+        "evidence": "FlatSeedIndex brought full GRCh38.chr6 x CHM13.chr6 below 10.3 GB RSS (258.88-304.53s) and all chr6/HPRC/minimap2 benchmark & scoring scripts are tracked in scripts/benchmarks/."
+      }
+    ],
+    "6": [
+      {
+        "id": "R1-IMPL",
+        "item": "{\"id\": \"R1-IMPL\", \"summary\": \"Track chr6 HPRC/minimap2, 10k-subgraph/vg, and VGP horizon_filter/horizon_locus scripts & inputs in scripts/benchmarks/ and docs/BENCHMARK_DATASETS.md, and verify horizon_wga --graph aa5_keys and horizon_clean non-0M L-overlap W-splits.\"}",
+        "evidence": "HPRC 10k-subgraph, full chr6 HPRC/minimap2, and VGP horizon_filter/horizon_locus benchmarks tracked in scripts/benchmarks/ and verified; aa5_keys unit test (src/mdl/dag_seed.rs:414) and 10M L-overlap W-split test (src/bin/horizon_clean.rs:799) pass."
+      },
+      {
+        "id": "R1-HMM",
+        "item": "{\"id\": \"R1-HMM\", \"summary\": \"Run a tracked multi-seed random-GC (18%, 30%, 45%) false-positive sweep and implement/calibrate dynamic n_cal=15 CRC & gap-bit penalties beyond fixed defaults.\"}",
+        "evidence": "Normalized Pair-HMM transitions, mdl_xdrop_extend_with_params, N-base BOCPD fix, bench_random_gc_crc.py (median=0 FP pairs across 6 seeds), and dynamic calibrate_null_crc_for_gc/estimate_hmm_params completed; narrowed biological CRC calibration residual kept in R7 open."
+      },
+      {
+        "id": "R2-HMM-XDROP",
+        "item": "{\"id\": \"R2-HMM-XDROP\", \"summary\": \"Implement multi-contig progressive .hal emission in horizon_guide and audit src/hal/hdf5_read.rs / decode_hal_* against a real external .hal fixture (un-ignoring the .hal test).\"}",
+        "evidence": "mdl_xdrop_extend_with_params, multi-contig progressive HAL emission (from_multi_contig_progressive_blocks), verify_merge_guide_maf.py 5-mammal chrM.maf verification, and real_hal_decode_from_env (halTest.hal) completed; narrowed ancestral sequence inference & large .hal residual kept in R7 open."
+      },
+      {
+        "id": "R2-RESOLVE-LIFT",
+        "item": "{\"id\": \"R2-RESOLVE-LIFT\", \"summary\": \"Install numpy to re-score 42700e1 horizon_filter 565/553 chr6 outputs against 2D HPRC truth, add external SweepGA/impg/FastGA/LASTZ/KegAlign/odgi/gfatools baselines, and wire horizon_filter/horizon_locus into the horizon dispatcher.\"}",
+        "evidence": "horizon_resolve W-end/L-link updates, horizon_clean L-overlap W-splits, numpy 2D HPRC chr6 scoring (99.12% recall / 99.65% cond. prec.), FastGA/minimap2/LASTZ/odgi/gfatools/vg baselines, and horizon dispatcher wiring completed; narrowed SweepGA/impg/KegAlign residual kept in R7 open."
+      },
+      {
+        "id": "R5-BIB",
+        "item": "{\"id\": \"R5-BIB\", \"summary\": \"Add held-catalog citations (li_2026_finding, frith_2011_tantan, garrison_2024_building, andreace_2023_comparing, romain_2026_inversions-pangenome-graphs, kazemi_2022_nthash2, marcais_2024_knonical, wittler_2023_canonical-kmer-encoding, chen_2010_comparative, impg, wfmash, JC69) to manuscript/horizon_paper.md and manuscript/references.bib.\"}",
+        "evidence": "All 9 held-catalog entries + Jukes & Cantor (1969) added in 4fd2240; 3 catalog DOIs added to references.bib in Round 7; horizon_paper.pdf rebuilt cleanly."
+      },
+      {
+        "id": "R2-INDEX-RAM",
+        "item": "{\"id\": \"R2-INDEX-RAM\", \"summary\": \"Track full chr6 HPRC/minimap2 benchmark & scoring scripts in scripts/benchmarks/ (currently defaulting to /tmp/).\"}",
+        "evidence": "FlatSeedIndex brought full GRCh38.chr6 x CHM13.chr6 below 10.3 GB RSS (258.88-304.53s) and all chr6/HPRC/minimap2 benchmark & scoring scripts are tracked in scripts/benchmarks/."
+      },
+      {
+        "id": "R6-FMT",
+        "item": "{\"id\": \"R6-FMT\", \"summary\": \"Run cargo fmt across the 22 Rust files with formatting diffs flagged by L7.\"}",
+        "evidence": "cargo fmt --check passes cleanly across the entire crate on 4fd2240 and 5cb83fb."
+      }
+    ]
+  },
+  "decisions": [],
+  "sealed_blobs": {
+    "attack-L1-correctness.md": {
+      "blob": "c7e4ca3fec6b69e57a7dfcd7d6e01990f2bd5845",
+      "ref": "refs/round/seal/7/attack-L1-correctness.md"
+    },
+    "attack-L2-sampling.md": {
+      "blob": "b76546ebd414fa1d5ae1cbbce1f59f0ba321de5d",
+      "ref": "refs/round/seal/7/attack-L2-sampling.md"
+    },
+    "attack-L3-statistics.md": {
+      "blob": "83178d6de16474eeca986cd30cd797e0642c0565",
+      "ref": "refs/round/seal/7/attack-L3-statistics.md"
+    },
+    "attack-L4-provenance.md": {
+      "blob": "fd98a9a827eda1815e797449707343dac0547fa6",
+      "ref": "refs/round/seal/7/attack-L4-provenance.md"
+    },
+    "attack-L5-inference.md": {
+      "blob": "8edef926cd59e28a01379f80aa38d6b098c54ce8",
+      "ref": "refs/round/seal/7/attack-L5-inference.md"
+    },
+    "attack-L6-prior-art.md": {
+      "blob": "0b38c626f7eeec4bea23a83634917fb10eaf5236",
+      "ref": "refs/round/seal/7/attack-L6-prior-art.md"
+    },
+    "attack-L7-reproduction.md": {
+      "blob": "8645f766d32d0e60b0a7bac06b8ef3a998a68ab0",
+      "ref": "refs/round/seal/7/attack-L7-reproduction.md"
+    }
+  },
+  "outcome": "DISCHARGED_AND_REPAIRED",
+  "landed": "Discharged R6-FMT, R5-BIB, R1-IMPL, R2-INDEX-RAM and narrowed R2-RESOLVE-LIFT, R1-HMM, R2-HMM-XDROP; applied all Round 7 adjudicated free repairs (bench_vgp_filter_locus.py --truth fix, CRC online GC wording, progressive HAL 2,103-segment wording, chr6 p-arm clarification, 3 catalog DOIs, and rebuilt horizon_paper.pdf).",
+  "overturned": "None; all upheld Round 7 prose/script findings fixed before close.",
+  "class": "open-item-discharge-and-progressive-hal",
+  "survived": "122 active Rust unit tests (88 lib + 34 bin, +1 #[ignore]d halTest.hal verified via HORIZON_TEST_HAL), 0 clippy warnings, cargo fmt --check clean, progressive ancestral-node HAL (2,103 bottom segments on 5-mammal chrM.maf in 0.258s), and chr6 FastGA horizon_filter --net (99.12% exact recall, 99.65% cond. / 99.32% uncond. exact precision).",
+  "post_round_audit": {
+    "by": "75f83d99-0a72-4f2e-abb7-e61150be568f",
+    "date": "2026-11-21",
+    "evidence": "reports/rounds/round-7/cold-audit.md: cargo fmt --check, cargo clippy --all-targets --all-features -- -D warnings, and cargo test --all-features (122 active + 1 #[ignore]d halTest.hal) all pass; scripts/round corrections 7 reports 6/6 APPLIED; minor cold-audit findings (bench_vgp_filter_locus.py --truth arg removal and horizon_paper.md:61 reference-MAF qualification) fixed and horizon_paper.pdf rebuilt."
+  },
+  "closed": "2026-11-21"
+}

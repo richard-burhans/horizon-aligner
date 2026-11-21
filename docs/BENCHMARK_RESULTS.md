@@ -8,7 +8,7 @@ Pairwise WGA results use the divergence-adaptive Pair-HMM (`HmmParams`: `identit
 
 * **Multi-species merging & progressive guide tree (`horizon_merge`, `horizon_guide`):**
   * `horizon_merge` across `92` vertebrate species (`hg38` + `91` targets from `chrM.maf`): **21.78s** (`21.82s` wall), **26.6 MB** peak RSS, `460` total / `460` multi-species MAF blocks.
-  * `horizon_guide --progressive --hal --rbest` across `5` mammals (`hg38`, `Macaca_mulatta`, `HLcalPym1`, `Equus_caballus`, `Canis_lupus`): **0.859s**, `1,109` MAF blocks (`967` multi-species), `4` HAL bottom segments verified via `horizon_wga --hal-info` (`hdf5_v=0`, `root_members=5`).
+  * `horizon_guide --progressive --hal --rbest` across `5` mammals (`hg38`, `Macaca_mulatta`, `HLcalPym1`, `Equus_caballus`, `Canis_lupus`): **0.859s**, `1,109` MAF blocks (`967` multi-species) at `2896229` (`657–707` blocks at `5cb83fb`); on 5-mammal UCSC `chrM.maf` (`verify_merge_guide_maf.py`, `5cb83fb`), **0.258s**, progressive ancestral-node HDF5 `v0` HAL (`((((hg38,panTro4)Anc0,rheMac3)Anc1,mm10)Anc2,canFam3)Anc3;`, `2,103` bottom segments).
 * **BOCPD composition-aware LCB gate (`R1-HMM`):**
   * `10,000`-bp random `18%`-GC DNA: **0** false-positive aligned pairs (`0.0069s`); `30%`-GC: `288` pairs (`0.4150s`); `45%`-GC: `149` pairs (`0.3829s`).
 * **Close-to-medium divergence (`horizon_wga`):**
@@ -55,7 +55,7 @@ These sets were completely locked away during algorithm development to prevent o
 | Stage | Binary | Scope | Result | Peak RSS | Wall Time |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | 92-Species Netting Merge | `horizon_merge` | `hg38` + `91` vertebrate targets (`chrM.maf`) | `460` total / `460` multi-species blocks | **26.6 MB** | 21.78s |
-| 5-Species Progressive + HAL | `horizon_guide --progressive --hal --rbest` | `hg38`, `Macaca`, `HLcalPym1`, `Equus`, `Canis` | `1,109` MAF blocks (`967` multi-sp), `4` HAL bottom segs | — | 0.859s |
+| 5-Species Progressive + HAL | `horizon_guide --progressive --hal --rbest` | `hg38`, `Macaca`, `HLcalPym1`, `Equus`, `Canis`; UCSC `chrM.maf` | `1,109` MAF blocks (`2896229`; `657–707` at `5cb83fb`); `2,103` HAL bottom segs on `chrM.maf` (`5cb83fb`, `0.258s`) | — | 0.859s / 0.258s |
 
 ## Pangenome Graph Benchmarks (12 GB `hprc-v1.0-mc-grch38.gfa.gz` & Subgraphs)
 
@@ -83,7 +83,7 @@ These sets were completely locked away during algorithm development to prevent o
 | Stage | Binary | Scope | Result | Peak RSS | Wall Time |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | `chr6` FastGA PAF Netting (seq-free) | `horizon_filter --net` | `93 MB` (`56,857` `FastGA` records, `GRCh38.chr6` × `CHM13.chr6`) | `565` records (`110.00 Mbp` `aln_len`); **99.12%** exact recall (`109,119,624` bp), **99.65%** cond. / **99.32%** uncond. exact precision (`99.92%` `≤1 kb` precision) vs 2D HPRC | — | **0.45s–0.48s** (`0.50s` `.paf.zst`) |
-| `chr6` FastGA PAF SDUST+MDL Filter | `horizon_filter --net --query --target` | `56,857` `FastGA` records with `GRCh38.chr6` & `CHM13.chr6` FASTAs | `553` records (`436` filtered by MDL; removes `12` noisy/non-1-to-1 records while preserving `100%` of exact `109,119,624` bp coordinates: **99.12%** exact recall, **99.65%** cond. / **99.32%** uncond. exact precision) | — | 4.86s–4.95s |
+| `chr6` FastGA PAF SDUST+MDL Filter | `horizon_filter --net --query --target` | `56,857` `FastGA` records with `GRCh38.chr6` & `CHM13.chr6` FASTAs | `553` post-netting records (`436` pre-netting filtered by MDL; removes `12` p-arm `< 46 Mbp` records outside q-arm `1-to-1` truth while preserving `100%` of exact `109,119,624` bp coordinates: **99.12%** exact recall, **99.65%** cond. / **99.32%** uncond. exact precision; `SweepGA`/`KegAlign` unbenchmarked on host) | — | 4.86s–4.95s |
 | `10k`–`200k` HPRC Subgraph Baselines | `bench_external_graph_baselines.py` | `10,000` / `50,000` / `200,000` HPRC `chr22` segments | `200k`: `horizon_gfa stats` `0.058s` / `12.0 MB`, `horizon_resolve` `0.258s` / `95.5 MB`, `horizon_clean` `0.346s` / `130.6 MB`, `horizon_wga --graph` `1.561s` / `501.4 MB` vs `gfatools stat` (`0.129s`, `91.3 MB`), `odgi build` (`0.279s`, `78.2 MB`), `odgi stats -S` (`0.097s`, `60.3 MB`), `vg stats` (`0.564s`, `43.9 MB`) | `12.0–501.4 MB` | 0.058s–1.561s |
 | `5 Mbp` `chr6` Pericentromere WGA | `bench_external_wga_baselines.py` | `GRCh38.chr6` × `CHM13.chr6` (`5 Mbp`) | `horizon_wga` (`1.520s`, `876.6 MB`) / `--one-to-one` (`1.519s`, `897.5 MB`) vs `FastGA -T8` (`2.894s`, `321.7 MB`) and `minimap2 -x asm5 -t8` (`2.062s`, `437.1 MB`); `LASTZ` timed out at `15s` | `876.6 MB` | **1.520s** |
 | GenomeArk VGP Koala × Amphioxus PAF | `horizon_filter --net` | `GCA_003287225.2` × `GCA_015852565.1` (`36,601` raw `FastGA` records, pre-`9dfec4a`) | `1,976` records (`71.6%` exact overlap with VGP `FastGA_11`'s `1,535` records) | — | **0.10s** |
