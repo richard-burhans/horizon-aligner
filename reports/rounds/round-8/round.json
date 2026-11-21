@@ -1,0 +1,376 @@
+{
+  "round": 8,
+  "draft": "0f31c26",
+  "subject": "FULL: Evaluate which proposed community utilities in docs/COMMUNITY_UTILITIES_PROPOSAL.md are worth building",
+  "date": "2026-11-21",
+  "claims": [
+    {
+      "id": "C1",
+      "kind": "capability",
+      "summary": "horizon hal (stats, to-maf, liftover, to-gfa) fills a real libhdf5-free community gap and can be built directly on horizon-aligner's existing streaming HAL/HDF5 reader (src/hal/hdf5_read.rs, src/hal/mod.rs) at P1 priority.",
+      "source": {
+        "file": "docs/COMMUNITY_UTILITIES_PROPOSAL.md",
+        "quote": "| **P1** | `horizon hal` | Zero-`libhdf5` HAL inspection, MAF export, and coordinate liftover | `hickey_2013_hierarchical`, `liao_2023_draft`, `armstrong_2020_progressive` | `src/hal/hdf5_read.rs`, `src/hal/mod.rs`, `src/coord.rs` |"
+      }
+    },
+    {
+      "id": "C2",
+      "kind": "capability",
+      "summary": "horizon gfa-qc fills a real single-pass graph retention, clipping, component-bridge, and node-depth/AF diagnostic gap not met without multi-tool glue (odgi+minimap2+samtools+Liftoff) and is feasible in low RSS on src/gfa/mod.rs and horizon_gfa.rs at P1 priority.",
+      "source": {
+        "file": "docs/COMMUNITY_UTILITIES_PROPOSAL.md",
+        "quote": "| **P1** | `horizon gfa-qc` | Single-pass graph retention, clipping, component & node-depth audit | `kopalli_2025_toward`, `liao_2023_draft`, `andreace_2023_comparing`, `guarracino_2022_odgi` | `src/gfa/mod.rs`, `src/bin/horizon_gfa.rs`, `src/io_util.rs` |"
+      }
+    },
+    {
+      "id": "C3",
+      "kind": "capability",
+      "summary": "horizon inversions fills a real gap in GFA-native path-explicit and alignment-rescued inversion calling without vg deconstruct + minimap2 + bedtools glue, and is feasible on PackedGraph + Tarjan snarls (horizon_resolve.rs) + FlatSeedIndex at P2 priority.",
+      "source": {
+        "file": "docs/COMMUNITY_UTILITIES_PROPOSAL.md",
+        "quote": "| **P2** | `horizon inversions` | Native GFA path-explicit & alignment-rescued inversion / snarl caller | `romain_2026_inversions-pangenome-graphs`, `sena_2026_bubble-subgraphs-spqr` | `PackedGraph` + Tarjan snarls (`horizon_resolve.rs`), `FlatSeedIndex` |"
+      }
+    },
+    {
+      "id": "C4",
+      "kind": "capability",
+      "summary": "horizon gfa-prune fills a real need for streaming AF-filtering and deletion-bubble capping without vg/XG conversion, reusing two-pass W/P rewriting in horizon_clean.rs at P2 priority.",
+      "source": {
+        "file": "docs/COMMUNITY_UTILITIES_PROPOSAL.md",
+        "quote": "| **P2** | `horizon gfa-prune` | Streaming AF-filtering & deletion-bubble capping without `vg`/`XG` | `liao_2023_draft`, `hickey_2023_pangenome`, `kopalli_2025_toward` | Two-pass `W`/`P` rewriting (`horizon_clean.rs`), `src/gfa/mod.rs` |"
+      }
+    },
+    {
+      "id": "C5",
+      "kind": "capability",
+      "summary": "horizon eval-null fills a real benchmarking gap by providing reversed/shuffled empirical FPR negative controls and cross-aligner concordance on MAF/PAF/GFA using calibrate_null_crc_from_seqs (src/mdl/dp.rs) + horizon_eval.rs at P3 priority.",
+      "source": {
+        "file": "docs/COMMUNITY_UTILITIES_PROPOSAL.md",
+        "quote": "| **P3** | `horizon eval-null` | Reversed/permuted-sequence empirical FPR + cross-aligner concordance | `earl_2014_alignathon`, `quinlan-hall_2010_bedtools`, `frith_2011_tantan` | `calibrate_null_crc_from_seqs` (`src/mdl/dp.rs`), `horizon_eval.rs` |"
+      }
+    },
+    {
+      "id": "C6",
+      "kind": "capability",
+      "summary": "horizon synteny fills a real need for low-RAM chimeric-join, orientation-flip, and repeat-spike assembly diagnostics (avoiding Mumemto's 700-800 GB suffix-array RAM) using FlatSeedIndex + LIS chaining (src/seeding/chain.rs) at P3 priority.",
+      "source": {
+        "file": "docs/COMMUNITY_UTILITIES_PROPOSAL.md",
+        "quote": "| **P3** | `horizon synteny` | Low-RAM chimeric-join, orientation-flip & repeat-spike assembly scan | `shivakumar_2025_mumemto`, `liu_2018_inferring` | `FlatSeedIndex`, LIS chaining (`src/seeding/chain.rs`), SDUST |"
+      }
+    }
+  ],
+  "lenses": [
+    "correctness",
+    "prior-art",
+    "provenance",
+    "reproduction"
+  ],
+  "attacked": [
+    {
+      "path": "docs/COMMUNITY_UTILITIES_PROPOSAL.md",
+      "snapshot": "ATTACKED-COMMUNITY_UTILITIES_PROPOSAL.md",
+      "read": "working tree",
+      "pinned": true,
+      "sha256": "d19c2a19004e697e362cffbed6c5a434edfc1c903661352ce989fd0c59fc461b"
+    }
+  ],
+  "code": {
+    "horizon-aligner": "0f31c26cf24e52a865cdcd9963abe9e6ec7ad499"
+  },
+  "drift_reviewed": [
+    {
+      "path": "docs/COMMUNITY_UTILITIES_PROPOSAL.md",
+      "sha256": "ff4d10599528aadb2ca15423a85c21029b48297b4c85bf0e425099f4ddf17b0d",
+      "by": "runner",
+      "date": "2026-11-21",
+      "quotes": [
+        "*Grounded in the project's alignment and pangenome literature corpus (`references.bib`, `genome-alignment-synteny-duplications`, and `bioinformatics-tooling-benchmarking`), mapped onto existing primitives in `horizon-aligner`, and **adversarially triaged in Round 8** (`reports/rounds/round-8/`).*",
+        "## Executive Summary & Round 8 Triage Verdict",
+        "Across recent large-scale whole-genome alignment (WGA) and pangenome graph papers\u2014including HPRC (`liao_2023_draft`), Minigraph-Cactus (`hickey_2023_pangenome`), PGGB (`garrison_2024_building`), ODGI (`guarracino_2022_odgi`), comparative pangenome benchmarks (`andreace_2023_comparing`, `kopalli_2025_toward`), inversion & snarl theory (`romain_2026_inversions-pangenome-graphs`, `sena_2026_bubble-subgraphs-spqr`), and maximal-match diagnostics (`shivakumar_2025_mumemto`)\u2014researchers repeatedly report dependency walls (`libhdf5` / C++ `halTools`), multi-tool glue pipelines, and lack of lightweight QC.",
+        "**Round 8 Adversarial Triage** evaluated six candidate utilities across `correctness`, `prior-art`, `provenance`, and `reproduction` lenses:",
+        "| Utility | Round 8 Verdict | Decision | Summary of Adjudicated Findings |",
+        "|---|---|---|---|",
+        "| `horizon hal` | **NARROWED (Worth Building \u2014 P1)** | **Build** | Only non-duplicative value vs `halTools`/`hal2vg` is zero-`libhdf5` static-binary packaging. Requires removing `hdf5_read.rs`'s `256 MiB` dataset cap via streaming chunk-slice reads and extending `HalAlignment::to_maf_for_genome` beyond 1 tree level. Must clarify relationship to `horizon lift` (GFA) vs `horizon hal liftover` (HAL). |",
+        "| `horizon gfa-qc` | **NARROWED (Conditional \u2014 P2)** | **Build only if scoped to low-RSS gaps** | `horizon_gfa stats` (`96.9 MB` RSS) is a stateless 5-counter pass skipping `C`/`J` lines; whole-genome (`81.4M` segments) components + per-node depth/AF require ~6\u20138 GB RAM, and `odgi`/`panacus`/`gfatools` already cover depth/AF/components. FASTA lengths cannot replace `kopalli_2025_toward`'s `minimap2`+`Liftoff` gene checks. |",
+        "| `horizon gfa-prune` | **NARROWED (Low Priority \u2014 P3)** | **Defer** | `vg clip` (`-d`, `-D`, `-m`) already prunes GFAs without `XG` (`liao_2023_draft` ran `vcfbub` on VCFs, not GFAs). `horizon_clean.rs` counts raw traversals rather than haplotype AF, splits walks rather than bridging pruned segments, projects to ~35+ GB RSS at `81.4M` segments, and cannot detect `--max-del-bp` shortcuts in 2 streaming passes. |",
+        "| `horizon inversions` | **REFUTED** | **Do not build** | `PackedGraph` (`horizon_resolve.rs`) stores no adjacency list, snarl tree, or segment sequences (only counts Tarjan bridges and slices 1D walk windows, projecting to `~38.9 GB` RSS at `81.4M` segments); `FlatSeedIndex::intersect` conflates fwd/rc hits and lacks banded extension; `INVPG_annot` already solves this; `sena_2026` is an unreviewed preprint (linear-time ultrabubbles, not all-snarl enumeration). |",
+        "| `horizon eval-null` | **REFUTED** | **Do not build as CLI** | `calibrate_null_crc_from_seqs` returns only a scalar `64`-bp reversed-window threshold, `horizon_eval.rs` materializes all aligned pairs in `HashSet<(usize, usize)>` (unscalable to whole genomes), `quinlan-hall_2010_bedtools` is not a WGA ground-truth critique, and `tantan`/`LASTEX` + `Alignathon`/`mafComparator` + `bedtools` already cover this. Keep biological CRC calibration internal (`R7-CRC-BIO`). |",
+        "| `horizon synteny` | **REFUTED** | **Do not build** | Dense 1-bp `FlatSeedIndex` has a hard `4 Gbp` `u32` limit and peaks at `~93 GB` RAM on a single `3.1 Gbp` human genome; `lis_chain` is single-contig monotonic; `sdust_mask` misses interspersed LTRs; Mumemto's `707\u2013800 GB` figure was 8-thread total (`139 GB` serial); pairwise seeding cannot replace N-way multi-MUMs or `minimap2`+`SyRI`/`RagTag`/`Panagram`. |",
+        "## Utilities Worth Building (Narrowed Scope)",
+        "### 1. `horizon hal` (`P1`) \u2014 Pure-Rust Streaming HAL Toolkit",
+        "- **Community Value:** Eliminates C++ `halTools` + `libhdf5` build/deployment friction by shipping a single static binary for `stats`, `to-maf`, `liftover` (distinct from GFA-based `horizon lift`), and `to-gfa`.",
+        "- **Host HAL Fixtures Available:** `/home/rcb112/project/claude/bench/data/horizon_hal_bench/4-t2t-orangs-mc-2023v2.full.hal` (`5.53 GiB`) and `jarvis_lab_birds.hal` (`56.43 GiB`) pass `horizon_wga --hal-info`.",
+        "- **Required Engineering Before Shipping:**",
+        "  1. Remove `MAX_CHUNK_DECOMPRESSED_BYTES` (`256 MiB`) full-dataset buffering in `src/hal/hdf5_read.rs` in favor of streaming chunk-slice reads.",
+        "  2. Implement an HDF5-to-HAL segment/tree streaming reader (beyond the current in-memory single-level `HalAlignment::to_maf_for_genome` in `src/hal/mod.rs`).",
+        "  3. Define explicit GFA v1.1 `W`-line / `0M` link conventions for `to-gfa` (aligning with `vg`/`odgi` dialect assumptions).",
+        "- **Acceptance Criteria:** Interval-identical `stats`, `to-maf`, and `liftover` output compared against `halTools` on `4-t2t-orangs-mc-2023v2.full.hal` and `jarvis_lab_birds.hal` with zero `libhdf5` runtime dependencies.",
+        "",
+        "### 2. `horizon gfa-qc` (`P2`, Conditional) \u2014 Lightweight GFA Path & Component Summary",
+        "- **Scope Adjustment:** Rather than duplicating `odgi` (`stats`, `depth`, `paths`), `panacus`, `gfatools`, or `minimap2`+`Liftoff` gene-loss checks, extend `horizon_gfa` (`src/bin/horizon_gfa.rs`) only where a single streaming Rust binary adds value:",
+        "  - Per-path retained bp and `W`/`P` dialect consistency (avoiding mixed `P`+`W` double counting).",
+        "  - Explicitly budgeted (~6\u20138 GB RAM at `81.4M` HPRC segments) connected-component / inter-chromosomal bridge reporting, clearly distinguished from `horizon_gfa stats`'s `96.9 MB` stateless 5-counter pass.",
+        "## Utilities Rejected / Deferred After Round 8",
+        "- **`horizon gfa-prune` (`P3`, Deferred):** `vg clip` (`-d`, `-D`, `-m`) already operates on GFA without `XG`, and `horizon_clean.rs` lacks haplotype-AF tracking, segment bridging, and multi-pass deletion-shortcut detection.",
+        "- **`horizon inversions` (Rejected):** Existing `horizon_resolve.rs` `PackedGraph` does not implement snarl-tree enumeration or sequence storage and OOMs at `81.4M` segments (`~38.9 GB` projected); `INVPG_annot` already fills the workflow.",
+        "- **`horizon eval-null` (Rejected as CLI):** Reversed-sequence negative-control calibration belongs inside `horizon_filter` / `R7-CRC-BIO` rather than a separate CLI duplicating `LASTEX` / `mafComparator`.",
+        "- **`horizon synteny` (Rejected):** `FlatSeedIndex`'s `u32` `4 Gbp` cap, `~93 GB` single-genome build peak, and pairwise-only LIS cannot compete with `Mumemto` (`139 GB` serial N-way multi-MUMs), `RagTag`, `SyRI`, or `Panagram`."
+      ],
+      "note": "All 31 added lines apply the adjudicated Round 8 verdicts (C1-C4 narrowed/deferred, C3/C5/C6 rejected, plus HAL dataset cap, GFA RAM budget, and CLI overlap clarifications); no unreviewed empirical claims remain."
+    }
+  ],
+  "sealed": {
+    "attack-L1-correctness.md": "d0178606a809d3cf82dde4611c8da88a5e2172264e75f3e5a9b99b549116bd6b",
+    "attack-L2-prior-art.md": "01886b8088259d74f299ee8a6d32da64c7656b40af51911acc7807e7ddb4516c",
+    "attack-L3-provenance.md": "77d810004c3ed6826ea1bb3354f2e575242f2b71ef0eaea16ccbc05157c32c9e",
+    "attack-L4-reproduction.md": "30c0d85ad5444fb3483b26ba4269598d513f1d1d38e9fbee5dfb20400733a1ed"
+  },
+  "aborted": [],
+  "unbriefed": [],
+  "lens_drops": {
+    "dropped": [
+      "sampling",
+      "statistics",
+      "inference"
+    ],
+    "reason": "Proposal triage round: evaluating engineering feasibility, prior art, source-grounded motivation, and benchmark criteria for 6 proposed CLI utilities rather than a statistical survey."
+  },
+  "briefs_required": true,
+  "runner_is_author": true,
+  "claim_list_author": "runner",
+  "human_claim": "Evaluate which proposed community utilities in COMMUNITY_UTILITIES_PROPOSAL.md are worth building (user request 2026-11-21).",
+  "carried": [
+    {
+      "from": 7,
+      "kind": "open",
+      "item": "{\"id\": \"R7-SWEEPGA\", \"summary\": \"Install/benchmark SweepGA, impg, and KegAlign head-to-head on identical hardware (currently unavailable on host; narrowed residual of R2-RESOLVE-LIFT).\"}",
+      "id": "R7-SWEEPGA"
+    },
+    {
+      "from": 7,
+      "kind": "open",
+      "item": "{\"id\": \"R7-CRC-BIO\", \"summary\": \"Calibrate CRC on biological empirical negatives beyond 64-bp synthetic decoys and wire decoy CRC into horizon_filter (narrowed residual of R1-HMM).\"}",
+      "id": "R7-CRC-BIO"
+    },
+    {
+      "from": 7,
+      "kind": "open",
+      "item": "{\"id\": \"R7-HAL-ANC\", \"summary\": \"Infer ancestral sequences for Anc0..Anc3 (beyond hg38 cloning on pectinate tree), un-ignore real_hal_decode_from_env with a tracked fixture, and benchmark multi-hundred-GB external .hal alignments (narrowed residual of R2-HMM-XDROP).\"}",
+      "id": "R7-HAL-ANC"
+    }
+  ],
+  "dropped": [
+    {
+      "id": "R7-SWEEPGA",
+      "reason": "Out of scope for Round 8 proposal triage of docs/COMMUNITY_UTILITIES_PROPOSAL.md; remains open for host benchmark rounds."
+    },
+    {
+      "id": "R7-CRC-BIO",
+      "reason": "Out of scope for Round 8 proposal triage of docs/COMMUNITY_UTILITIES_PROPOSAL.md; remains open for empirical CRC calibration rounds."
+    },
+    {
+      "id": "R7-HAL-ANC",
+      "reason": "Out of scope for Round 8 proposal triage of docs/COMMUNITY_UTILITIES_PROPOSAL.md; remains open for HAL ancestral reconstruction rounds."
+    }
+  ],
+  "corrections": [
+    {
+      "id": "R8-CORR-1",
+      "status": "applied",
+      "file": "docs/COMMUNITY_UTILITIES_PROPOSAL.md",
+      "absent": [
+        "| **P1** | `horizon gfa-qc`",
+        "| **P2** | `horizon inversions`",
+        "| **P3** | `horizon eval-null`",
+        "| **P3** | `horizon synteny`"
+      ],
+      "present": [
+        "Round 8 Adversarial Triage",
+        "**REFUTED**",
+        "256 MiB",
+        "~93 GB"
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "lens": "correctness",
+      "id": "F1",
+      "flaw": "C1: no HDF5-to-HalAlignment loader, 256 MiB dataset cap, and single-level to_maf_for_genome"
+    },
+    {
+      "lens": "correctness",
+      "id": "F2",
+      "flaw": "C2: ~97 MB counter-only stats cannot compute connected components or per-node depth/AF at 81.4M segments"
+    },
+    {
+      "lens": "correctness",
+      "id": "F3",
+      "flaw": "C3: horizon_resolve PackedGraph lacks snarl-tree/sequences and FlatSeedIndex lacks banded extension"
+    },
+    {
+      "lens": "correctness",
+      "id": "F4",
+      "flaw": "C4: horizon_clean splits rather than bridges walks and two-pass streaming cannot detect deletion shortcuts"
+    },
+    {
+      "lens": "correctness",
+      "id": "F5",
+      "flaw": "C5: calibrate_null_crc_from_seqs returns only a scalar 64-bp threshold and horizon_eval runs internal aligner"
+    },
+    {
+      "lens": "correctness",
+      "id": "F6",
+      "flaw": "C6: FlatSeedIndex has 4 Gbp u32 limit, high human-genome RAM, single-contig LIS, and SDUST misses LTRs"
+    },
+    {
+      "lens": "prior-art",
+      "id": "F1",
+      "flaw": "C1: duplicates halTools/hal2vg except zero-libhdf5 static packaging"
+    },
+    {
+      "lens": "prior-art",
+      "id": "F2",
+      "flaw": "C2: duplicates odgi/panacus/gfatools and FASTA lengths do not replace minimap2+Liftoff checks"
+    },
+    {
+      "lens": "prior-art",
+      "id": "F3",
+      "flaw": "C3: duplicates INVPG_annot and cites SPQR trees while proposing Tarjan bridges"
+    },
+    {
+      "lens": "prior-art",
+      "id": "F4",
+      "flaw": "C4: duplicates vg clip without XG"
+    },
+    {
+      "lens": "prior-art",
+      "id": "F5",
+      "flaw": "C5: duplicates tantan/LASTEX, Alignathon/mafComparator, and bedtools"
+    },
+    {
+      "lens": "prior-art",
+      "id": "F6",
+      "flaw": "C6: misreads Mumemto RAM, ignores RagTag/Panagram, and pairwise seeding cannot replace N-way multi-MUMs"
+    },
+    {
+      "lens": "provenance",
+      "id": "F1",
+      "flaw": "C1: no HDF5-to-HalAlignment loader, 256 MiB dataset cap, and single-level to_maf_for_genome"
+    },
+    {
+      "lens": "provenance",
+      "id": "F2",
+      "flaw": "C2: ~97 MB counter-only stats cannot compute connected components or per-node depth/AF at 81.4M segments"
+    },
+    {
+      "lens": "provenance",
+      "id": "F3",
+      "flaw": "C3: horizon_resolve PackedGraph lacks snarl-tree/sequences and FlatSeedIndex lacks banded extension"
+    },
+    {
+      "lens": "provenance",
+      "id": "F4",
+      "flaw": "C4: vcfbub VCF filtering conflated with vg clip graph pruning and horizon_clean splits without bridging"
+    },
+    {
+      "lens": "provenance",
+      "id": "F5",
+      "flaw": "C5: quinlan-hall_2010_bedtools misattributed as WGA ground-truth critique; CRC scope overstated"
+    },
+    {
+      "lens": "provenance",
+      "id": "F6",
+      "flaw": "C6: FlatSeedIndex has 4 Gbp u32 limit, high human-genome RAM, single-contig LIS, and SDUST misses LTRs"
+    },
+    {
+      "lens": "reproduction",
+      "id": "F1",
+      "flaw": "C1: no HDF5-to-HalAlignment loader, 256 MiB dataset cap, and single-level to_maf_for_genome"
+    },
+    {
+      "lens": "reproduction",
+      "id": "F2",
+      "flaw": "C2: ~97 MB counter-only stats cannot compute connected components or per-node depth/AF at 81.4M segments"
+    },
+    {
+      "lens": "reproduction",
+      "id": "F3",
+      "flaw": "C3: PackedGraph OOMs at 81.4M segments and lacks snarl-tree/sequences"
+    },
+    {
+      "lens": "reproduction",
+      "id": "F4",
+      "flaw": "C4: horizon_clean OOMs at 81.4M segments and splits walks instead of bridging"
+    },
+    {
+      "lens": "reproduction",
+      "id": "F5",
+      "flaw": "C5: horizon_eval materializes all pairs in HashSet (unscalable to whole genomes)"
+    },
+    {
+      "lens": "reproduction",
+      "id": "F6",
+      "flaw": "C6: FlatSeedIndex has 4 Gbp u32 limit, high human-genome RAM, single-contig LIS, and SDUST misses LTRs"
+    }
+  ],
+  "open": [],
+  "unchallenged": [],
+  "discharges": {},
+  "decisions": [],
+  "sealed_blobs": {
+    "attack-L1-correctness.md": {
+      "blob": "2f311760def8a24dca6fb6b784cbb58721435f7f",
+      "ref": "refs/round/seal/8/attack-correctness.md"
+    },
+    "attack-L2-prior-art.md": {
+      "blob": "09e08ea2d27fcb4b579ce305374afb8d2bbdd2e0",
+      "ref": "refs/round/seal/8/attack-prior-art.md"
+    },
+    "attack-L3-provenance.md": {
+      "blob": "b11dd77c6e59a7776462555bcaa81aecc0c3911e",
+      "ref": "refs/round/seal/8/attack-provenance.md"
+    }
+  },
+  "diversity": {
+    "attacks": 4,
+    "lenses": [
+      "correctness",
+      "prior-art",
+      "provenance",
+      "reproduction"
+    ],
+    "mean_pairwise_similarity": 0.239,
+    "max_pairwise_similarity": 0.326,
+    "most_similar_pair": [
+      "attack-L1-correctness.md",
+      "attack-L4-reproduction.md"
+    ],
+    "claims_answered": 6,
+    "claims_corroborated": 6,
+    "claims_single_voter": 0,
+    "claims_unanimous": 0,
+    "verdict_agreement": 0.0,
+    "findings_mode": "synthesized",
+    "findings_filed": 24,
+    "findings_per_attacker": {
+      "attack-L1-correctness.md": 6,
+      "attack-L2-prior-art.md": 6,
+      "attack-L3-provenance.md": 6,
+      "attack-L4-reproduction.md": 6
+    },
+    "distinct_flaws": 17,
+    "flaws_named_by_more_than_one_attacker": 4,
+    "duplicate_rate": 0.235
+  },
+  "outcome": "TRIAGED_AND_REPAIRED",
+  "landed": "Rewrote docs/COMMUNITY_UTILITIES_PROPOSAL.md (+31/-98 vs 0f31c26) to reflect Round 8 adjudicated verdicts: narrowed horizon hal (P1 build, requiring streaming HDF5-to-HAL loader and removal of 256 MiB MAX_CHUNK_DECOMPRESSED_BYTES cap) and horizon gfa-qc (P2 conditional low-RSS path-retention/component summary), deferred horizon gfa-prune (P3, behind vg clip), and rejected horizon inversions, horizon eval-null (as CLI), and horizon synteny.",
+  "overturned": "None; all 6 proposal claims were adjudicated with C1/C2/C4 narrowed and C3/C5/C6 refuted, and all corrections applied to docs/COMMUNITY_UTILITIES_PROPOSAL.md before close.",
+  "class": "proposal-triage",
+  "survived": "Zero-libhdf5 static-binary packaging for horizon hal (with host 5.53 GiB orangutan and 56.43 GiB bird HAL fixtures passing --hal-info) and a tightly scoped low-RSS streaming path-retention / component-bridge summary for horizon gfa-qc.",
+  "post_round_audit": {
+    "by": "41339bd9-abd8-429d-baa2-2a031bfb0344",
+    "date": "2026-11-21",
+    "evidence": "Cold audit of the working-tree diff on docs/COMMUNITY_UTILITIES_PROPOSAL.md (+31/-98 vs 0f31c26cf24e) found no stale derived quantities, unit mismatches, or Executive-Summary-vs-body contradictions; ./scripts/round corrections 8 (R8-CORR-1 applied), ./scripts/round check 8 --full (drift reviewed), and cargo test --quiet (129 passed, 0 failed) all exited 0."
+  }
+}

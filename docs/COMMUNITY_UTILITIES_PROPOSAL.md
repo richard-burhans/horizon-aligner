@@ -1,120 +1,47 @@
 # Community Utilities Proposal: Large-Scale Alignment & Pangenome Tooling
 
-*Grounded in the project's alignment and pangenome literature corpus (`references.bib`, `genome-alignment-synteny-duplications`, and `bioinformatics-tooling-benchmarking`) and mapped onto existing primitives in `horizon-aligner`.*
+*Grounded in the project's alignment and pangenome literature corpus (`references.bib`, `genome-alignment-synteny-duplications`, and `bioinformatics-tooling-benchmarking`), mapped onto existing primitives in `horizon-aligner`, and **adversarially triaged in Round 8** (`reports/rounds/round-8/`).*
 
 ---
 
-## Executive Summary
+## Executive Summary & Round 8 Triage Verdict
 
-Across recent large-scale whole-genome alignment (WGA) and pangenome graph papers—including HPRC (`liao_2023_draft`), Minigraph-Cactus (`hickey_2023_pangenome`), PGGB (`garrison_2024_building`), ODGI (`guarracino_2022_odgi`), comparative pangenome benchmarks (`andreace_2023_comparing`, `kopalli_2025_toward`), inversion & snarl theory (`romain_2026_inversions-pangenome-graphs`, `sena_2026_bubble-subgraphs-spqr`), and maximal-match diagnostics (`shivakumar_2025_mumemto`)—researchers repeatedly report the same operational gaps:
+Across recent large-scale whole-genome alignment (WGA) and pangenome graph papers—including HPRC (`liao_2023_draft`), Minigraph-Cactus (`hickey_2023_pangenome`), PGGB (`garrison_2024_building`), ODGI (`guarracino_2022_odgi`), comparative pangenome benchmarks (`andreace_2023_comparing`, `kopalli_2025_toward`), inversion & snarl theory (`romain_2026_inversions-pangenome-graphs`, `sena_2026_bubble-subgraphs-spqr`), and maximal-match diagnostics (`shivakumar_2025_mumemto`)—researchers repeatedly report dependency walls (`libhdf5` / C++ `halTools`), multi-tool glue pipelines, and lack of lightweight QC.
 
-1. **Dependency & memory walls** (`libhdf5` / C++ `halTools`, `700–800 GB` suffix-array RAM, `70–154 GB` graph builders/indexers).
-2. **Ad-hoc multi-tool glue** (chaining `odgi paths` + `minimap2` + `samtools` + `Liftoff`, or `vg deconstruct` + `minimap2` + `bedtools`, just to audit clipping or annotate inversions).
-3. **Lack of ground-truth-free specificity & retention diagnostics** (silent sequence clipping in Minigraph-Cactus, giant-component collapses, and aligner benchmarks that rely solely on self-referential coverage or cross-aligner agreement).
+**Round 8 Adversarial Triage** evaluated six candidate utilities across `correctness`, `prior-art`, `provenance`, and `reproduction` lenses:
 
-Because `horizon-aligner` already provides a zero-`libhdf5` streaming HAL/HDF5 reader (`src/hal/`), a streaming `12 GB+` GFA parser (`src/gfa/mod.rs`), a `u32` `PackedGraph` + `O(V+E)` Tarjan snarl decomposer (`src/bin/horizon_resolve.rs`), strand-symmetric `FlatSeedIndex` (`src/seeding/flat_index.rs`), and reversed-sequence Conformal Risk Control calibration (`src/mdl/dp.rs`), six high-impact community utilities can be built directly on existing internal primitives.
-
----
-
-## Prioritized Roadmap
-
-| Priority | Proposed Subcommand | Primary Pain Point Addressed | Key Literature Motivation | Existing `horizon-aligner` Primitives |
-|---|---|---|---|---|
-| **P1** | `horizon hal` | Zero-`libhdf5` HAL inspection, MAF export, and coordinate liftover | `hickey_2013_hierarchical`, `liao_2023_draft`, `armstrong_2020_progressive` | `src/hal/hdf5_read.rs`, `src/hal/mod.rs`, `src/coord.rs` |
-| **P1** | `horizon gfa-qc` | Single-pass graph retention, clipping, component & node-depth audit | `kopalli_2025_toward`, `liao_2023_draft`, `andreace_2023_comparing`, `guarracino_2022_odgi` | `src/gfa/mod.rs`, `src/bin/horizon_gfa.rs`, `src/io_util.rs` |
-| **P2** | `horizon inversions` | Native GFA path-explicit & alignment-rescued inversion / snarl caller | `romain_2026_inversions-pangenome-graphs`, `sena_2026_bubble-subgraphs-spqr` | `PackedGraph` + Tarjan snarls (`horizon_resolve.rs`), `FlatSeedIndex` |
-| **P2** | `horizon gfa-prune` | Streaming AF-filtering & deletion-bubble capping without `vg`/`XG` | `liao_2023_draft`, `hickey_2023_pangenome`, `kopalli_2025_toward` | Two-pass `W`/`P` rewriting (`horizon_clean.rs`), `src/gfa/mod.rs` |
-| **P3** | `horizon eval-null` | Reversed/permuted-sequence empirical FPR + cross-aligner concordance | `earl_2014_alignathon`, `quinlan-hall_2010_bedtools`, `frith_2011_tantan` | `calibrate_null_crc_from_seqs` (`src/mdl/dp.rs`), `horizon_eval.rs` |
-| **P3** | `horizon synteny` | Low-RAM chimeric-join, orientation-flip & repeat-spike assembly scan | `shivakumar_2025_mumemto`, `liu_2018_inferring` | `FlatSeedIndex`, LIS chaining (`src/seeding/chain.rs`), SDUST |
+| Utility | Round 8 Verdict | Decision | Summary of Adjudicated Findings |
+|---|---|---|---|
+| `horizon hal` | **NARROWED (Worth Building — P1)** | **Build** | Only non-duplicative value vs `halTools`/`hal2vg` is zero-`libhdf5` static-binary packaging. Requires removing `hdf5_read.rs`'s `256 MiB` dataset cap via streaming chunk-slice reads and extending `HalAlignment::to_maf_for_genome` beyond 1 tree level. Must clarify relationship to `horizon lift` (GFA) vs `horizon hal liftover` (HAL). |
+| `horizon gfa-qc` | **NARROWED (Conditional — P2)** | **Build only if scoped to low-RSS gaps** | `horizon_gfa stats` (`96.9 MB` RSS) is a stateless 5-counter pass skipping `C`/`J` lines; whole-genome (`81.4M` segments) components + per-node depth/AF require ~6–8 GB RAM, and `odgi`/`panacus`/`gfatools` already cover depth/AF/components. FASTA lengths cannot replace `kopalli_2025_toward`'s `minimap2`+`Liftoff` gene checks. |
+| `horizon gfa-prune` | **NARROWED (Low Priority — P3)** | **Defer** | `vg clip` (`-d`, `-D`, `-m`) already prunes GFAs without `XG` (`liao_2023_draft` ran `vcfbub` on VCFs, not GFAs). `horizon_clean.rs` counts raw traversals rather than haplotype AF, splits walks rather than bridging pruned segments, projects to ~35+ GB RSS at `81.4M` segments, and cannot detect `--max-del-bp` shortcuts in 2 streaming passes. |
+| `horizon inversions` | **REFUTED** | **Do not build** | `PackedGraph` (`horizon_resolve.rs`) stores no adjacency list, snarl tree, or segment sequences (only counts Tarjan bridges and slices 1D walk windows, projecting to `~38.9 GB` RSS at `81.4M` segments); `FlatSeedIndex::intersect` conflates fwd/rc hits and lacks banded extension; `INVPG_annot` already solves this; `sena_2026` is an unreviewed preprint (linear-time ultrabubbles, not all-snarl enumeration). |
+| `horizon eval-null` | **REFUTED** | **Do not build as CLI** | `calibrate_null_crc_from_seqs` returns only a scalar `64`-bp reversed-window threshold, `horizon_eval.rs` materializes all aligned pairs in `HashSet<(usize, usize)>` (unscalable to whole genomes), `quinlan-hall_2010_bedtools` is not a WGA ground-truth critique, and `tantan`/`LASTEX` + `Alignathon`/`mafComparator` + `bedtools` already cover this. Keep biological CRC calibration internal (`R7-CRC-BIO`). |
+| `horizon synteny` | **REFUTED** | **Do not build** | Dense 1-bp `FlatSeedIndex` has a hard `4 Gbp` `u32` limit and peaks at `~93 GB` RAM on a single `3.1 Gbp` human genome; `lis_chain` is single-contig monotonic; `sdust_mask` misses interspersed LTRs; Mumemto's `707–800 GB` figure was 8-thread total (`139 GB` serial); pairwise seeding cannot replace N-way multi-MUMs or `minimap2`+`SyRI`/`RagTag`/`Panagram`. |
 
 ---
 
-## Detailed Tool Proposals
+## Utilities Worth Building (Narrowed Scope)
 
-### 1. `horizon hal` — Pure-Rust Streaming HAL Toolkit
-- **Problem:** Multi-genome WGA ecosystems (Progressive Cactus, Minigraph-Cactus, UCSC/VGP pipelines) store alignments in `.hal` (HDF5), requiring C++ `halTools` (`halStats`, `hal2maf`, `halLiftover`, `hal2vg`) linked against `libhdf5`. Building and deploying `halTools` in containers or HPC environments is brittle, and `horizon_wga --hal-info` currently exposes only root superblock/member inspection.
-- **Proposed Subcommands:**
-  - `horizon hal stats <file.hal>` — genome sizes, top/bottom segment counts, contig counts, and tree topology.
-  - `horizon hal to-maf <file.hal> --ref <genome> [--target-genomes ...] [--region chr:start-end] [--out out.maf.gz]` — streaming clade/region MAF projection.
-  - `horizon hal liftover <file.hal> --from <genome> --to <genome> <regions.bed>` — coordinate liftover reusing `src/coord.rs` UCSC strand arithmetic.
-  - `horizon hal to-gfa <file.hal> [--no-ancestors] --out out.gfa.zst` — direct HAL-to-GFA v1.1 conversion without `hal2vg | vg convert`.
-- **Reused Internals:** `src/hal/hdf5_read.rs` (already verified against 5.5 GiB `4-t2t-orangs-mc-2023v2.full.hal` and 56.4 GiB `jarvis_lab_birds.hal`, including stacked multi-layer zlib deflate filters) and `src/hal/mod.rs` (`HalAlignment::to_maf_for_genome`).
-- **Acceptance Criteria:** Byte-accurate or interval-identical `stats`, `to-maf`, and `liftover` output compared against `halTools` on `4-t2t-orangs-mc-2023v2.full.hal` and `jarvis_lab_birds.hal` with zero `libhdf5` runtime dependencies.
+### 1. `horizon hal` (`P1`) — Pure-Rust Streaming HAL Toolkit
+- **Community Value:** Eliminates C++ `halTools` + `libhdf5` build/deployment friction by shipping a single static binary for `stats`, `to-maf`, `liftover` (distinct from GFA-based `horizon lift`), and `to-gfa`.
+- **Host HAL Fixtures Available:** `/home/rcb112/project/claude/bench/data/horizon_hal_bench/4-t2t-orangs-mc-2023v2.full.hal` (`5.53 GiB`) and `jarvis_lab_birds.hal` (`56.43 GiB`) pass `horizon_wga --hal-info`.
+- **Required Engineering Before Shipping:**
+  1. Remove `MAX_CHUNK_DECOMPRESSED_BYTES` (`256 MiB`) full-dataset buffering in `src/hal/hdf5_read.rs` in favor of streaming chunk-slice reads.
+  2. Implement an HDF5-to-HAL segment/tree streaming reader (beyond the current in-memory single-level `HalAlignment::to_maf_for_genome` in `src/hal/mod.rs`).
+  3. Define explicit GFA v1.1 `W`-line / `0M` link conventions for `to-gfa` (aligning with `vg`/`odgi` dialect assumptions).
+- **Acceptance Criteria:** Interval-identical `stats`, `to-maf`, and `liftover` output compared against `halTools` on `4-t2t-orangs-mc-2023v2.full.hal` and `jarvis_lab_birds.hal` with zero `libhdf5` runtime dependencies.
 
----
-
-### 2. `horizon gfa-qc` — Streaming Graph Retention, Clipping & Topology Auditor
-- **Problem:**
-  - `liao_2023_draft` and `garrison_2024_building` (Supplementary E) document that Minigraph-Cactus clips an average of `188.6 Mb` per non-reference human haplotype and `15–22%` of sequence in *Arabidopsis* / *E. coli* / gibbon, sometimes removing non-centromeric genes.
-  - `kopalli_2025_toward` had to combine `odgi paths`, `minimap2`, `samtools`, and `Liftoff` to compute per-assembly retention in crop pangenomes.
-  - `andreace_2023_comparing` and `guarracino_2022_odgi` highlight giant connected components linking unrelated chromosomes and `10^5–10^6`-fold node-depth spikes in collapsed repeats.
-- **Proposed CLI:**
-  ```bash
-  horizon gfa-qc <graph.gfa.gz> [--fasta-manifest assemblies.tsv] [--out-prefix qc]
-  ```
-- **Outputs:**
-  - `<out>.paths.tsv`: per-path/haplotype retained bp, unrepresented gap count/bp (when input FASTA lengths or `.fai` are supplied), and chromosome-component assignments.
-  - `<out>.components.tsv`: connected components, node/bp totals, and flags for multi-chromosome bridges.
-  - `<out>.depth_hist.tsv`: node-depth & haplotype-support (`AF`) histograms (allowing users to preview `vg clip -d` thresholds before pruning) plus top-N extreme-depth repeat hotspots.
-- **Reused Internals:** `src/gfa/mod.rs` streaming reader, `src/io_util.rs` transparent `.gz`/`.bgz`/`.zst` I/O, and the low-memory counter architecture of `src/bin/horizon_gfa.rs` (`~97 MB` peak RSS on the `12 GB` HPRC graph).
+### 2. `horizon gfa-qc` (`P2`, Conditional) — Lightweight GFA Path & Component Summary
+- **Scope Adjustment:** Rather than duplicating `odgi` (`stats`, `depth`, `paths`), `panacus`, `gfatools`, or `minimap2`+`Liftoff` gene-loss checks, extend `horizon_gfa` (`src/bin/horizon_gfa.rs`) only where a single streaming Rust binary adds value:
+  - Per-path retained bp and `W`/`P` dialect consistency (avoiding mixed `P`+`W` double counting).
+  - Explicitly budgeted (~6–8 GB RAM at `81.4M` HPRC segments) connected-component / inter-chromosomal bridge reporting, clearly distinguished from `horizon_gfa stats`'s `96.9 MB` stateless 5-counter pass.
 
 ---
 
-### 3. `horizon inversions` — GFA-Native Inversion & Snarl/Ultrabubble Caller
-- **Problem:** `romain_2026_inversions-pangenome-graphs` (`INVPG_annot`) demonstrates that inversions manifest in pangenome graphs in two distinct topologies:
-  1. **Path-explicit:** alleles traverse shared nodes in opposite orientations.
-  2. **Alignment-rescued:** alleles traverse distinct nodes whose sequences are reverse complements of each other.
-  Current workflows require `vg deconstruct` + external `minimap2` alignment of bubble alleles + `bedtools`, and still miss or fragment inversions into dense small-bubble clusters. Meanwhile `sena_2026_bubble-subgraphs-spqr` shows SPQR-tree traversal avoids Paten (2018)'s quadratic worst case when enumerating all snarls/ultrabubbles.
-- **Proposed CLI:**
-  ```bash
-  horizon inversions <graph.gfa.gz> [--min-len 50] [--min-cov 0.5] [--out inversions.bedpe]
-  ```
-- **Design:**
-  - Build `PackedGraph` + Tarjan biedged snarl decomposition (reusing `horizon_resolve.rs`).
-  - Classify each snarl/bubble as `path_explicit` (opposite-strand shared node coverage $\ge \text{min-cov}$) or `alignment_rescued` (using `FlatSeedIndex` strand-symmetric `11-of-15` + banded extension directly on candidate allele sequences, eliminating external `minimap2` calls).
-  - Emit standardized BEDPE/TSV with breakpoint coordinates, topology class, allele lengths, and haplotype traversal counts.
+## Utilities Rejected / Deferred After Round 8
 
----
-
-### 4. `horizon gfa-prune` — Streaming Allele-Frequency & Bubble-Size Graph Pruner
-- **Problem:** `liao_2023_draft` required `vg clip -d 9 -m 10000` (minimum 10% haplotype support) to make HPRC graphs usable for short-read mapping and `vcfbub -l 0 -r 100000` to drop >100 kb / >10 Mb spurious deletion edges. `kopalli_2025_toward` reported that PGGB graphs failed `Giraffe` indexing due to memory/complexity.
-- **Proposed CLI:**
-  ```bash
-  horizon gfa-prune <in.gfa.gz> --min-haps 2 [--min-af 0.10] [--max-del-bp 100000] --out pruned.gfa.zst
-  ```
-- **Design:**
-  - Pass 1: stream `W`/`P` paths to count per-segment/per-link haplotype support and span.
-  - Pass 2: prune unsupported segments/links and oversized deletion shortcuts while rewriting affected `W`/`P` walks (splitting or bridging cleanly using the walk-splitting and CIGAR-overlap logic already implemented in `horizon_clean.rs`).
-
----
-
-### 5. `horizon eval-null` — Empirical Negative-Control & Concordance Benchmarker
-- **Problem:** `earl_2014_alignathon`, `quinlan-hall_2010_bedtools`, `frith_2011_tantan`, `garrison_2024_building`, and `kopalli_2025_toward` all emphasize that real-genome WGA lacks ground truth. Most papers report only self-referential coverage or agreement with another aligner (`NUCMER`/`MULTIZ`), rarely measuring empirical false-positive rates on reversed or shuffled sequences.
-- **Proposed CLI:**
-  ```bash
-  horizon eval-null --query q.fa --target t.fa --aln out.maf [--decoy-aln reversed.maf] [--n-shuffles 20]
-  ```
-- **Design:**
-  - Generate reversed / dinucleotide-preserving shuffled decoy alignments or score existing decoy MAF/PAF outputs.
-  - Report empirical FPR (aligned bp/kb on reversed negative controls), GC-stratified bit-score distributions (reusing `calibrate_null_crc_from_seqs` from `src/mdl/dp.rs`), and pairwise-vs-graph alignment concordance alongside `horizon_eval.rs` recall/precision.
-
----
-
-### 6. `horizon synteny` — Low-Memory Chimeric-Join & Orientation-Flip Assembly Scanner
-- **Problem:** `shivakumar_2025_mumemto` showed that multi-MUM collinearity catches real HPRC misassemblies (such as a `chr17–chr19` chimeric join), RagTag orientation flips, and pericentromeric LTR repeat spikes—but full suffix-array + LCP construction required `707–800 GB` RAM on human pangenomes. `liu_2018_inferring` also highlights how anchor-based synteny methods degrade on fragmented assemblies.
-- **Proposed CLI:**
-  ```bash
-  horizon synteny <ref.fa> <assemblies...> [--min-block-bp 10000] [--out synteny_flags.tsv]
-  ```
-- **Design:**
-  - Index reference/assemblies with `FlatSeedIndex` (`12 bytes/entry`) + SDUST repeat masking (`src/seeding/mod.rs`) and run LIS chaining (`src/seeding/chain.rs`).
-  - Flag contigs with split multi-chromosome collinear chains (chimeric joins), strand-inverted scaffolds relative to the consensus, and repeat-density spikes—using a few GB of RAM rather than hundreds of GB.
-
----
-
-## Recommended Implementation Order
-
-1. **`horizon hal` (`stats`, `to-maf`, `liftover`)** — highest immediate leverage because `src/hal/` is already built and verified on multi-gigabyte real HAL files (`jarvis_lab_birds.hal`, `4-t2t-orangs-mc-2023v2.full.hal`).
-2. **`horizon gfa-qc`** — natural extension of `horizon_gfa` (`~97 MB` RSS on `12 GB` HPRC GFA) that directly automates the retention/depth/component diagnostics pangenome papers currently script by hand.
-3. **`horizon inversions` & `horizon gfa-prune`** — leverage `PackedGraph` + Tarjan snarls (`horizon_resolve.rs`) and walk-rewriting (`horizon_clean.rs`) to replace `vg` + `minimap2` + `bedtools` glue pipelines.
-4. **`horizon eval-null` & `horizon synteny`** — round out benchmarking and assembly-QC workflows using existing CRC null calibration and `FlatSeedIndex` chaining.
+- **`horizon gfa-prune` (`P3`, Deferred):** `vg clip` (`-d`, `-D`, `-m`) already operates on GFA without `XG`, and `horizon_clean.rs` lacks haplotype-AF tracking, segment bridging, and multi-pass deletion-shortcut detection.
+- **`horizon inversions` (Rejected):** Existing `horizon_resolve.rs` `PackedGraph` does not implement snarl-tree enumeration or sequence storage and OOMs at `81.4M` segments (`~38.9 GB` projected); `INVPG_annot` already fills the workflow.
+- **`horizon eval-null` (Rejected as CLI):** Reversed-sequence negative-control calibration belongs inside `horizon_filter` / `R7-CRC-BIO` rather than a separate CLI duplicating `LASTEX` / `mafComparator`.
+- **`horizon synteny` (Rejected):** `FlatSeedIndex`'s `u32` `4 Gbp` cap, `~93 GB` single-genome build peak, and pairwise-only LIS cannot compete with `Mumemto` (`139 GB` serial N-way multi-MUMs), `RagTag`, `SyRI`, or `Panagram`.
