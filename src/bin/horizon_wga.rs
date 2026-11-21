@@ -172,6 +172,9 @@ fn parse_args() -> Result<Option<CliArgs>> {
         if !pos.is_empty() {
             bail!("--hal-info does not accept positional arguments");
         }
+        if maf_out.is_some() || gfa_out.is_some() {
+            bail!("--maf and --gfa outputs are not supported in --hal-info mode");
+        }
         (PathBuf::new(), PathBuf::new(), 1)
     } else if graph_path.is_some() {
         if pos.len() > 2 {
@@ -226,68 +229,79 @@ fn parse_args() -> Result<Option<CliArgs>> {
     }))
 }
 
-#[allow(clippy::too_many_lines)]
 fn main() -> Result<()> {
     let Some(cli) = parse_args()? else {
         return Ok(());
     };
     if let Some(hal_path) = &cli.hal_info {
-        let info = horizon_aligner::hal::inspect_hal_genomes(hal_path)
-            .with_context(|| format!("inspecting {}", hal_path.display()))?
-            .with_context(|| format!("{} is not a valid HDF5 HAL file", hal_path.display()))?;
-        println!(
-            "hal_file={} hdf5_v={} offset_bytes={} len_bytes={} root_members={}",
-            hal_path.display(),
-            info.superblock.version,
-            info.superblock.offset_size,
-            info.superblock.length_size,
-            info.root_names.len()
-        );
-        if !info.root_names.is_empty() {
-            println!(
-                "sample_members={}",
-                info.root_names[..info.root_names.len().min(10)].join(",")
-            );
-        }
-        return Ok(());
+        return run_hal_info(hal_path);
     }
     if let Some(graph_p) = &cli.graph_path {
-        let t0 = Instant::now();
-        let dag_nodes = load_gfa_dag(graph_p)?;
-        let dag_index = DagSeedIndex::build(&dag_nodes);
-        let queries = read_fasta_contigs(&cli.fa_y, cli.max_contigs)?;
-        let mut total_pairs = 0usize;
-        let mut total_bubbles = 0usize;
-        for (qname, qseq) in &queries {
-            let dag_params = estimate_dag_hmm_params(&dag_nodes, qseq);
-            let aln =
-                align_seq_to_dag_seeded_indexed(&dag_nodes, &dag_index, qseq, &dag_params, 10.0);
-            total_pairs += aln.kept_pairs.len();
-            total_bubbles += aln.bubbles;
-            let path_str = aln.path_nodes.iter().fold(String::new(), |mut acc, &idx| {
-                let _ = write!(acc, ">{}", dag_nodes[idx].name);
-                acc
-            });
-            println!(
-                "{}\t{}\t{}\tkept_bp={}\tscore_bits={:.1}\tbubbles={}",
-                qname,
-                qseq.len(),
-                path_str,
-                aln.kept_pairs.len(),
-                aln.score_bits,
-                aln.bubbles
-            );
-        }
-        println!(
-            "graph_nodes={} query_contigs={} aligned_pairs={} total_bubbles={} elapsed_s={:.4}",
-            dag_nodes.len(),
-            queries.len(),
-            total_pairs,
-            total_bubbles,
-            t0.elapsed().as_secs_f64()
-        );
-        return Ok(());
+        return run_graph_mode(&cli, graph_p);
     }
+    run_pairwise_wga(&cli)
+}
+
+fn run_hal_info(hal_path: &std::path::Path) -> Result<()> {
+    let info = horizon_aligner::hal::inspect_hal_genomes(hal_path)
+        .with_context(|| format!("inspecting {}", hal_path.display()))?
+        .with_context(|| format!("{} is not a valid HDF5 HAL file", hal_path.display()))?;
+    println!(
+        "hal_file={} hdf5_v={} offset_bytes={} len_bytes={} root_members={}",
+        hal_path.display(),
+        info.superblock.version,
+        info.superblock.offset_size,
+        info.superblock.length_size,
+        info.root_names.len()
+    );
+    if !info.root_names.is_empty() {
+        println!(
+            "sample_members={}",
+            info.root_names[..info.root_names.len().min(10)].join(",")
+        );
+    }
+    Ok(())
+}
+
+fn run_graph_mode(cli: &CliArgs, graph_p: &std::path::Path) -> Result<()> {
+    let t0 = Instant::now();
+    let dag_nodes = load_gfa_dag(graph_p)?;
+    let dag_index = DagSeedIndex::build(&dag_nodes);
+    let queries = read_fasta_contigs(&cli.fa_y, cli.max_contigs)?;
+    let mut total_pairs = 0usize;
+    let mut total_bubbles = 0usize;
+    for (qname, qseq) in &queries {
+        let dag_params = estimate_dag_hmm_params(&dag_nodes, qseq);
+        let aln = align_seq_to_dag_seeded_indexed(&dag_nodes, &dag_index, qseq, &dag_params, 10.0);
+        total_pairs += aln.kept_pairs.len();
+        total_bubbles += aln.bubbles;
+        let path_str = aln.path_nodes.iter().fold(String::new(), |mut acc, &idx| {
+            let _ = write!(acc, ">{}", dag_nodes[idx].name);
+            acc
+        });
+        println!(
+            "{}\t{}\t{}\tkept_bp={}\tscore_bits={:.1}\tbubbles={}",
+            qname,
+            qseq.len(),
+            path_str,
+            aln.kept_pairs.len(),
+            aln.score_bits,
+            aln.bubbles
+        );
+    }
+    println!(
+        "graph_nodes={} query_contigs={} aligned_pairs={} total_bubbles={} elapsed_s={:.4}",
+        dag_nodes.len(),
+        queries.len(),
+        total_pairs,
+        total_bubbles,
+        t0.elapsed().as_secs_f64()
+    );
+    Ok(())
+}
+
+#[allow(clippy::too_many_lines)]
+fn run_pairwise_wga(cli: &CliArgs) -> Result<()> {
     let t0 = Instant::now();
     let contigs_x = read_fasta_contigs(&cli.fa_x, cli.max_contigs)?;
     let contigs_y = read_fasta_contigs(&cli.fa_y, cli.max_contigs)?;

@@ -265,7 +265,7 @@ pub(crate) fn partition_colinear_run_groups(runs: &[AlignedRun]) -> Vec<(Vec<Ali
         }
     };
     for &r in ordered.iter() {
-        if r.len == 0 || (r.is_rc && r.y_start + 1 < r.len) {
+        if r.len == 0 || (r.is_rc && r.y_start.checked_add(1).is_none_or(|y1| y1 < r.len)) {
             continue;
         }
         let mut idx = 0usize;
@@ -289,7 +289,11 @@ pub(crate) fn partition_colinear_run_groups(runs: &[AlignedRun]) -> Vec<(Vec<Ali
                 continue;
             }
             let ok_y = if r.is_rc {
-                let Some(prev_y_lim) = (prev.y_start + 1).checked_sub(prev.len) else {
+                let Some(prev_y_lim) = prev
+                    .y_start
+                    .checked_add(1)
+                    .and_then(|y1| y1.checked_sub(prev.len))
+                else {
                     continue;
                 };
                 r.y_start < prev_y_lim && (prev_y_lim - 1 - r.y_start) <= 40

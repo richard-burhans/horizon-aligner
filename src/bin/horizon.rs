@@ -48,7 +48,7 @@ const SUBCOMMANDS: &[(&str, &str, &str)] = &[
     (
         "locus",
         "horizon_locus",
-        "Fast per-locus alignment extractor & evolutionary distance estimator from PAF/MAF",
+        "Fast per-locus alignment extractor & evolutionary distance estimator from multi-FASTA",
     ),
     (
         "eval",

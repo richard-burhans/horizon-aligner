@@ -110,7 +110,7 @@ fn extend_ungapped_hsp(
     (total >= min_score).then_some((lx, ly, rx, ry, total))
 }
 
-pub(crate) fn append_hsp_gated_lastz12_lcbs(
+pub(crate) fn append_hsp_gated_lcbs(
     target: &mut LcbList,
     seq_x: &[u8],
     seq_y: &[u8],
@@ -192,7 +192,7 @@ pub(crate) fn append_nonoverlapping_lcbs(
 
 #[cfg(test)]
 mod tests {
-    use super::append_hsp_gated_lastz12_lcbs;
+    use super::append_hsp_gated_lcbs;
     use crate::seeding::LcbList;
 
     #[test]
@@ -204,7 +204,7 @@ mod tests {
         }
         let hits: Vec<(usize, usize)> = (0..2200).map(|i| (i, i)).collect();
         let mut lcbs: LcbList = Vec::new();
-        append_hsp_gated_lastz12_lcbs(&mut lcbs, &seq, &seq, &hits, 19, 120);
+        append_hsp_gated_lcbs(&mut lcbs, &seq, &seq, &hits, 19, 120);
         assert_ne!(lcbs.len(), 0);
     }
 

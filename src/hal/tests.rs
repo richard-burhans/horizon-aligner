@@ -1010,3 +1010,99 @@ fn progressive_multi_contig_hal_builds_ancestral_tree_and_roundtrips() {
     assert!(root_entries.iter().any(|e| e.name == "panTro4"));
     assert!(root_entries.iter().any(|e| e.name == "mm10"));
 }
+
+#[test]
+fn hdf5_v1_stacked_deflate_and_filter_mask() {
+    use flate2::{Compression, write::ZlibEncoder};
+    use std::io::Write as _;
+
+    let zlib_once = |data: &[u8]| -> Vec<u8> {
+        let mut enc = ZlibEncoder::new(Vec::new(), Compression::default());
+        enc.write_all(data).expect("zlib write");
+        enc.finish().expect("zlib finish")
+    };
+
+    // Chunk 0: compressed twice (filter_mask = 0 -> both layers active).
+    let c0_twice = zlib_once(&zlib_once(b"HELLO_"));
+    // Chunk 1: compressed once (filter_mask = 0x2 -> layer 1 skipped, only 1 layer active).
+    let c1_once = zlib_once(b"STACKED");
+
+    let mut buf = vec![0u8; 0x400];
+    // v1 object header at 0x20 with 2 messages: DataLayout (0x0008) + FilterPipeline (0x000B).
+    buf[0x20] = 1;
+    buf[0x22..0x24].copy_from_slice(&2_u16.to_le_bytes());
+    buf[0x28..0x2c].copy_from_slice(&42_u32.to_le_bytes());
+
+    // Msg 1 at 0x30: DataLayout v3 class 2 (chunked, ndim=1, btree at 0x100), msg_size=12 (total 20).
+    let mut p = 0x30;
+    buf[p..p + 2].copy_from_slice(&0x0008_u16.to_le_bytes());
+    buf[p + 2..p + 4].copy_from_slice(&12_u16.to_le_bytes());
+    buf[p + 8] = 3;
+    buf[p + 9] = 2;
+    buf[p + 10] = 1;
+    buf[p + 11..p + 19].copy_from_slice(&0x100_u64.to_le_bytes());
+
+    // Msg 2 at 0x44: FilterPipeline v2 with 2 deflate (id=1) filters, msg_size=14 (total 22).
+    p += 20;
+    buf[p..p + 2].copy_from_slice(&0x000B_u16.to_le_bytes());
+    buf[p + 2..p + 4].copy_from_slice(&14_u16.to_le_bytes());
+    buf[p + 8] = 2; // version 2
+    buf[p + 9] = 2; // n_filters = 2
+    buf[p + 10..p + 12].copy_from_slice(&1_u16.to_le_bytes()); // filter 0: id=1 (deflate)
+    buf[p + 16..p + 18].copy_from_slice(&1_u16.to_le_bytes()); // filter 1: id=1 (deflate)
+
+    // Chunk B-tree leaf at 0x100: ndim=1, 2 entries.
+    buf[0x100..0x104].copy_from_slice(b"TREE");
+    buf[0x104] = 1;
+    buf[0x105] = 0;
+    buf[0x106..0x108].copy_from_slice(&2_u16.to_le_bytes());
+    buf[0x108..0x110].copy_from_slice(&u64::MAX.to_le_bytes());
+    buf[0x110..0x118].copy_from_slice(&u64::MAX.to_le_bytes());
+
+    // Entry 0 at 0x118 (ndim=1 -> key_bytes=16, rec_bytes=24): filter_mask=0, payload at 0x200.
+    let c0_addr = 0x200usize;
+    buf[0x118..0x11c].copy_from_slice(
+        &u32::try_from(c0_twice.len())
+            .expect("chunk len")
+            .to_le_bytes(),
+    );
+    buf[0x11c..0x120].copy_from_slice(&0_u32.to_le_bytes());
+    buf[0x128..0x130].copy_from_slice(&(c0_addr as u64).to_le_bytes());
+    buf[c0_addr..c0_addr + c0_twice.len()].copy_from_slice(&c0_twice);
+
+    // Entry 1 at 0x130: filter_mask=0x2 (bit 1 set), payload at 0x300.
+    let c1_addr = 0x300usize;
+    buf[0x130..0x134].copy_from_slice(
+        &u32::try_from(c1_once.len())
+            .expect("chunk len")
+            .to_le_bytes(),
+    );
+    buf[0x134..0x138].copy_from_slice(&0x2_u32.to_le_bytes());
+    buf[0x140..0x148].copy_from_slice(&(c1_addr as u64).to_le_bytes());
+    buf[c1_addr..c1_addr + c1_once.len()].copy_from_slice(&c1_once);
+
+    assert!(is_hdf5_deflated(&buf, 0x20));
+    let mut cursor = std::io::Cursor::new(&buf);
+    let out = read_hdf5_v0_dataset_bytes_seek(&mut cursor, 0x20)
+        .expect("decode stacked deflate")
+        .expect("some bytes");
+    assert_eq!(out, b"HELLO_STACKED");
+
+    // Adding a second 0x000B message with an unsupported filter must make both
+    // is_hdf5_deflated and read_hdf5_v0_dataset_bytes_seek reject the dataset.
+    buf[0x22..0x24].copy_from_slice(&3_u16.to_le_bytes());
+    buf[0x28..0x2c].copy_from_slice(&58_u32.to_le_bytes());
+    let fp2 = p + 22;
+    buf[fp2..fp2 + 2].copy_from_slice(&0x000B_u16.to_le_bytes());
+    buf[fp2 + 2..fp2 + 4].copy_from_slice(&8_u16.to_le_bytes());
+    buf[fp2 + 8] = 2;
+    buf[fp2 + 9] = 1;
+    buf[fp2 + 10..fp2 + 12].copy_from_slice(&2_u16.to_le_bytes()); // id=2 (shuffle, unsupported)
+
+    assert!(!is_hdf5_deflated(&buf, 0x20));
+    let mut cursor2 = std::io::Cursor::new(&buf);
+    assert_eq!(
+        read_hdf5_v0_dataset_bytes_seek(&mut cursor2, 0x20).expect("no io error"),
+        None
+    );
+}

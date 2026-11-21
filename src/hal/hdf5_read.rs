@@ -661,19 +661,17 @@ fn parse_filter_pipeline(body: &[u8]) -> FilterSummary {
 /// Check whether an HDF5 v1 object header enables the deflate (`id == 1`) filter in `FilterPipeline` (`0x000B`).
 #[must_use]
 pub fn is_hdf5_deflated(bytes: &[u8], obj_addr: usize) -> bool {
-    let mut deflated = false;
+    let mut filters = FilterSummary::default();
     let mut cursor = Cursor::new(bytes);
     let _ = iter_v1_header_messages_seek(&mut cursor, obj_addr as u64, |mtype, body| {
         if mtype == 0x000B {
             let fs = parse_filter_pipeline(body);
-            if fs.deflate_layers > 0 && !fs.has_unsupported {
-                deflated = true;
-                return std::ops::ControlFlow::Break(());
-            }
+            filters.deflate_layers = filters.deflate_layers.saturating_add(fs.deflate_layers);
+            filters.has_unsupported |= fs.has_unsupported;
         }
         std::ops::ControlFlow::Continue(())
     });
-    deflated
+    !filters.has_unsupported && filters.deflate_layers > 0
 }
 
 /// Read raw dataset bytes from an HDF5 v0 dataset object header via `Seek`, supporting both
@@ -719,7 +717,7 @@ pub fn read_hdf5_v0_dataset_bytes_seek<R: std::io::Read + std::io::Seek>(
         return Ok(None);
     };
 
-    if filters.has_unsupported {
+    if filters.has_unsupported || filters.deflate_layers > 32 {
         return Ok(None);
     }
 
@@ -774,7 +772,7 @@ pub fn read_hdf5_v0_dataset_bytes_seek<R: std::io::Read + std::io::Seek>(
         if raw_chunk.len() != len {
             return Ok(None);
         }
-        let active_layers: usize = (0..filters.deflate_layers.min(32))
+        let active_layers: usize = (0..filters.deflate_layers)
             .filter(|&layer| (ch.filter_mask & (1u32 << layer)) == 0)
             .count();
         if active_layers > 0 {

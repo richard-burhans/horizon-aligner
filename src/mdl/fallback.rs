@@ -4,7 +4,7 @@ use super::AlignConfig;
 use crate::AlignError;
 use crate::seeding::{
     AnchorPairs, ContigIndex, FlatSeedIndex, LcbList, MASK_LASTZ11, MASK_LASTZ12, MASK_PH11_18,
-    MASK_RY20, MASK_W9, MASK_W10, append_hsp_gated_aa_lcbs, append_hsp_gated_lastz12_lcbs,
+    MASK_RY20, MASK_W9, MASK_W10, append_hsp_gated_aa_lcbs, append_hsp_gated_lcbs,
     append_nonoverlapping_lcbs, append_two_hit_diagonal_lcbs, find_lastz11_1transition_hits_flat,
     find_lastz12_1transition_hits_flat, find_lastz12_2transition_hits_flat,
     find_translated_aa5_hits_both, find_w10_1transition_hits_flat, local_w9_subchain,
@@ -53,7 +53,7 @@ impl<F: Fn(&mut AnchorPairs)> FallbackCtx<'_, F> {
         span_len: usize,
     ) {
         let prev_fwd = self.combined_fwd.len();
-        append_hsp_gated_lastz12_lcbs(
+        append_hsp_gated_lcbs(
             self.combined_fwd,
             &self.idx_x.seq,
             &self.idx_y.seq,
@@ -63,7 +63,7 @@ impl<F: Fn(&mut AnchorPairs)> FallbackCtx<'_, F> {
         );
         record_spans(self.spans_fwd, &self.combined_fwd[prev_fwd..], span_len);
         let prev_rc = self.combined_rc.len();
-        append_hsp_gated_lastz12_lcbs(
+        append_hsp_gated_lcbs(
             self.combined_rc,
             &self.idx_x.seq,
             &self.idx_y.seq_rc,

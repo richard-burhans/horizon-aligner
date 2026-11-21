@@ -207,10 +207,32 @@ pub fn calibrate_null_crc_from_seqs(
     base_floor_bits: f64,
     params: &HmmParams,
 ) -> f64 {
-    const WIN: usize = 64;
     let obs_gc = estimate_sampled_gc(seq_x, seq_y);
+    let gc_crc = calibrate_null_crc_for_gc(obs_gc, n_cal, alpha, base_floor_bits, params);
+    calibrate_null_crc_from_seqs_with_gc_floor(
+        seq_x,
+        seq_y,
+        n_cal,
+        alpha,
+        base_floor_bits,
+        params,
+        gc_crc,
+    )
+}
+
+#[must_use]
+pub(crate) fn calibrate_null_crc_from_seqs_with_gc_floor(
+    seq_x: &[u8],
+    seq_y: &[u8],
+    n_cal: usize,
+    alpha: f64,
+    base_floor_bits: f64,
+    params: &HmmParams,
+    gc_crc: f64,
+) -> f64 {
+    const WIN: usize = 64;
     if n_cal == 0 || seq_x.len() < WIN * 2 || seq_y.len() < WIN * 2 {
-        return calibrate_null_crc_for_gc(obs_gc, n_cal, alpha, base_floor_bits, params);
+        return gc_crc;
     }
 
     let max_x = seq_x.len() - WIN;
@@ -259,9 +281,9 @@ pub fn calibrate_null_crc_from_seqs(
         scores.push(null_bits);
     }
     if scores.len() < n_cal {
-        return calibrate_null_crc_for_gc(obs_gc, n_cal, alpha, base_floor_bits, params);
+        return gc_crc;
     }
-    calibrate_crc_threshold(&scores, alpha, base_floor_bits)
+    calibrate_crc_threshold(&scores, alpha, base_floor_bits).max(gc_crc)
 }
 
 /// Result of aligning one inter-anchor gap.

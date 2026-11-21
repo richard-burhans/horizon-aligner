@@ -274,7 +274,8 @@ pub fn format_maf_blocks_runs(
         let (y_start, y_span, y_strand) = if is_rev {
             let y_lo = last.y_start + 1 - last.len;
             let y_hi = grp[0].y_start + 1;
-            (len_y.saturating_sub(y_hi), y_hi - y_lo, '-')
+            let iv = crate::coord::Interval::new(y_lo, y_hi, '-', len_y);
+            (iv.ucsc_start(), y_hi - y_lo, '-')
         } else {
             let y_lo = grp[0].y_start;
             let y_hi = last.y_start + last.len;
@@ -366,7 +367,8 @@ pub fn format_maf_blocks(
         let (y_start, y_span, y_strand) = if is_rev {
             let y_lo = prev_y;
             let y_hi = first_y_pos + 1;
-            (len_y.saturating_sub(y_hi), y_hi - y_lo, '-')
+            let iv = crate::coord::Interval::new(y_lo, y_hi, '-', len_y);
+            (iv.ucsc_start(), y_hi - y_lo, '-')
         } else {
             let y_lo = first_y_pos;
             let y_hi = prev_y + 1;
