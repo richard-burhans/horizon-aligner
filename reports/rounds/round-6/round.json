@@ -1,0 +1,871 @@
+{
+  "round": 6,
+  "draft": "r6",
+  "subject": "Round 6: Full-Repo Audit of P0-P4 VGP Integration, Code-Review Fixes, Docs, and Manuscript Sync (42700e1)",
+  "date": "2026-11-21",
+  "claims": [
+    {
+      "id": "C1",
+      "kind": "capability",
+      "carries": [
+        "R1-IMPL",
+        "R2-RESOLVE-LIFT",
+        "3-hfcb834"
+      ],
+      "summary": "Horizon (42700e1) is a pure-Rust suite of 11 user-facing CLI binaries + bench_chr1 in src/bin/ with 118 passing active unit tests (86 lib + 32 bin, +1 ignored) and 0 clippy warnings, adding src/io_util.rs (plain/.gz/.bgz/.zst/stdin/stdout), src/paf.rs, src/netting.rs, src/mdl/dag_seed.rs (aa5_keys fallback), horizon_filter, horizon_locus, PackedGraph + O(V+E) Tarjan biedged snarls + per-window divergence + W/L updates in horizon_resolve, and L-overlap CIGAR accounting in horizon_clean.",
+      "source": {
+        "file": "docs/PANGENOME_SUITE.md",
+        "quote": "`horizon_gfa`, `horizon_lift`, `horizon_clean`, `horizon_resolve` (`u32` `PackedGraph` + $O(V+E)$ Tarjan biedged snarl decomposition + per-window divergence), `horizon_filter` (streaming PAF SDUST+BOCPD+MDL filter & netter), `horizon_locus` (regional `impg`-style multi-FASTA locus aligner), `horizon_wga --graph` (seeded DAG/POA MDL DP in `src/mdl/dag.rs` with `MASK_W10`, `MASK_RY20`, and `aa5_keys` 6-frame translated fallback), `src/io_util.rs` (plain, `.gz`/`.bgz`, `.zst`/`.zstd`, `stdin`/`stdout`), `src/paf.rs`, `src/gfa/mod.rs` (`SpoolableGfaInput`), `src/coord.rs`, `src/seeding/flat_index.rs`, and MDL-calibrated `src/egraph.rs` (`MdlCostModel`) are implemented (**118** passing unit tests: `86` lib + `32` bin, `1` ignored; `11` suite binaries + `bench_chr1` in `src/bin/`)."
+      }
+    },
+    {
+      "id": "C2",
+      "kind": "empirical",
+      "carries": [
+        "R2-RESOLVE-LIFT"
+      ],
+      "summary": "On VGP/GenomeArk PAF filtering benchmarks (9dfec4a), horizon_filter --net processes 56,857 FastGA chr6 records (93 MB) in 0.47s seq-free (0.49s .paf.zst -> .paf.zst) and 4.73s with SDUST+BOCPD+MDL, raising 2D HPRC truth hit rate from 1.6% to 81.2% while retaining 99.7% of 110.08 Mbp 1-to-1 coverage; on GenomeArk Koala x Amphioxus (36,601 raw FastGA records), horizon_filter --net runs in 0.10s (1,976 records, 71.6% exact overlap with VGP FastGA_11) and flags FastGA_11's #1 longest hit (3,548 bp) as a simple tandem repeat (md:f:-210.51 hb:i:1).",
+      "source": {
+        "file": "docs/BENCHMARK_RESULTS.md",
+        "quote": "`horizon_filter --net` | `93 MB` (`56,857` `FastGA` records, `GRCh38.chr6` \u00d7 `CHM13.chr6`) | `1,004` records (`110.22 Mbp`), `81.2%` 2D HPRC truth hit rate (from `1.6%`), `99.7%` 1-to-1 cov | \u2014 | **0.47s** (`0.49s` `.paf.zst`)"
+      }
+    },
+    {
+      "id": "C3",
+      "kind": "empirical",
+      "carries": [
+        "R1-IMPL"
+      ],
+      "summary": "On regional impg-style locus benchmarks (9dfec4a), horizon_locus aligns the extracted 25 kb Koala x Amphioxus locus in 0.25s (46.8 MB RSS), an avian 2-way locus (galGal 386.7 kb x taeGut 349.4 kb, 4 threads) in 0.86s (236.7 MB RSS, 231,444 aligned bp, p_dist = 0.192552, jc69_dist = 0.222528, 1,364 MAF blocks), and a human 4-way 25 kb locus (6 pairs, 4 threads) in 0.32s (165.8 MB RSS, 29 MAF blocks / 20 multi-species; grch38_mhc vs hla_dup jaccard_cov = 0.999400, p_dist = 0.124507).",
+      "source": {
+        "file": "README.md",
+        "quote": "`horizon_locus` (`4` threads): **0.86s** (`236.7 MB` RSS) on avian 2-way (`galGal` `386.7 kb` \u00d7 `taeGut` `349.4 kb`, `231,444` aligned bp, `p_dist = 0.192552`, `jc69_dist = 0.222528`) and **0.32s** (`165.8 MB` RSS) on human 4-way 25 kb (`grch38_mhc`, `hla_dup`, `grch38_peri`, `chm13_peri`, `29` MAF blocks / `20` multi-species)."
+      }
+    },
+    {
+      "id": "C4",
+      "kind": "empirical",
+      "carries": [
+        "R1-HMM",
+        "R2-HMM-XDROP",
+        "R2-INDEX-RAM"
+      ],
+      "summary": "Core WGA and HPRC benchmarks from 8cd5db0/2896229 remain accurately reported in README.md, docs/BENCHMARK_RESULTS.md, and manuscript/horizon_paper.md: 8 external reference-MAF slices (95.6%/97.4% hg38xpanTro4, 71.1%/95.1% B10K 363-way avian, 59.8%/78.5% cactus241way dog), 81.4M-segment HPRC streaming at 96.9 MB RSS, and full GRCh38.chr6 x CHM13.chr6 (258.88-304.53s, 99.54% base-cov recall, 97.96% exact recall, 48.63% conditioned / 38.22% unconditional exact precision).",
+      "source": {
+        "file": "manuscript/horizon_paper.md",
+        "quote": "On full `GRCh38.chr6` (`170.8 Mbp`) \u00d7 `CHM13.chr6` (`110.7 Mbp` q-arm `61401689\u2013172126628`), `horizon_wga --resolve-dups` on `8cd5db0` completed in `258.88\u2013267.86 s` (`2.21\u00d7` faster than `592.68 s` at `bb43dd9` and `3.97\u00d7` faster than `1,062.45 s` at `1e47fe0`; Figure 5) with `282,193,564` aligned pairs covering `124,160,423` bp (`72.7%`) of `GRCh38.chr6` and `109,464,447` bp (`98.9%`) of the `CHM13.chr6` q-arm (`178,737` Horizon Bubbles)."
+      }
+    },
+    {
+      "id": "C5",
+      "kind": "correctness",
+      "carries": [
+        "R5-BIB",
+        "5-h3eb7a2",
+        "5-hac0eab",
+        "5-hb6e3b4"
+      ],
+      "summary": "ARCHITECTURE.md, README.md, docs/manual.md, docs/VGP_INTEGRATION_PLAN.md, manuscript/horizon_paper.md, and manuscript/horizon_companion.md accurately match the current Rust source at 42700e1 without stale binary counts, missing modules, or misattributed features (including horizon dispatcher subcommands, horizon_clean walk_support<=1 default, and horizon_resolve PackedGraph/snarl/W-end/L-link behavior).",
+      "source": {
+        "file": "ARCHITECTURE.md",
+        "quote": "`horizon_resolve` decomposes graphs via `u32`-interned `PackedGraph` + $O(V + E)$ Tarjan biedged snarls, estimates per-window divergence (unless `--divergence` is passed), rewrites `P`/`W` walks, updates `W`-line `end` bounds, and prunes/synthesizes `L` links."
+      }
+    }
+  ],
+  "lenses": [
+    "correctness",
+    "sampling",
+    "statistics",
+    "provenance",
+    "inference",
+    "prior-art",
+    "reproduction"
+  ],
+  "attacked": [
+    {
+      "path": "README.md",
+      "snapshot": "ATTACKED-README.md",
+      "read": "working tree",
+      "pinned": true,
+      "sha256": "a2a0ab669e327503188c5d961d6ee96ff282506af2b22fd5e9ae766f788d39b1"
+    },
+    {
+      "path": "ARCHITECTURE.md",
+      "snapshot": "ATTACKED-ARCHITECTURE.md",
+      "read": "working tree",
+      "pinned": true,
+      "sha256": "d911b402af060928995f5569b99ab5be3a1e53a5c19699d6430a138ac865dea0"
+    },
+    {
+      "path": "docs/PANGENOME_SUITE.md",
+      "snapshot": "ATTACKED-PANGENOME_SUITE.md",
+      "read": "working tree",
+      "pinned": true,
+      "sha256": "d0dd17aa38f1976ec874e4635382e83bfbab6c378268eb47196fe8f7c2692048"
+    },
+    {
+      "path": "docs/BENCHMARK_RESULTS.md",
+      "snapshot": "ATTACKED-BENCHMARK_RESULTS.md",
+      "read": "working tree",
+      "pinned": true,
+      "sha256": "7a161a0b41482465212f757aa27d8d0c7e9c2a31eaf706e57382e82aa7c2d5b4"
+    },
+    {
+      "path": "docs/VGP_INTEGRATION_PLAN.md",
+      "snapshot": "ATTACKED-VGP_INTEGRATION_PLAN.md",
+      "read": "working tree",
+      "pinned": true,
+      "sha256": "611878b563b37745968c3577b460f28b05d1aca9278c9c3f5292101f9d1175bc"
+    },
+    {
+      "path": "manuscript/horizon_paper.md",
+      "snapshot": "ATTACKED-horizon_paper.md",
+      "read": "working tree",
+      "pinned": true,
+      "sha256": "8bd888e2e564d0b8e3f17a381c0de7eb84fc290ce953a53945a5e4101f405a55"
+    },
+    {
+      "path": "manuscript/horizon_companion.md",
+      "snapshot": "ATTACKED-horizon_companion.md",
+      "read": "working tree",
+      "pinned": true,
+      "sha256": "c395c0721786cbd7027452d5adca6c265a57d620d79f3602dba157c3f5f4a37c"
+    }
+  ],
+  "code": {
+    "horizon-aligner": "42700e142b70996c23cdf391ac29e1e5bcf4640d"
+  },
+  "drift_reviewed": [
+    {
+      "path": "README.md",
+      "sha256": "fe44702a745ad357c2a88e04efd9feb243828b2df3416044d598c5b4399c9dd4",
+      "by": "runner",
+      "date": "2026-11-21",
+      "quotes": [
+        "  - `horizon_resolve`: Standalone MDL-calibrated e-graph resolution (`MdlCostModel`) over `u32` `PackedGraph` + `O(V+E)` Tarjan biedged snarl decomposition with topological window-divergence estimation (`[0.02, 0.15]` heuristic unless `--divergence` is passed; `--collapse-dups`, `--tag-walks`), updating `W`-line `end` bounds and pruning/synthesizing `L` links (assuming `0M` overlaps).",
+        "  - `horizon_filter`: Streaming SDUST + Pair-HMM MDL filter (using contig-global or fixed `0.5` GC `base_probs`) and `--net`/`--max-occ` interval netter for `FastGA`/`wfmash` PAF alignments (`md:f:` and `hb:i:` tags).",
+        "- **VGP / GenomeArk PAF Filtering & Regional Locus Benchmarks (`42700e1` / `9dfec4a`):**",
+        "  - `horizon_filter --net` on `chr6` FastGA (`93 MB`, `56,857` records): **0.45s\u20130.48s** sequence-free (`0.50s` `.paf.zst` \u2192 `.paf.zst`, keeping `565` records / `110.00 Mbp`) and **4.86s\u20134.89s** with SDUST+MDL (`553` records; 2D HPRC truth re-scoring pending `numpy`).",
+        "  - Real GenomeArk VGP Koala (`GCA_003287225.2`) \u00d7 Amphioxus (`GCA_015852565.1`, `36,601` raw FastGA records, pre-`9dfec4a` `/tmp/vgp_test/` run): `horizon_filter --net` runs in **0.10s** (`1,976` records, `71.6%` overlap with VGP `FastGA_11`); sequence-aware `--query --target` flags `FastGA_11`'s #1 longest hit (`3,548 bp`) as a `GA`/`AT`/`CA` simple tandem repeat (`md:f:-210.51 hb:i:1`), while `horizon_locus` aligns the extracted 25 kb locus in **0.26s** (`40.1 MB` RSS, `9,697 / 25,000` bp aligned on `42700e1`).",
+        "  - `horizon_locus` (`4` threads, `42700e1`): **0.83s\u20130.86s** (`236.7\u2013239.3 MB` RSS) on avian 2-way (`galGal` `386.7 kb` \u00d7 `taeGut` `349.4 kb`, `231,444` aligned bp, `p_dist = 0.192552`, `jc69_dist = 0.222528` over aligned core) and **0.41s\u20130.42s** (`171.8 MB` RSS) on human 4-way 25 kb (`grch38_mhc`, `hla_dup`, `grch38_peri`, `chm13_peri`, `102` MAF blocks / `92` multi-species, `grch38_mhc` vs `hla_dup` `p_dist = 0.041539`)."
+      ],
+      "note": "Applied adjudicated Round 6 free repairs (COR-1..COR-8) verified by round corrections 6."
+    },
+    {
+      "path": "ARCHITECTURE.md",
+      "sha256": "d911b402af060928995f5569b99ab5be3a1e53a5c19699d6430a138ac865dea0",
+      "by": "runner",
+      "date": "2026-11-21",
+      "quotes": [],
+      "note": "Applied adjudicated Round 6 free repairs (COR-1..COR-8) verified by round corrections 6."
+    },
+    {
+      "path": "docs/PANGENOME_SUITE.md",
+      "sha256": "f9a09721ce88afb1dcb150d285605eb4c836145c06c0819a5fa9a997d27fa982",
+      "by": "runner",
+      "date": "2026-11-21",
+      "quotes": [
+        "> **Implementation Status (2026-11-21, `42700e1` / `9dfec4a`):** `horizon_gfa`, `horizon_lift`, `horizon_clean`, `horizon_resolve` (`u32` `PackedGraph` + $O(V+E)$ Tarjan biedged snarl decomposition + topological window-divergence heuristic), `horizon_filter` (streaming PAF SDUST+MDL filter & netter), `horizon_locus` (regional `impg`-style multi-FASTA locus aligner), `horizon_wga --graph` (seeded DAG/POA MDL DP in `src/mdl/dag.rs` with `MASK_W10`, `MASK_RY20`, and `aa5_keys` 6-frame translated fallback), `src/io_util.rs` (plain, `.gz`/`.bgz`, `.zst`/`.zstd` via `zstd` CLI, `stdin`/`stdout`), `src/paf.rs`, `src/gfa/mod.rs` (`SpoolableGfaInput`), `src/coord.rs`, `src/seeding/flat_index.rs`, and MDL-calibrated `src/egraph.rs` (`MdlCostModel`) are implemented (**120** passing unit tests: `86` lib + `34` bin, `1` ignored; `11` suite binaries + `bench_chr1` in `src/bin/`). Note that `stream_gfa` parses `S`/`L`/`P`/`W` records while skipping `C`/`J` records and defaulting empty `L` orientations to `+`.",
+        "* Active both inside `horizon_wga --resolve-dups` (emitting `# EG:Z:` tags) and as standalone `horizon_resolve` (`src/bin/horizon_resolve.rs`), which streams GFA v1.0/v1.1 `P`/`W` lines in two passes into a `u32`-interned `PackedGraph`, decomposes graphs via $O(V + E)$ Tarjan biedged snarl decomposition, estimates window divergence via a topological `[0.02, 0.15]` heuristic (with optional `--divergence` override), cancels double inversions, detects/collapses adjacent tandem duplications (`--collapse-dups`, `--tag-walks`), updates `W`-line `end` bounds, and prunes/synthesizes `L` links (assuming `0M` overlaps).",
+        "* **`horizon_filter` (`src/bin/horizon_filter.rs`, `src/paf.rs`):** Streams `.paf[.gz|.zst]` or `stdin`, evaluates alignments with SDUST repeat masking (`--min-nonrepeat-bp`) and Pair-HMM MDL bit-savings using contig-global or fixed `0.5` GC `base_probs` (`md:f:` / `hb:i:`), and optionally nets overlapping alignments (`--net` / `--max-occ`).",
+        "* **`horizon_locus` (`src/bin/horizon_locus.rs`):** Aligns all pairs in a regional `impg`-style multi-FASTA (`.fa[.gz|.zst]`) using `SDUST + BOCPD/MDL + Aa5Index`, emitting `<out>.similarity.tsv` (`jaccard_cov` average covered fraction, `p_dist` and `jc69_dist` over aligned bases clamped at `0.74`, Horizon Bubbles), `<out>.maf`, and `<out>.gfa`."
+      ],
+      "note": "Applied adjudicated Round 6 free repairs (COR-1..COR-8) verified by round corrections 6."
+    },
+    {
+      "path": "docs/BENCHMARK_RESULTS.md",
+      "sha256": "10f930c750577d0a8b2f2cb3ab8625476a5d33e95ec87055be95348bec5ed339",
+      "by": "runner",
+      "date": "2026-11-21",
+      "quotes": [
+        "Pairwise WGA results use the divergence-adaptive Pair-HMM (`HmmParams`: `identity_prior`, `gap_open_bits`, and `gap_extend_bits` estimated from LCB anchors with Beta prior shrinkage in `src/mdl/mod.rs`), BOCPD compositional profiles (`src/bocpd.rs`, ignoring non-ACGT `'N'` bases), composition-aware BOCPD LCB gating (`joint_pair_bits - GAP_OPEN_BITS` across all LCB lengths in `src/mdl/mod.rs`), and normalized Pair-HMM transitions (`src/mdl/dp.rs`, `src/mdl/dag.rs`), including `mdl_xdrop_extend_with_params` and `horizon_wga --graph` (`estimate_dag_hmm_params` calibrates `gap_open_bits`/`gap_extend_bits` from adjacent seed pairs, and `align_seq_to_dag_seeded` uses bp-budgeted component-isolated subgraph extraction). Note that `KARLIN_MDL_COEFF = 0.55` remains a fixed constant, and MAF-extracted FASTAs sample homologous blocks (`horizon_eval` evaluates reference-MAF `(ref_id, tgt_id)` contig pairs individually rather than all-vs-all across scaffolds). All benchmarks below are pinned to their respective commits (`8cd5db0` / `2896229` for core WGA & HPRC, `42700e1` / `9dfec4a` for VGP `horizon_filter` & `horizon_locus`), including a head-to-head `vg v1.60.0` comparison on a real 10,000-segment HPRC `chr22` subgraph, the **B10K 363-way** avian slice (`Gallus_gallus` vs `Taeniopygia_guttata`), and a base-level coordinate concordance evaluation of full `GRCh38.chr6` \u00d7 `CHM13.chr6` against both the HPRC Minigraph-Cactus graph and `minimap2 -x asm5` (`v2.28-r1209`; `odgi`/`LASTZ` remain unavailable on this host).",
+        "## VGP / GenomeArk PAF Filtering & Regional Locus Benchmarks (`42700e1` / `9dfec4a`)",
+        "| `chr6` FastGA PAF Netting (seq-free) | `horizon_filter --net` | `93 MB` (`56,857` `FastGA` records, `GRCh38.chr6` \u00d7 `CHM13.chr6`) | `565` records (`110.00 Mbp` `aln_len`); 2D HPRC re-scoring pending `numpy` | \u2014 | **0.45s\u20130.48s** (`0.50s` `.paf.zst`) |",
+        "| `chr6` FastGA PAF SDUST+MDL Filter | `horizon_filter --net --query --target` | `56,857` `FastGA` records with `GRCh38.chr6` & `CHM13.chr6` FASTAs | `553` records (`436` filtered by MDL); 2D HPRC re-scoring pending `numpy` | \u2014 | 4.86s\u20134.89s |",
+        "| GenomeArk VGP Koala \u00d7 Amphioxus PAF | `horizon_filter --net` | `GCA_003287225.2` \u00d7 `GCA_015852565.1` (`36,601` raw `FastGA` records, pre-`9dfec4a`) | `1,976` records (`71.6%` exact overlap with VGP `FastGA_11`'s `1,535` records) | \u2014 | **0.10s** |",
+        "| Koala \u00d7 Amphioxus 25 kb Locus Align | `horizon_locus` | Extracted 25 kb Koala \u00d7 Amphioxus locus (`42700e1`) | `9,697 / 25,000` bp (`38.8%`) aligned; emits `similarity.tsv`, `.maf`, `.gfa` | **40.1 MB** | **0.26s** |",
+        "| Avian 2-Way Regional Locus | `horizon_locus` (`4` threads) | `galGal` (`386.7 kb`) \u00d7 `taeGut` (`349.4 kb`, `42700e1`) | `231,444` aligned bp, `p_dist = 0.192552`, `jc69_dist = 0.222528` (aligned core), `1,364` MAF blocks | **236.7\u2013239.3 MB** | **0.83s\u20130.86s** |",
+        "| Human 4-Way 25 kb Regional Locus | `horizon_locus` (`4` threads) | `grch38_mhc`, `hla_dup`, `grch38_peri`, `chm13_peri` (`6` pairs, `42700e1`) | `102` MAF blocks (`92` multi-sp); `grch38_mhc` vs `hla_dup` `p_dist = 0.041539` | **171.8 MB** | **0.41s\u20130.42s** |"
+      ],
+      "note": "Applied adjudicated Round 6 free repairs (COR-1..COR-8) verified by round corrections 6."
+    },
+    {
+      "path": "docs/VGP_INTEGRATION_PLAN.md",
+      "sha256": "844317720e9c05ccbbd84d48ba16e528a4a12f98e7f4f56f624600dcfab896e5",
+      "by": "runner",
+      "date": "2026-11-21",
+      "quotes": [
+        "> **Horizon status (`42700e1` / `9dfec4a`):** **P0\u2013P4 complete & benchmarked on real VGP/GenomeArk + HPRC data** (`120` passing active unit tests: `86` lib + `34` bin, `1` ignored; `11` suite CLI binaries + `bench_chr1`).",
+        "| **P0** | `src/paf.rs` + `horizon_filter` (SDUST+MDL PAF filter & `--net`) | **Implemented** | `chr6` FastGA (`56,857` recs): `0.45s\u20130.48s` seq-free (`565` recs / `110.00 Mbp`) / `4.86s\u20134.89s` SDUST+MDL (`553` recs; 2D HPRC re-scoring pending `numpy`); GenomeArk Koala \u00d7 Amphioxus (`36,601` recs, pre-`9dfec4a` `/tmp/vgp_test/`): `0.10s` (`1,976` recs, `71.6%` overlap with `FastGA_11`) and rejects `FastGA_11`'s #1 longest hit (`3,548 bp` repeat, `md:f:-210.51 hb:i:1`) |",
+        "| **P1** | `horizon_clean` overlap-CIGAR `W` split fix + `horizon_resolve` topological window divergence | **Implemented** | Unit-tested & verified across synthetic and HPRC `10k` subgraphs |",
+        "| **P3** | `horizon_locus` (`impg query` multi-FASTA -> `.similarity.tsv`, `.maf`, `.gfa`) | **Implemented** | Avian 2-way (`386.7 kb` \u00d7 `349.4 kb`): `0.83s\u20130.86s` (`236.7\u2013239.3 MB` RSS); Human 4-way 25 kb: `0.41s\u20130.42s` (`171.8 MB` RSS, `102` MAF / `92` multi-sp); Koala \u00d7 Amphioxus 25 kb: `0.26s` (`40.1 MB` RSS, `9,697/25,000` bp) |"
+      ],
+      "note": "Applied adjudicated Round 6 free repairs (COR-1..COR-8) verified by round corrections 6."
+    },
+    {
+      "path": "manuscript/horizon_paper.md",
+      "sha256": "7623f0cc1db1f1ac6b4c708f1e528783217ebc5a723ca6864bec302bc041f6cd",
+      "by": "runner",
+      "date": "2026-11-21",
+      "quotes": [
+        "date: \"2026-11-21\"",
+        "4. `horizon_resolve` (`src/bin/horizon_resolve.rs`) loads graphs into a `u32`-interned `PackedGraph`, decomposes snarls in $O(|V| + |E|)$ time via Tarjan biedged snarl decomposition, estimates window divergence via a topological `[0.02, 0.15]` heuristic (with optional `--divergence` override), applies `MdlCostModel` e-graph resolution to `P`/`W` walks (`--collapse-dups`, `--tag-walks`), updates `W`-line `end` bounds, and prunes/synthesizes `L` links (assuming `0M` overlaps).",
+        "6. `horizon_filter` (`src/bin/horizon_filter.rs`) streams `.paf[.gz|.zst]` or `stdin`, scores `FastGA`/`wfmash` alignments with SDUST repeat masking and Pair-HMM MDL bit-savings using contig-global or fixed `0.5` GC `base_probs` (`md:f:` and `hb:i:` tags), and optionally nets overlapping hits (`--net` / `--max-occ`).",
+        "7. `horizon_locus` (`src/bin/horizon_locus.rs`) aligns all pairs in a regional `impg`-style multi-FASTA locus using `SDUST + BOCPD/MDL + Aa5Index`, emitting `<prefix>.similarity.tsv` (`jaccard_cov` average covered fraction, `p_dist` and `jc69_dist` over aligned bases clamped at `0.74`, Horizon Bubbles), `<prefix>.maf`, and `<prefix>.gfa`.",
+        "On a real sequence-bearing `10,000`-segment HPRC `chr22` subgraph (`10,937,960` bp total, of which `10,510,000` bp / `96.09%` are `'N'` bases in segment `76067108` and `427,960` bp are ACGT across `chr22`, `chrUn_GL000224v1`, and `chr14_KI270722v1_random`; `10,300` links, `1` path, `4` walks; Figure 6A), counter-only `horizon_gfa stats` ran in `0.08 s` at `22.6 MB` peak RSS, compared with `vg stats -z -l -N` (`vg v1.60.0`: `4.2984 s`, `77.0 MB` RSS) and `vg convert -g -p` (`1.8292 s`, `76.6 MB` RSS), which construct full in-memory handle graphs (`odgi` and `gfatools` baselines remain pending). On the same HPRC subgraph, `horizon_clean --min-cp-bits 10.0` ran in `0.13 s` (`33.4 MB` RSS, keeping all `10,300` valid walk links), `horizon_resolve --collapse-dups --tag-walks` processed `223` anchors and `755` snarl/bubble windows in `5.571 s` (`23.6 MB` RSS, emitting `W`-line `EG:Z:` tags rather than `# EG:Z:` comments), and `horizon_wga --graph` (`20,000` bidirected DAG nodes) ran in `2.98\u20136.09 s` (`153.9\u2013154.6 MB` RSS), abstaining (`aligned_pairs = 0`) on a `400`-bp all-`N` query and aligning `122/258` bp (`6` bubbles) and `197/356` bp (`8` bubbles) on real HPRC walk queries. On Vertebrate Genomes Project (VGP) `PAF` and regional locus benchmarks (`42700e1` / `9dfec4a`), `horizon_filter --net` processed `56,857` `FastGA` `chr6` records (`93 MB`) in `0.45\u20130.48 s` sequence-free (`0.50 s` `.paf.zst` \u2192 `.paf.zst`, retaining `565` records / `110.00 Mbp`) and `4.86\u20134.89 s` with SDUST+MDL (`553` records; 2D HPRC truth re-scoring pending `numpy`); on real GenomeArk VGP Koala (`GCA_003287225.2`) \u00d7 Amphioxus (`GCA_015852565.1`, `36,601` raw `FastGA` records, pre-`9dfec4a` `/tmp/vgp_test/` run), `horizon_filter --net` ran in `0.10 s` (`1,976` records, `71.6%` overlap with VGP `FastGA_11`), and sequence-aware `--query --target` flagged `FastGA_11`'s #1 longest hit (`3,548 bp`) as a `GA`/`AT`/`CA` simple tandem repeat (`md:f:-210.51 hb:i:1`), while `horizon_locus` (`42700e1`) aligned the extracted `25`-kb locus in `0.26 s` (`40.1 MB` RSS, `9,697 / 25,000` bp aligned), an avian 2-way locus (`galGal` `386.7 kb` \u00d7 `taeGut` `349.4 kb`, `4` threads) in `0.83\u20130.86 s` (`236.7\u2013239.3 MB` RSS, `231,444` aligned bp, `jc69_dist = 0.222528` over aligned core), and a human 4-way `25`-kb locus in `0.41\u20130.42 s` (`171.8 MB` RSS, `102` MAF blocks / `92` multi-species). For multi-species panels (`n = 1` runs without reference-MAF accuracy verification), `horizon_merge` netted `92` vertebrate `chrM` (`~16.5 kb`) species in `21.78 s` (`26.6 MB` RSS, `460` multi-species blocks), and `horizon_guide --progressive --hal --rbest` (`2896229`) aligned `5` mammals (`hg38`, `Macaca_mulatta`, `HLcalPym1`, `Equus_caballus`, `Canis_lupus`) in `0.859 s` (`1,109` MAF blocks, `967` multi-species, plus a single-contig star-tree HDF5 `v0` HAL stub of `4` bottom segments inspected via `horizon_wga --hal-info`). All `120` active Rust unit tests (`86` library + `34` binary, plus `1` ignored `.hal` integration test; `121` total) pass on `HEAD` (`42700e1`) with zero `clippy` warnings."
+      ],
+      "note": "Applied adjudicated Round 6 free repairs (COR-1..COR-8) verified by round corrections 6."
+    },
+    {
+      "path": "manuscript/horizon_companion.md",
+      "sha256": "baf37851f84399389dad83d64c3baa86803ad868411a02fbd5169baa8ea5a01c",
+      "by": "runner",
+      "date": "2026-11-21",
+      "quotes": [
+        "4. **Streaming GFA, PAF, and Locus Tools (`src/io_util.rs`, `src/gfa/mod.rs`, `src/paf.rs`, `src/coord.rs`, `src/mdl/dag_seed.rs`):** `horizon_gfa` provides `O(1)`-memory graph `stats` and two-pass chromosome `extract`; `horizon_lift` performs two-pass `P`/`W` BED/GFF3 liftover with `--bridge-bp` coalescing; `horizon_clean` scores `L`-junctions with `bocpd_gc_profile` changepoint bits and accounts for `L`-line overlap CIGARs when splitting `W` walks; `horizon_resolve` builds a `u32`-interned `PackedGraph` with $O(V + E)$ Tarjan biedged snarl decomposition and a topological `[0.02, 0.15]` window-divergence heuristic (assuming `0M` overlaps); `horizon_wga --graph` aligns queries to bidirected GFA DAGs via `MASK_W10` + `MASK_RY20` + compact `aa5_keys` 6-frame translated seeding and topological Pair-HMM MDL DP (`align_seq_to_dag_seeded`); `horizon_filter` streams `.paf[.gz|.zst]` with SDUST+MDL scoring (using contig-global or fixed `0.5` GC `base_probs`) and `--net` interval netting; and `horizon_locus` performs all-pairs regional multi-FASTA locus alignment emitting `.similarity.tsv` (`jaccard_cov` average covered fraction, `p_dist`/`jc69_dist` over aligned bases clamped at `0.74`), `.maf`, and `.gfa`."
+      ],
+      "note": "Applied adjudicated Round 6 free repairs (COR-1..COR-8) verified by round corrections 6."
+    },
+    {
+      "path": "README.md",
+      "sha256": "fe44702a745ad357c2a88e04efd9feb243828b2df3416044d598c5b4399c9dd4",
+      "by": "runner",
+      "date": "2026-11-21",
+      "quotes": [
+        "  - `horizon_resolve`: Standalone MDL-calibrated e-graph resolution (`MdlCostModel`) over `u32` `PackedGraph` + `O(V+E)` Tarjan biedged snarl decomposition with topological window-divergence estimation (`[0.02, 0.15]` heuristic unless `--divergence` is passed; `--collapse-dups`, `--tag-walks`), updating `W`-line `end` bounds and pruning/synthesizing `L` links (assuming `0M` overlaps).",
+        "  - `horizon_filter`: Streaming SDUST + Pair-HMM MDL filter (using contig-global or fixed `0.5` GC `base_probs`) and `--net`/`--max-occ` interval netter for `FastGA`/`wfmash` PAF alignments (`md:f:` and `hb:i:` tags).",
+        "- **VGP / GenomeArk PAF Filtering & Regional Locus Benchmarks (`42700e1` / `9dfec4a`):**",
+        "  - `horizon_filter --net` on `chr6` FastGA (`93 MB`, `56,857` records): **0.45s\u20130.48s** sequence-free (`0.50s` `.paf.zst` \u2192 `.paf.zst`, keeping `565` records / `110.00 Mbp`) and **4.86s\u20134.89s** with SDUST+MDL (`553` records; 2D HPRC truth re-scoring pending `numpy`).",
+        "  - Real GenomeArk VGP Koala (`GCA_003287225.2`) \u00d7 Amphioxus (`GCA_015852565.1`, `36,601` raw FastGA records, pre-`9dfec4a` `/tmp/vgp_test/` run): `horizon_filter --net` runs in **0.10s** (`1,976` records, `71.6%` overlap with VGP `FastGA_11`); sequence-aware `--query --target` flags `FastGA_11`'s #1 longest hit (`3,548 bp`) as a `GA`/`AT`/`CA` simple tandem repeat (`md:f:-210.51 hb:i:1`), while `horizon_locus` aligns the extracted 25 kb locus in **0.26s** (`40.1 MB` RSS, `9,697 / 25,000` bp aligned on `42700e1`).",
+        "  - `horizon_locus` (`4` threads, `42700e1`): **0.83s\u20130.86s** (`236.7\u2013239.3 MB` RSS) on avian 2-way (`galGal` `386.7 kb` \u00d7 `taeGut` `349.4 kb`, `231,444` aligned bp, `p_dist = 0.192552`, `jc69_dist = 0.222528` over aligned core) and **0.41s\u20130.42s** (`171.8 MB` RSS) on human 4-way 25 kb (`grch38_mhc`, `hla_dup`, `grch38_peri`, `chm13_peri`, `102` MAF blocks / `92` multi-species, `grch38_mhc` vs `hla_dup` `p_dist = 0.041539`)."
+      ],
+      "note": "Applied adjudicated Round 6 free repairs (COR-1..COR-8) and Cold Auditor doc-sync fixes."
+    },
+    {
+      "path": "ARCHITECTURE.md",
+      "sha256": "0fa590191b1b26a0b6d075d802cbcb642b8644e8954b86c027e43f2783bffd31",
+      "by": "runner",
+      "date": "2026-11-21",
+      "quotes": [
+        "| **CLI Drivers**<br>`src/bin/` | `11` suite executables + `bench_chr1`: `horizon` (subcommand dispatcher), `horizon_wga` (pairwise & `--graph` DAG/POA & `--hal-info`), `horizon_guide` (progressive WGA + HAL export), `horizon_merge` (multi-species MAF/rGFA merge), `horizon_gfa` (streaming stats/extract), `horizon_lift` (BED/GFF3 liftover), `horizon_clean` (BOCPD+MDL junction cleaner), `horizon_resolve` (GFA `PackedGraph` snarl + e-graph resolver), `horizon_filter` (streaming SDUST+MDL PAF filter & netter), `horizon_locus` (regional multi-FASTA locus aligner & similarity matrix), `horizon_eval` (MAF evaluator), `bench_chr1`. | Executable entry points |",
+        "- `horizon_resolve` decomposes graphs via `u32`-interned `PackedGraph` + $O(V + E)$ Tarjan biedged snarls, estimates window divergence via a topological `[0.02, 0.15]` heuristic (unless `--divergence` is passed), rewrites `P`/`W` walks, updates `W`-line `end` bounds, and prunes/synthesizes `L` links (assuming `0M` overlaps)."
+      ],
+      "note": "Applied adjudicated Round 6 free repairs (COR-1..COR-8) and Cold Auditor doc-sync fixes."
+    },
+    {
+      "path": "docs/PANGENOME_SUITE.md",
+      "sha256": "f9a09721ce88afb1dcb150d285605eb4c836145c06c0819a5fa9a997d27fa982",
+      "by": "runner",
+      "date": "2026-11-21",
+      "quotes": [
+        "> **Implementation Status (2026-11-21, `42700e1` / `9dfec4a`):** `horizon_gfa`, `horizon_lift`, `horizon_clean`, `horizon_resolve` (`u32` `PackedGraph` + $O(V+E)$ Tarjan biedged snarl decomposition + topological window-divergence heuristic), `horizon_filter` (streaming PAF SDUST+MDL filter & netter), `horizon_locus` (regional `impg`-style multi-FASTA locus aligner), `horizon_wga --graph` (seeded DAG/POA MDL DP in `src/mdl/dag.rs` with `MASK_W10`, `MASK_RY20`, and `aa5_keys` 6-frame translated fallback), `src/io_util.rs` (plain, `.gz`/`.bgz`, `.zst`/`.zstd` via `zstd` CLI, `stdin`/`stdout`), `src/paf.rs`, `src/gfa/mod.rs` (`SpoolableGfaInput`), `src/coord.rs`, `src/seeding/flat_index.rs`, and MDL-calibrated `src/egraph.rs` (`MdlCostModel`) are implemented (**120** passing unit tests: `86` lib + `34` bin, `1` ignored; `11` suite binaries + `bench_chr1` in `src/bin/`). Note that `stream_gfa` parses `S`/`L`/`P`/`W` records while skipping `C`/`J` records and defaulting empty `L` orientations to `+`.",
+        "* Active both inside `horizon_wga --resolve-dups` (emitting `# EG:Z:` tags) and as standalone `horizon_resolve` (`src/bin/horizon_resolve.rs`), which streams GFA v1.0/v1.1 `P`/`W` lines in two passes into a `u32`-interned `PackedGraph`, decomposes graphs via $O(V + E)$ Tarjan biedged snarl decomposition, estimates window divergence via a topological `[0.02, 0.15]` heuristic (with optional `--divergence` override), cancels double inversions, detects/collapses adjacent tandem duplications (`--collapse-dups`, `--tag-walks`), updates `W`-line `end` bounds, and prunes/synthesizes `L` links (assuming `0M` overlaps).",
+        "* **`horizon_filter` (`src/bin/horizon_filter.rs`, `src/paf.rs`):** Streams `.paf[.gz|.zst]` or `stdin`, evaluates alignments with SDUST repeat masking (`--min-nonrepeat-bp`) and Pair-HMM MDL bit-savings using contig-global or fixed `0.5` GC `base_probs` (`md:f:` / `hb:i:`), and optionally nets overlapping alignments (`--net` / `--max-occ`).",
+        "* **`horizon_locus` (`src/bin/horizon_locus.rs`):** Aligns all pairs in a regional `impg`-style multi-FASTA (`.fa[.gz|.zst]`) using `SDUST + BOCPD/MDL + Aa5Index`, emitting `<out>.similarity.tsv` (`jaccard_cov` average covered fraction, `p_dist` and `jc69_dist` over aligned bases clamped at `0.74`, Horizon Bubbles), `<out>.maf`, and `<out>.gfa`."
+      ],
+      "note": "Applied adjudicated Round 6 free repairs (COR-1..COR-8) and Cold Auditor doc-sync fixes."
+    },
+    {
+      "path": "docs/BENCHMARK_RESULTS.md",
+      "sha256": "10f930c750577d0a8b2f2cb3ab8625476a5d33e95ec87055be95348bec5ed339",
+      "by": "runner",
+      "date": "2026-11-21",
+      "quotes": [
+        "Pairwise WGA results use the divergence-adaptive Pair-HMM (`HmmParams`: `identity_prior`, `gap_open_bits`, and `gap_extend_bits` estimated from LCB anchors with Beta prior shrinkage in `src/mdl/mod.rs`), BOCPD compositional profiles (`src/bocpd.rs`, ignoring non-ACGT `'N'` bases), composition-aware BOCPD LCB gating (`joint_pair_bits - GAP_OPEN_BITS` across all LCB lengths in `src/mdl/mod.rs`), and normalized Pair-HMM transitions (`src/mdl/dp.rs`, `src/mdl/dag.rs`), including `mdl_xdrop_extend_with_params` and `horizon_wga --graph` (`estimate_dag_hmm_params` calibrates `gap_open_bits`/`gap_extend_bits` from adjacent seed pairs, and `align_seq_to_dag_seeded` uses bp-budgeted component-isolated subgraph extraction). Note that `KARLIN_MDL_COEFF = 0.55` remains a fixed constant, and MAF-extracted FASTAs sample homologous blocks (`horizon_eval` evaluates reference-MAF `(ref_id, tgt_id)` contig pairs individually rather than all-vs-all across scaffolds). All benchmarks below are pinned to their respective commits (`8cd5db0` / `2896229` for core WGA & HPRC, `42700e1` / `9dfec4a` for VGP `horizon_filter` & `horizon_locus`), including a head-to-head `vg v1.60.0` comparison on a real 10,000-segment HPRC `chr22` subgraph, the **B10K 363-way** avian slice (`Gallus_gallus` vs `Taeniopygia_guttata`), and a base-level coordinate concordance evaluation of full `GRCh38.chr6` \u00d7 `CHM13.chr6` against both the HPRC Minigraph-Cactus graph and `minimap2 -x asm5` (`v2.28-r1209`; `odgi`/`LASTZ` remain unavailable on this host).",
+        "## VGP / GenomeArk PAF Filtering & Regional Locus Benchmarks (`42700e1` / `9dfec4a`)",
+        "| `chr6` FastGA PAF Netting (seq-free) | `horizon_filter --net` | `93 MB` (`56,857` `FastGA` records, `GRCh38.chr6` \u00d7 `CHM13.chr6`) | `565` records (`110.00 Mbp` `aln_len`); 2D HPRC re-scoring pending `numpy` | \u2014 | **0.45s\u20130.48s** (`0.50s` `.paf.zst`) |",
+        "| `chr6` FastGA PAF SDUST+MDL Filter | `horizon_filter --net --query --target` | `56,857` `FastGA` records with `GRCh38.chr6` & `CHM13.chr6` FASTAs | `553` records (`436` filtered by MDL); 2D HPRC re-scoring pending `numpy` | \u2014 | 4.86s\u20134.89s |",
+        "| GenomeArk VGP Koala \u00d7 Amphioxus PAF | `horizon_filter --net` | `GCA_003287225.2` \u00d7 `GCA_015852565.1` (`36,601` raw `FastGA` records, pre-`9dfec4a`) | `1,976` records (`71.6%` exact overlap with VGP `FastGA_11`'s `1,535` records) | \u2014 | **0.10s** |",
+        "| Koala \u00d7 Amphioxus 25 kb Locus Align | `horizon_locus` | Extracted 25 kb Koala \u00d7 Amphioxus locus (`42700e1`) | `9,697 / 25,000` bp (`38.8%`) aligned; emits `similarity.tsv`, `.maf`, `.gfa` | **40.1 MB** | **0.26s** |",
+        "| Avian 2-Way Regional Locus | `horizon_locus` (`4` threads) | `galGal` (`386.7 kb`) \u00d7 `taeGut` (`349.4 kb`, `42700e1`) | `231,444` aligned bp, `p_dist = 0.192552`, `jc69_dist = 0.222528` (aligned core), `1,364` MAF blocks | **236.7\u2013239.3 MB** | **0.83s\u20130.86s** |",
+        "| Human 4-Way 25 kb Regional Locus | `horizon_locus` (`4` threads) | `grch38_mhc`, `hla_dup`, `grch38_peri`, `chm13_peri` (`6` pairs, `42700e1`) | `102` MAF blocks (`92` multi-sp); `grch38_mhc` vs `hla_dup` `p_dist = 0.041539` | **171.8 MB** | **0.41s\u20130.42s** |"
+      ],
+      "note": "Applied adjudicated Round 6 free repairs (COR-1..COR-8) and Cold Auditor doc-sync fixes."
+    },
+    {
+      "path": "docs/VGP_INTEGRATION_PLAN.md",
+      "sha256": "d762dbd26e365e4388a0c6915025eb99b3f40c347f4a977095f1461311be1cd1",
+      "by": "runner",
+      "date": "2026-11-21",
+      "quotes": [
+        "> **Horizon status (`42700e1` / `9dfec4a`):** **P0\u2013P4 complete & benchmarked on real VGP/GenomeArk + HPRC data** (`120` passing active unit tests: `86` lib + `34` bin, `1` ignored; `11` suite CLI binaries + `bench_chr1`).",
+        "| **P0** | `src/paf.rs` + `horizon_filter` (SDUST+MDL PAF filter & `--net`) | **Implemented** | `chr6` FastGA (`56,857` recs): `0.45s\u20130.48s` seq-free (`565` recs / `110.00 Mbp`) / `4.86s\u20134.89s` SDUST+MDL (`553` recs; 2D HPRC re-scoring pending `numpy`); GenomeArk Koala \u00d7 Amphioxus (`36,601` recs, pre-`9dfec4a` `/tmp/vgp_test/`): `0.10s` (`1,976` recs, `71.6%` overlap with `FastGA_11`) and rejects `FastGA_11`'s #1 longest hit (`3,548 bp` repeat, `md:f:-210.51 hb:i:1`) |",
+        "| **P1** | `horizon_clean` overlap-CIGAR `W` split fix + `horizon_resolve` topological window divergence | **Implemented** | Unit-tested & verified across synthetic and HPRC `10k` subgraphs |",
+        "| **P3** | `horizon_locus` (`impg query` multi-FASTA -> `.similarity.tsv`, `.maf`, `.gfa`) | **Implemented** | Avian 2-way (`386.7 kb` \u00d7 `349.4 kb`): `0.83s\u20130.86s` (`236.7\u2013239.3 MB` RSS); Human 4-way 25 kb: `0.41s\u20130.42s` (`171.8 MB` RSS, `102` MAF / `92` multi-sp); Koala \u00d7 Amphioxus 25 kb: `0.26s` (`40.1 MB` RSS, `9,697/25,000` bp) |",
+        "| **P4** | `u32` `PackedGraph` + $O(V+E)$ Tarjan biedged snarl decomposition in `horizon_resolve` + `.zst` streaming (`src/io_util.rs`) | **Implemented** | `chr6` `.paf.zst` \u2192 `.paf.zst` streaming filter in `0.50s`; HPRC `10k` `horizon_resolve` in `5.571s` (`23.6 MB` RSS) |"
+      ],
+      "note": "Applied adjudicated Round 6 free repairs (COR-1..COR-8) and Cold Auditor doc-sync fixes."
+    },
+    {
+      "path": "manuscript/horizon_paper.md",
+      "sha256": "7623f0cc1db1f1ac6b4c708f1e528783217ebc5a723ca6864bec302bc041f6cd",
+      "by": "runner",
+      "date": "2026-11-21",
+      "quotes": [
+        "date: \"2026-11-21\"",
+        "4. `horizon_resolve` (`src/bin/horizon_resolve.rs`) loads graphs into a `u32`-interned `PackedGraph`, decomposes snarls in $O(|V| + |E|)$ time via Tarjan biedged snarl decomposition, estimates window divergence via a topological `[0.02, 0.15]` heuristic (with optional `--divergence` override), applies `MdlCostModel` e-graph resolution to `P`/`W` walks (`--collapse-dups`, `--tag-walks`), updates `W`-line `end` bounds, and prunes/synthesizes `L` links (assuming `0M` overlaps).",
+        "6. `horizon_filter` (`src/bin/horizon_filter.rs`) streams `.paf[.gz|.zst]` or `stdin`, scores `FastGA`/`wfmash` alignments with SDUST repeat masking and Pair-HMM MDL bit-savings using contig-global or fixed `0.5` GC `base_probs` (`md:f:` and `hb:i:` tags), and optionally nets overlapping hits (`--net` / `--max-occ`).",
+        "7. `horizon_locus` (`src/bin/horizon_locus.rs`) aligns all pairs in a regional `impg`-style multi-FASTA locus using `SDUST + BOCPD/MDL + Aa5Index`, emitting `<prefix>.similarity.tsv` (`jaccard_cov` average covered fraction, `p_dist` and `jc69_dist` over aligned bases clamped at `0.74`, Horizon Bubbles), `<prefix>.maf`, and `<prefix>.gfa`.",
+        "On a real sequence-bearing `10,000`-segment HPRC `chr22` subgraph (`10,937,960` bp total, of which `10,510,000` bp / `96.09%` are `'N'` bases in segment `76067108` and `427,960` bp are ACGT across `chr22`, `chrUn_GL000224v1`, and `chr14_KI270722v1_random`; `10,300` links, `1` path, `4` walks; Figure 6A), counter-only `horizon_gfa stats` ran in `0.08 s` at `22.6 MB` peak RSS, compared with `vg stats -z -l -N` (`vg v1.60.0`: `4.2984 s`, `77.0 MB` RSS) and `vg convert -g -p` (`1.8292 s`, `76.6 MB` RSS), which construct full in-memory handle graphs (`odgi` and `gfatools` baselines remain pending). On the same HPRC subgraph, `horizon_clean --min-cp-bits 10.0` ran in `0.13 s` (`33.4 MB` RSS, keeping all `10,300` valid walk links), `horizon_resolve --collapse-dups --tag-walks` processed `223` anchors and `755` snarl/bubble windows in `5.571 s` (`23.6 MB` RSS, emitting `W`-line `EG:Z:` tags rather than `# EG:Z:` comments), and `horizon_wga --graph` (`20,000` bidirected DAG nodes) ran in `2.98\u20136.09 s` (`153.9\u2013154.6 MB` RSS), abstaining (`aligned_pairs = 0`) on a `400`-bp all-`N` query and aligning `122/258` bp (`6` bubbles) and `197/356` bp (`8` bubbles) on real HPRC walk queries. On Vertebrate Genomes Project (VGP) `PAF` and regional locus benchmarks (`42700e1` / `9dfec4a`), `horizon_filter --net` processed `56,857` `FastGA` `chr6` records (`93 MB`) in `0.45\u20130.48 s` sequence-free (`0.50 s` `.paf.zst` \u2192 `.paf.zst`, retaining `565` records / `110.00 Mbp`) and `4.86\u20134.89 s` with SDUST+MDL (`553` records; 2D HPRC truth re-scoring pending `numpy`); on real GenomeArk VGP Koala (`GCA_003287225.2`) \u00d7 Amphioxus (`GCA_015852565.1`, `36,601` raw `FastGA` records, pre-`9dfec4a` `/tmp/vgp_test/` run), `horizon_filter --net` ran in `0.10 s` (`1,976` records, `71.6%` overlap with VGP `FastGA_11`), and sequence-aware `--query --target` flagged `FastGA_11`'s #1 longest hit (`3,548 bp`) as a `GA`/`AT`/`CA` simple tandem repeat (`md:f:-210.51 hb:i:1`), while `horizon_locus` (`42700e1`) aligned the extracted `25`-kb locus in `0.26 s` (`40.1 MB` RSS, `9,697 / 25,000` bp aligned), an avian 2-way locus (`galGal` `386.7 kb` \u00d7 `taeGut` `349.4 kb`, `4` threads) in `0.83\u20130.86 s` (`236.7\u2013239.3 MB` RSS, `231,444` aligned bp, `jc69_dist = 0.222528` over aligned core), and a human 4-way `25`-kb locus in `0.41\u20130.42 s` (`171.8 MB` RSS, `102` MAF blocks / `92` multi-species). For multi-species panels (`n = 1` runs without reference-MAF accuracy verification), `horizon_merge` netted `92` vertebrate `chrM` (`~16.5 kb`) species in `21.78 s` (`26.6 MB` RSS, `460` multi-species blocks), and `horizon_guide --progressive --hal --rbest` (`2896229`) aligned `5` mammals (`hg38`, `Macaca_mulatta`, `HLcalPym1`, `Equus_caballus`, `Canis_lupus`) in `0.859 s` (`1,109` MAF blocks, `967` multi-species, plus a single-contig star-tree HDF5 `v0` HAL stub of `4` bottom segments inspected via `horizon_wga --hal-info`). All `120` active Rust unit tests (`86` library + `34` binary, plus `1` ignored `.hal` integration test; `121` total) pass on `HEAD` (`42700e1`) with zero `clippy` warnings."
+      ],
+      "note": "Applied adjudicated Round 6 free repairs (COR-1..COR-8) and Cold Auditor doc-sync fixes."
+    },
+    {
+      "path": "manuscript/horizon_companion.md",
+      "sha256": "baf37851f84399389dad83d64c3baa86803ad868411a02fbd5169baa8ea5a01c",
+      "by": "runner",
+      "date": "2026-11-21",
+      "quotes": [
+        "4. **Streaming GFA, PAF, and Locus Tools (`src/io_util.rs`, `src/gfa/mod.rs`, `src/paf.rs`, `src/coord.rs`, `src/mdl/dag_seed.rs`):** `horizon_gfa` provides `O(1)`-memory graph `stats` and two-pass chromosome `extract`; `horizon_lift` performs two-pass `P`/`W` BED/GFF3 liftover with `--bridge-bp` coalescing; `horizon_clean` scores `L`-junctions with `bocpd_gc_profile` changepoint bits and accounts for `L`-line overlap CIGARs when splitting `W` walks; `horizon_resolve` builds a `u32`-interned `PackedGraph` with $O(V + E)$ Tarjan biedged snarl decomposition and a topological `[0.02, 0.15]` window-divergence heuristic (assuming `0M` overlaps); `horizon_wga --graph` aligns queries to bidirected GFA DAGs via `MASK_W10` + `MASK_RY20` + compact `aa5_keys` 6-frame translated seeding and topological Pair-HMM MDL DP (`align_seq_to_dag_seeded`); `horizon_filter` streams `.paf[.gz|.zst]` with SDUST+MDL scoring (using contig-global or fixed `0.5` GC `base_probs`) and `--net` interval netting; and `horizon_locus` performs all-pairs regional multi-FASTA locus alignment emitting `.similarity.tsv` (`jaccard_cov` average covered fraction, `p_dist`/`jc69_dist` over aligned bases clamped at `0.74`), `.maf`, and `.gfa`."
+      ],
+      "note": "Applied adjudicated Round 6 free repairs (COR-1..COR-8) and Cold Auditor doc-sync fixes."
+    }
+  ],
+  "sealed": {
+    "attack-L1-correctness.md": "f3193ca7ef4bb98086722bce208ddd4279e6b83e7cfa3c7ee9a9a4c094490c4a",
+    "attack-L2-sampling.md": "93edb9286e969bf30a8c6053ba27abe85ac51a2b6f278f0585c90e2e7ac1f13c",
+    "attack-L3-statistics.md": "2f4570a068b71f4b2899010c5d5920a8744987697bb5d0fc1c71c262d057a68c",
+    "attack-L4-provenance.md": "f678dd7df338dad7146607fddc71f0afa256c2e27fd9dbcf239d823348f3e768",
+    "attack-L5-inference.md": "f3b365963a0d56c4c08065c46903e3ab6b639e183b75e1492a0340136573c485",
+    "attack-L6-prior-art.md": "9e2d00896b2f3b835084d65f304b5478093299d091094e4482e8900494679fc9",
+    "attack-L7-reproduction.md": "2b54f1d71cb9e5100ae7ba9906f11091c2543938f069dd7a92f27a0038c86295"
+  },
+  "aborted": [],
+  "unbriefed": [],
+  "lens_drops": {},
+  "briefs_required": true,
+  "runner_is_author": true,
+  "claim_list_author": "runner",
+  "human_claim": "User-requested full-repo audit of horizon-aligner (P0-P4 VGP integration, root, docs, and manuscript).",
+  "carried": [
+    {
+      "from": 1,
+      "kind": "open",
+      "item": "{\"id\": \"R1-IMPL\", \"summary\": \"Implement and benchmark horizon_clean, horizon_resolve, horizon_lift, and horizon_wga --graph on HPRC v1.0/v1.1 (GRCh38 vs CHM13) and HLA/centromere loci.\"}",
+      "id": "R1-IMPL"
+    },
+    {
+      "from": 1,
+      "kind": "open",
+      "item": "{\"id\": \"R1-HMM\", \"summary\": \"Normalize HMM transition weights in src/mdl/dp.rs:105-167 (currently summing >1.0 from M and Ix/Iy) and derive/calibrate gap-bit penalties.\"}",
+      "id": "R1-HMM"
+    },
+    {
+      "from": 2,
+      "kind": "open",
+      "item": "{\"id\": \"R2-HMM-XDROP\", \"summary\": \"Wire HmmParams and normalized transitions into mdl_xdrop_extend (src/mdl/dp.rs) and horizon_wga --graph, fix N-base handling in bocpd_gc_profile, and re-run all WGA benchmarks on a single pinned commit (partially carries R1-HMM).\"}",
+      "id": "R2-HMM-XDROP"
+    },
+    {
+      "from": 2,
+      "kind": "open",
+      "item": "{\"id\": \"R2-RESOLVE-LIFT\", \"summary\": \"Update W-line start/end coordinates and L links in horizon_resolve --collapse-dups, add horizon_clean sup>0 severing + S-tag preservation, and add unique-base coverage + head-to-head pangenome baselines (minimap2/odgi/vg) and unit tests for the 4 untested binaries.\"}",
+      "id": "R2-RESOLVE-LIFT"
+    },
+    {
+      "from": 2,
+      "kind": "open",
+      "item": "{\"id\": \"R2-INDEX-RAM\", \"summary\": \"Replace ContigIndex per-position HashMap<u64, Vec<usize>> with minimizer/flat-sorted k-mer indexing to bring full >100 Mbp chromosome alignment well below 26.5 GB RSS.\"}",
+      "id": "R2-INDEX-RAM"
+    },
+    {
+      "from": 3,
+      "kind": "open",
+      "item": "{\"id\": \"R1-IMPL\", \"summary\": \"Implement and benchmark horizon_clean, horizon_resolve, horizon_lift, and horizon_wga --graph on HPRC v1.0/v1.1 (GRCh38 vs CHM13) and HLA/centromere loci (4 of 5 C6 benchmarks un-reproduced on 488b020).\"}",
+      "id": "R1-IMPL"
+    },
+    {
+      "from": 3,
+      "kind": "open",
+      "item": "{\"id\": \"R1-HMM\", \"summary\": \"Normalize HMM transition weights in src/mdl/dp.rs and derive/calibrate gap-bit penalties (estimate_dag_hmm_params leaves gap_open_bits/gap_extend_bits at defaults).\"}",
+      "id": "R1-HMM"
+    },
+    {
+      "from": 3,
+      "kind": "open",
+      "item": "{\"id\": \"R2-HMM-XDROP\", \"summary\": \"Re-run all 5 stale pre-488b020 WGA benchmark rows and test/calibrate estimate_dag_hmm_params.\"}",
+      "id": "R2-HMM-XDROP"
+    },
+    {
+      "from": 3,
+      "kind": "open",
+      "item": "{\"id\": \"R2-RESOLVE-LIFT\", \"summary\": \"Rewrite L links alongside W coordinates in horizon_resolve --collapse-dups, fix horizon_clean real-data no-op and two-pass stdin, and add minimap2/odgi/vg/LASTZ head-to-head baselines.\"}",
+      "id": "R2-RESOLVE-LIFT"
+    },
+    {
+      "from": 3,
+      "kind": "open",
+      "item": "{\"id\": \"R2-INDEX-RAM\", \"summary\": \"Complete full >100 Mbp chromosome alignment (e.g. full chr6) and isolate FlatSeedIndex RSS ablation.\"}",
+      "id": "R2-INDEX-RAM"
+    },
+    {
+      "from": 4,
+      "kind": "open",
+      "item": "{\"id\": \"R1-IMPL\", \"summary\": \"Re-benchmark full chr6 and horizon_gfa extract/horizon_lift on HEAD (33bede8) with accuracy verification, and add real sequence-bearing GFA evaluations of horizon_clean, horizon_resolve, and horizon_wga --graph.\"}",
+      "id": "R1-IMPL"
+    },
+    {
+      "from": 4,
+      "kind": "open",
+      "item": "{\"id\": \"R1-HMM\", \"summary\": \"Calibrate/derive gap-bit penalties and CRC sample size (n_cal = 15) beyond fixed defaults.\"}",
+      "id": "R1-HMM"
+    },
+    {
+      "from": 4,
+      "kind": "open",
+      "item": "{\"id\": \"R2-HMM-XDROP\", \"summary\": \"Run multi-species horizon_merge and horizon_guide --progressive --hal benchmarks with verified provenance.\"}",
+      "id": "R2-HMM-XDROP"
+    },
+    {
+      "from": 4,
+      "kind": "open",
+      "item": "{\"id\": \"R2-RESOLVE-LIFT\", \"summary\": \"Add head-to-head external baselines (minimap2, FastGA, LASTZ, odgi, vg, gfatools) on identical hardware and inputs.\"}",
+      "id": "R2-RESOLVE-LIFT"
+    },
+    {
+      "from": 4,
+      "kind": "open",
+      "item": "{\"id\": \"R2-INDEX-RAM\", \"summary\": \"Re-benchmark full GRCh38.chr6 x CHM13.chr6 on HEAD (33bede8) with accuracy parity verification (53130b8 achieved 451.35s / 10.27 GB RSS).\"}",
+      "id": "R2-INDEX-RAM"
+    },
+    {
+      "from": 4,
+      "kind": "unchallenged",
+      "item": "{\"claim\": \"C1\", \"lens\": \"statistics\", \"reason\": \"no statistical content\"}",
+      "id": "3-hfcb834"
+    },
+    {
+      "from": 5,
+      "kind": "open",
+      "item": "{\"id\": \"R1-IMPL\", \"summary\": \"Track chr6 HPRC/minimap2 and 10k-subgraph/vg scripts in scripts/benchmarks/, and audit/reproduce src/mdl/dag.rs (horizon_wga --graph).\"}",
+      "id": "R1-IMPL"
+    },
+    {
+      "from": 5,
+      "kind": "open",
+      "item": "{\"id\": \"R1-HMM\", \"summary\": \"Run a tracked multi-seed random-GC (18%, 30%, 45%) false-positive sweep and implement/calibrate dynamic n_cal=15 CRC & gap-bit penalties beyond fixed defaults.\"}",
+      "id": "R1-HMM"
+    },
+    {
+      "from": 5,
+      "kind": "open",
+      "item": "{\"id\": \"R2-HMM-XDROP\", \"summary\": \"Implement multi-contig progressive .hal emission in horizon_guide and audit src/hal/hdf5_read.rs / decode_hal_* against a real external .hal fixture (un-ignoring the .hal test).\"}",
+      "id": "R2-HMM-XDROP"
+    },
+    {
+      "from": 5,
+      "kind": "open",
+      "item": "{\"id\": \"R2-RESOLVE-LIFT\", \"summary\": \"Add external FastGA, LASTZ, KegAlign, odgi, and gfatools baselines on identical hardware, plus horizon_merge/horizon_guide MAF accuracy verification.\"}",
+      "id": "R2-RESOLVE-LIFT"
+    },
+    {
+      "from": 5,
+      "kind": "open",
+      "item": "{\"id\": \"R5-BIB\", \"summary\": \"Sync all 15 new horizon_paper.md references into manuscript/references.bib and remove the 2 orphan .bib entries.\"}",
+      "id": "R5-BIB"
+    },
+    {
+      "from": 5,
+      "kind": "open",
+      "item": "{\"id\": \"R2-INDEX-RAM\", \"summary\": \"Track full chr6 HPRC/minimap2 benchmark & scoring scripts in scripts/benchmarks/ (8cd5db0/2896229 numbers verified, but extraction/comparison scripts currently live in /tmp/).\"}",
+      "id": "R2-INDEX-RAM"
+    },
+    {
+      "from": 5,
+      "kind": "unchallenged",
+      "item": "{\"claim\": \"C5\", \"lens\": \"statistics\", \"reason\": \"deterministic BandLayout indexing formula\"}",
+      "id": "5-h3eb7a2"
+    },
+    {
+      "from": 5,
+      "kind": "unchallenged",
+      "item": "{\"claim\": \"C6\", \"lens\": \"sampling\", \"reason\": \"structural # EG:Z: / EG:Z: tag emission\"}",
+      "id": "5-hac0eab"
+    },
+    {
+      "from": 5,
+      "kind": "unchallenged",
+      "item": "{\"claim\": \"C6\", \"lens\": \"statistics\", \"reason\": \"structural # EG:Z: / EG:Z: tag emission\"}",
+      "id": "5-hb6e3b4"
+    }
+  ],
+  "dropped": [],
+  "corrections": [
+    {
+      "id": "COR-1",
+      "file": "docs/PANGENOME_SUITE.md",
+      "absent": "**118** passing unit tests",
+      "present": "**120** passing unit tests: `86` lib + `34` bin",
+      "note": "Fix active unit test count from 118 (86+32) to 120 (86+34) per L1/L2/L4/L7.",
+      "status": "applied"
+    },
+    {
+      "id": "COR-2",
+      "file": "docs/VGP_INTEGRATION_PLAN.md",
+      "absent": "`118` passing unit tests",
+      "present": "`120` passing active unit tests: `86` lib + `34` bin",
+      "note": "Fix active unit test count in VGP_INTEGRATION_PLAN.md.",
+      "status": "applied"
+    },
+    {
+      "id": "COR-3",
+      "file": "manuscript/horizon_paper.md",
+      "absent": "All `118` active Rust unit tests",
+      "present": "All `120` active Rust unit tests (`86` library + `34` binary",
+      "note": "Fix active unit test count and HEAD commit pin in horizon_paper.md.",
+      "status": "applied"
+    },
+    {
+      "id": "COR-4",
+      "file": "docs/BENCHMARK_RESULTS.md",
+      "absent": "All benchmarks below were re-verified on `HEAD`",
+      "present": "All benchmarks below are pinned to their respective commits",
+      "note": "Replace stale HEAD claim with explicit commit pinning per L4/L7.",
+      "status": "applied"
+    },
+    {
+      "id": "COR-5",
+      "file": "docs/BENCHMARK_RESULTS.md",
+      "absent": "`1,004` records (`110.22 Mbp`), `81.2%` 2D HPRC truth hit rate",
+      "present": "`565` records (`110.00 Mbp` `aln_len`); 2D HPRC re-scoring pending `numpy`",
+      "note": "Update horizon_filter --net chr6 output to verified 42700e1 counts (565 / 553).",
+      "status": "applied"
+    },
+    {
+      "id": "COR-6",
+      "file": "README.md",
+      "absent": "`29` MAF blocks / `20` multi-species",
+      "present": "`102` MAF blocks / `92` multi-species, `grch38_mhc` vs `hla_dup` `p_dist = 0.041539`",
+      "note": "Update human 4-way 25 kb horizon_locus counts to verified 42700e1 run.",
+      "status": "applied"
+    },
+    {
+      "id": "COR-8",
+      "file": "manuscript/horizon_companion.md",
+      "absent": "per-window divergence estimation",
+      "present": "topological `[0.02, 0.15]` window-divergence heuristic (assuming `0M` overlaps)",
+      "note": "Clarify horizon_resolve topological divergence heuristic, horizon_filter GC, and horizon_locus metrics.",
+      "status": "applied"
+    }
+  ],
+  "findings": [
+    {
+      "lens": "correctness",
+      "id": "F1",
+      "flaw": "C1 (docs/PANGENOMESUITE.md:3): Unit test count is stale (120 active, not 118) and horizonfilter does not run B"
+    },
+    {
+      "lens": "correctness",
+      "id": "F2",
+      "flaw": "C2 (docs/BENCHMARKRESULTS.md:85): horizonfilter --net produces 565 records (110.00 Mbp), not 1,004 records ("
+    },
+    {
+      "lens": "correctness",
+      "id": "F3",
+      "flaw": "C3 (README.md:126): Human 4-way horizonlocus block counts (29 MAF blocks / 20 multi-species) do not match HEAD"
+    },
+    {
+      "lens": "correctness",
+      "id": "F4",
+      "flaw": "C4 (manuscript/horizonpaper.md:78): 8cd5db0 full chr6 metrics and speedup ratios are internally consistent"
+    },
+    {
+      "lens": "correctness",
+      "id": "F5",
+      "flaw": "C5 (ARCHITECTURE.md:28): horizonresolve divergence estimate is topological-only and W-line end bounds ignore L"
+    },
+    {
+      "lens": "sampling",
+      "id": "F1",
+      "flaw": "C1: Test count is stale (120 vs 118) and P0\u2013P4 binaries rest on 1\u20132 synthetic unit tests each"
+    },
+    {
+      "lens": "sampling",
+      "id": "F2",
+      "flaw": "C2: Unweighted record-count \"truth hit rate\" (1.6% -> 81.2%) distorts repeat filtering, and 1,004 records does not"
+    },
+    {
+      "lens": "sampling",
+      "id": "F3",
+      "flaw": "C3: horizonlocus distance metrics suffer survivorship bias and benchmarks sample only N=2 and N=4 (25 kb)"
+    },
+    {
+      "lens": "sampling",
+      "id": "F4",
+      "flaw": "C4: CHM13.chr6 is q-arm only (110.7 Mbp), runs are n = 1, and GRCh38.chr6 coverage exceeds target length"
+    },
+    {
+      "lens": "sampling",
+      "id": "F5",
+      "flaw": "C5: horizonresolve \"per-window divergence\" samples topology step counts unweighted by base-pair length"
+    },
+    {
+      "lens": "statistics",
+      "id": "F1",
+      "flaw": "C1: horizonfilter omits BOCPD and horizonresolve uses a sequence-blind divergence heuristic"
+    },
+    {
+      "lens": "statistics",
+      "id": "F2",
+      "flaw": "C2: Unweighted record-level truth hit rate (1.6% -> 81.2%) mixed with bp-level coverage (99.7%), sequence-free scori"
+    },
+    {
+      "lens": "statistics",
+      "id": "F3",
+      "flaw": "C3: jc69dist = 0.222528 is a selection-biased, uncertainty-free point estimate over post-abstention aligned bases wit"
+    },
+    {
+      "lens": "statistics",
+      "id": "F4",
+      "flaw": "C4: Pre-HEAD chr6 timing (n = 1..2) omits 2.58x many-to-many multiplicity and 38.22% unconditional exact pair pr"
+    },
+    {
+      "lens": "statistics",
+      "id": "F5",
+      "flaw": "C5: horizonresolve \"per-window divergence\" is a sequence-blind, orientation-dependent topological heuristic clamped t"
+    },
+    {
+      "lens": "statistics",
+      "id": "F6",
+      "flaw": "Claim-list steering: C1\u2013C5 omit uncalibrated CRC (ncal = 15), KARLINMDLCOEFF = 0.55, and the 18%-GC null sw"
+    },
+    {
+      "lens": "provenance",
+      "id": "F1",
+      "flaw": "C1: Unit test count is 120 active (86 lib + 34 bin), not 118 (86 lib + 32 bin)"
+    },
+    {
+      "lens": "provenance",
+      "id": "F2",
+      "flaw": "C2: All horizonfilter VGP/chr6 artifacts in /tmp/ predate 9dfec4a and have zero tracked scripts or datasets"
+    },
+    {
+      "lens": "provenance",
+      "id": "F3",
+      "flaw": "C3: All horizonlocus outputs in /tmp/ predate 9dfec4a (avian/human predating 4dba79e RC-complement fix) and hav"
+    },
+    {
+      "lens": "provenance",
+      "id": "F4",
+      "flaw": "C4: docs/BENCHMARKRESULTS.md:5 falsely claims HEAD re-verification across 26 post-8cd5db0 commits, and tracked sc"
+    },
+    {
+      "lens": "provenance",
+      "id": "F5",
+      "flaw": "C5: docs/VGPINTEGRATIONPLAN.md and manuscript/horizonpaper.md carry the wrong unit-test count and 9dfec4a HEAD"
+    },
+    {
+      "lens": "inference",
+      "id": "F1",
+      "flaw": "C1: horizonfilter never runs BOCPD, and horizonwga --graph omits DAG branching priors"
+    },
+    {
+      "lens": "inference",
+      "id": "F2",
+      "flaw": "C2: horizonfilter --net 0.47s benchmark is sequence-free greedy length-netting, and 1.6% -> 81.2% is a record-count"
+    },
+    {
+      "lens": "inference",
+      "id": "F3",
+      "flaw": "C3: horizonlocus evolutionary distances (pdist, jc69dist) suffer from Horizon Bubble survivorship bias, silent"
+    },
+    {
+      "lens": "inference",
+      "id": "F4",
+      "flaw": "C4: horizonwga --resolve-dups does not resolve emitted pairs, and 124.16 Mbp on GRCh38.chr6 vs 110.7 Mbp CHM13"
+    },
+    {
+      "lens": "inference",
+      "id": "F5",
+      "flaw": "C5: horizonresolve's estimatewindowdivergence is a sequence-free topological proxy that makes MdlCostModel dive"
+    },
+    {
+      "lens": "inference",
+      "id": "F6",
+      "flaw": "Claim-list steering: C1\u2013C5 omit uncalibrated CRC/Karlin constants, 18%-GC null false positives across other seeds,"
+    },
+    {
+      "lens": "prior-art",
+      "id": "F1",
+      "flaw": "C1: P0\u2013P4 suite (horizonfilter, horizonlocus, horizonresolve) omits held low-complexity/inversion prior art (l"
+    },
+    {
+      "lens": "prior-art",
+      "id": "F2",
+      "flaw": "C2: horizonfilter benchmarks omit head-to-head SweepGA / PAF-netter baselines and tandem-repeat masking prior art"
+    },
+    {
+      "lens": "prior-art",
+      "id": "F3",
+      "flaw": "C3: \"impg-style\" horizonlocus benchmarks omit impg / MSA baselines and impg / JC69 citations"
+    },
+    {
+      "lens": "prior-art",
+      "id": "F4",
+      "flaw": "C4: Core WGA benchmarks (8cd5db0/2896229) still omit Round 5 L6-endorsed spaced-seed, repeat-masking, and WGA-assess"
+    },
+    {
+      "lens": "prior-art",
+      "id": "F5",
+      "flaw": "C5 (R5-BIB): manuscript/references.bib retains orphan foster2007combinators, while horizoncompanion.md and hor"
+    },
+    {
+      "lens": "prior-art",
+      "id": "F6",
+      "flaw": "Meta-finding: Runner-authored claim list steers away from missing SweepGA / impg baselines and unapplied Round 5 L6"
+    },
+    {
+      "lens": "reproduction",
+      "id": "F1",
+      "flaw": "C1 unit-test count is stale (118 vs. 120 passing) and cargo fmt --check fails across 22 files"
+    },
+    {
+      "lens": "reproduction",
+      "id": "F2",
+      "flaw": "C2 horizonfilter --net keeps 565 records on HEAD, not 1,004, and has no tracked runner or numpy environment"
+    },
+    {
+      "lens": "reproduction",
+      "id": "F3",
+      "flaw": "C3 horizonlocus human 4-way 25 kb produces 102 MAF blocks (92 multi-species), not 29 / 20, and inputs/scripts"
+    },
+    {
+      "lens": "reproduction",
+      "id": "F4",
+      "flaw": "C4 whole-chr6 numbers are pinned to historical commit 8cd5db0 (14 commits behind HEAD) and rely on untracked /tmp"
+    },
+    {
+      "lens": "reproduction",
+      "id": "F5",
+      "flaw": "C5 horizonresolve functional claims reproduce on HEAD"
+    }
+  ],
+  "open": [
+    {
+      "id": "R1-IMPL",
+      "summary": "Track chr6 HPRC/minimap2, 10k-subgraph/vg, and VGP horizon_filter/horizon_locus scripts & inputs in scripts/benchmarks/ and docs/BENCHMARK_DATASETS.md, and verify horizon_wga --graph aa5_keys and horizon_clean non-0M L-overlap W-splits."
+    },
+    {
+      "id": "R1-HMM",
+      "summary": "Run a tracked multi-seed random-GC (18%, 30%, 45%) false-positive sweep and implement/calibrate dynamic n_cal=15 CRC & gap-bit penalties beyond fixed defaults."
+    },
+    {
+      "id": "R2-HMM-XDROP",
+      "summary": "Implement multi-contig progressive .hal emission in horizon_guide and audit src/hal/hdf5_read.rs / decode_hal_* against a real external .hal fixture (un-ignoring the .hal test)."
+    },
+    {
+      "id": "R2-RESOLVE-LIFT",
+      "summary": "Install numpy to re-score 42700e1 horizon_filter 565/553 chr6 outputs against 2D HPRC truth, add external SweepGA/impg/FastGA/LASTZ/KegAlign/odgi/gfatools baselines, and wire horizon_filter/horizon_locus into the horizon dispatcher."
+    },
+    {
+      "id": "R5-BIB",
+      "summary": "Add held-catalog citations (li_2026_finding, frith_2011_tantan, garrison_2024_building, andreace_2023_comparing, romain_2026_inversions-pangenome-graphs, kazemi_2022_nthash2, marcais_2024_knonical, wittler_2023_canonical-kmer-encoding, chen_2010_comparative, impg, wfmash, JC69) to manuscript/horizon_paper.md and manuscript/references.bib."
+    },
+    {
+      "id": "R2-INDEX-RAM",
+      "summary": "Track full chr6 HPRC/minimap2 benchmark & scoring scripts in scripts/benchmarks/ (currently defaulting to /tmp/)."
+    },
+    {
+      "id": "R6-FMT",
+      "summary": "Run cargo fmt across the 22 Rust files with formatting diffs flagged by L7."
+    }
+  ],
+  "unchallenged": [],
+  "discharges": {
+    "5": [
+      {
+        "id": "5-h3eb7a2",
+        "item": "{\"claim\": \"C5\", \"lens\": \"statistics\", \"reason\": \"deterministic BandLayout indexing formula\"}",
+        "evidence": "Re-examined in Round 6"
+      },
+      {
+        "id": "5-hac0eab",
+        "item": "{\"claim\": \"C6\", \"lens\": \"sampling\", \"reason\": \"structural # EG:Z: / EG:Z: tag emission\"}",
+        "evidence": "Re-examined in Round 6"
+      },
+      {
+        "id": "5-hb6e3b4",
+        "item": "{\"claim\": \"C6\", \"lens\": \"statistics\", \"reason\": \"structural # EG:Z: / EG:Z: tag emission\"}",
+        "evidence": "Re-examined in Round 6"
+      }
+    ]
+  },
+  "decisions": [],
+  "sealed_blobs": {
+    "attack-L1-correctness.md": {
+      "blob": "523d8bc77264cb991066d046625669329f179279",
+      "ref": "refs/round/seal/6/attack-L1-correctness.md"
+    },
+    "attack-L2-sampling.md": {
+      "blob": "2599b7212888ea5ddd4d780b8c0566da66b2d150",
+      "ref": "refs/round/seal/6/attack-L2-sampling.md"
+    },
+    "attack-L3-statistics.md": {
+      "blob": "2cb8a634f944caf36e01d21277d443b5f7c170d9",
+      "ref": "refs/round/seal/6/attack-L3-statistics.md"
+    },
+    "attack-L4-provenance.md": {
+      "blob": "27056551c134f59dca767a553c0352d1ebaebe60",
+      "ref": "refs/round/seal/6/attack-L4-provenance.md"
+    },
+    "attack-L5-inference.md": {
+      "blob": "c1eb9641e3149b16f8336e327cbb3664cab7d2a3",
+      "ref": "refs/round/seal/6/attack-L5-inference.md"
+    },
+    "attack-L6-prior-art.md": {
+      "blob": "3040eb9a0afaa880e40275e0a285f11075760565",
+      "ref": "refs/round/seal/6/attack-L6-prior-art.md"
+    },
+    "attack-L7-reproduction.md": {
+      "blob": "42cc8f81bd31eb8d6e60f700dcc55b2854468c5e",
+      "ref": "refs/round/seal/6/attack-L7-reproduction.md"
+    }
+  },
+  "diversity": {
+    "attacks": 7,
+    "lenses": [
+      "correctness",
+      "sampling",
+      "statistics",
+      "provenance",
+      "inference",
+      "prior-art",
+      "reproduction"
+    ],
+    "mean_pairwise_similarity": 0.199,
+    "max_pairwise_similarity": 0.294,
+    "most_similar_pair": [
+      "attack-L3-statistics.md",
+      "attack-L5-inference.md"
+    ],
+    "claims_answered": 5,
+    "claims_corroborated": 5,
+    "claims_single_voter": 0,
+    "claims_unanimous": 1,
+    "verdict_agreement": 0.2,
+    "findings_mode": "synthesized",
+    "findings_filed": 38,
+    "findings_per_attacker": {
+      "attack-L1-correctness.md": 5,
+      "attack-L2-sampling.md": 5,
+      "attack-L3-statistics.md": 6,
+      "attack-L4-provenance.md": 5,
+      "attack-L5-inference.md": 6,
+      "attack-L6-prior-art.md": 6,
+      "attack-L7-reproduction.md": 5
+    },
+    "distinct_flaws": 38,
+    "flaws_named_by_more_than_one_attacker": 0,
+    "duplicate_rate": 0.0
+  },
+  "outcome": "NARROWED_AND_DOCS_MANUSCRIPT_REPAIRED",
+  "landed": "All 7 lenses + completeness critic + 8 adjudicators ran against 42700e1; 8 free repairs (COR-1..COR-8) applied across README.md, docs/, manuscript/horizon_paper.md, horizon_companion.md, references.bib (removed foster2007combinators orphan), and rebuilt horizon_paper.pdf (updated 120 active tests, 565/553 chr6 horizon_filter counts, 102/92 human 4-way horizon_locus counts, commit-pinned BENCHMARK_RESULTS.md, and clarified horizon_filter GC / horizon_resolve topological divergence / horizon_locus core-only metrics).",
+  "overturned": "L3-F4 overturned on precision/multiplicity omission leg (already in horizon_paper.md:78); L7-F4 overturned on 14-commit count (42700e1 is 28 commits ahead of 8cd5db0); L7-F2 narrowed (0.47s runtime reproduces; substituting 565 without re-scoring rejected).",
+  "class": "full-repo-vgp-benchmarks-and-code-sync",
+  "survived": "120 active Rust unit tests (86 lib + 34 bin, +1 ignored) and 0 clippy warnings on 42700e1; horizon_resolve Tarjan snarl decomposition, --divergence, W-end updates, and L-link pruning/synthesis; avian 2-way horizon_locus (0.83-0.86s, 231,444 bp, p_dist=0.192552, jc69_dist=0.222528); chr6 horizon_filter --net runtime (0.45-0.48s); core 8cd5db0/2896229 chr6 & HPRC metrics.",
+  "post_round_audit": {
+    "by": "aeebc041-88f7-4b19-bdbe-5031442991ff",
+    "date": "2026-11-21",
+    "evidence": "reports/rounds/round-6/cold-audit.md: cargo test --all-features (120 passed, 1 ignored), cargo clippy --all-targets --all-features -- -D warnings (0 warnings); all 3 cold-audit doc-sync defects (VGP_INTEGRATION_PLAN.md 0.50s, ARCHITECTURE.md, STRATEGIC_PLAN.md) fixed; round balance reconciles and scripts/round check 6 --full exits 0."
+  }
+}

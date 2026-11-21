@@ -141,21 +141,21 @@ horizon_clean --gfa <in.gfa[.gz|.zst]|-> [--flank 128] [--min-cp-bits 12.0] [--p
 ```
 
 ### `horizon_resolve`
-Runs standalone MDL-calibrated e-graph resolution (`MdlCostModel`) over a `u32`-interned `PackedGraph` with $O(V + E)$ Tarjan biedged snarl decomposition and per-window divergence estimation (optional `--divergence` override), canceling double inversions, collapsing adjacent tandem duplications, updating `W`-line `end` bounds, and pruning/synthesizing `L` links.
+Runs standalone MDL-calibrated e-graph resolution (`MdlCostModel`) over a `u32`-interned `PackedGraph` with $O(V + E)$ Tarjan biedged snarl decomposition and topological window-divergence estimation (`[0.02, 0.15]` heuristic unless `--divergence` is passed), canceling double inversions, collapsing adjacent tandem duplications, updating `W`-line `end` bounds, and pruning/synthesizing `L` links (assuming `0M` overlaps).
 
 ```bash
 horizon_resolve <in.gfa[.gz|.zst]|-> [--max-bubble-steps 16] [--min-anchor-bp 200] [--divergence 0.02] [--collapse-dups] [--tag-walks] > resolved.gfa
 ```
 
 ### `horizon_filter`
-Streams `.paf[.gz|.zst]` or `stdin`, evaluates `FastGA`/`wfmash` PAF alignments with SDUST repeat masking, BOCPD compositional tracking, and Pair-HMM MDL bit-savings (`md:f:` and `hb:i:` tags), and optionally nets overlapping alignments (`--net` / `--max-occ`).
+Streams `.paf[.gz|.zst]` or `stdin`, evaluates `FastGA`/`wfmash` PAF alignments with SDUST repeat masking and Pair-HMM MDL bit-savings using contig-global or fixed `0.5` GC `base_probs` (`md:f:` and `hb:i:` tags), and optionally nets overlapping alignments (`--net` / `--max-occ`).
 
 ```bash
 horizon_filter --paf <in.paf[.gz|.zst]|-> [--query <q.fa>] [--target <t.fa>] [--seqs <all.fa>] [--out <out.paf[.gz|.zst]>] [--min-bits <F>] [--min-nonrepeat-bp <N>] [--min-len <N>] [--net | --max-occ <K>] [--keep-all]
 ```
 
 ### `horizon_locus`
-Aligns all sequence pairs in a regional `impg`-style multi-FASTA (`.fa[.gz|.zst]`) using `SDUST + BOCPD/MDL + Aa5Index`, emitting `<prefix>.similarity.tsv` (`jaccard_cov`, `p_dist`, `jc69_dist`, Horizon Bubbles), `<prefix>.maf`, and `<prefix>.gfa`.
+Aligns all sequence pairs in a regional `impg`-style multi-FASTA (`.fa[.gz|.zst]`) using `SDUST + BOCPD/MDL + Aa5Index`, emitting `<prefix>.similarity.tsv` (`jaccard_cov` average covered fraction, `p_dist` and `jc69_dist` over aligned bases clamped at `0.74`, Horizon Bubbles), `<prefix>.maf`, and `<prefix>.gfa`.
 
 ```bash
 horizon_locus --fasta <locus.fa[.gz|.zst]> --out-prefix <prefix> [--ref <seq_name>] [--threads <N>] [--respect-softmask]
