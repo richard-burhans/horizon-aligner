@@ -573,11 +573,13 @@ pub fn align_seq_to_dag_mdl(
     path_nodes.reverse();
 
     let mut abstain = Vec::new();
+    let dip_floor_bits = super::dp::dip_floor_bits_for_identity(params.identity_prior);
     let (raw_kept, bubbles) = super::dp::filter_mea_pairs_and_count_bubbles(
         &raw_cols,
         &mut abstain,
         MIN_POST_PROB,
         min_block_bits,
+        dip_floor_bits,
     );
     let kept_pairs = raw_kept
         .into_iter()

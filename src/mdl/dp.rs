@@ -413,11 +413,18 @@ pub(super) fn band_center(i: usize, m: usize, n: usize) -> usize {
     usize::try_from((i as u128 * m as u128) / (n.max(1) as u128)).unwrap_or(m)
 }
 
+#[must_use]
+pub(crate) fn dip_floor_bits_for_identity(identity: f64) -> f64 {
+    let p_id = identity.clamp(0.25, 0.999);
+    crate::bocpd::joint_pair_bits(b'A', b'C', [0.25; 4], [0.25; 4], p_id) - 0.5
+}
+
 pub(super) fn filter_mea_pairs_and_count_bubbles<X: Copy>(
     raw_cols: &[(Option<X>, Option<usize>, f64, f64)],
     abstain: &mut Vec<bool>,
     min_post_prob: f64,
     min_block_bits: f64,
+    dip_floor_bits: f64,
 ) -> (Vec<(X, usize)>, usize) {
     let min_post_prob = if min_post_prob.is_nan() {
         0.0
@@ -442,7 +449,7 @@ pub(super) fn filter_mea_pairs_and_count_bubbles<X: Copy>(
                     || (idx + 1 < k
                         && raw_cols[idx].0.is_some()
                         && raw_cols[idx].1.is_some()
-                        && raw_cols[idx].2 > -2.5
+                        && raw_cols[idx].2 > dip_floor_bits
                         && raw_cols[idx + 1].0.is_some()
                         && raw_cols[idx + 1].1.is_some()
                         && raw_cols[idx + 1].3 >= min_post_prob))
@@ -853,11 +860,13 @@ pub(crate) fn banded_mdl_gap_with_scratch(
     }
     scratch.raw_cols.reverse();
 
+    let dip_floor_bits = dip_floor_bits_for_identity(params.identity_prior);
     let (kept_pairs, bubbles) = filter_mea_pairs_and_count_bubbles(
         &scratch.raw_cols,
         &mut scratch.abstain,
         min_post_prob,
         min_block_bits,
+        dip_floor_bits,
     );
 
     GapResult {
@@ -925,8 +934,22 @@ mod tests {
             (None, Some(1), -2.0, 0.0), // gap column (must NOT be bridged into)
             (Some(1), Some(2), 2.5, 0.9),
         ];
-        let (kept2, _) = super::filter_mea_pairs_and_count_bubbles(&cols2, &mut abstain, 0.0, 2.0);
+        let (kept2, _) =
+            super::filter_mea_pairs_and_count_bubbles(&cols2, &mut abstain, 0.0, 2.0, -2.5);
         assert_eq!(kept2, vec![(0, 0), (1, 2)]);
         assert!(abstain[1], "gap column must remain abstained");
+    }
+
+    #[test]
+    fn dip_floor_bits_scales_monotonically_with_identity() {
+        let low = super::dip_floor_bits_for_identity(0.55);
+        let mid = super::dip_floor_bits_for_identity(0.65);
+        let high = super::dip_floor_bits_for_identity(0.90);
+        assert!(low.is_finite() && mid.is_finite() && high.is_finite());
+        assert!(low < 0.0 && mid < 0.0 && high < 0.0);
+        assert!(
+            low > mid && mid > high,
+            "higher identity prior should penalize single-base mismatches more strongly: {low} > {mid} > {high}"
+        );
     }
 }

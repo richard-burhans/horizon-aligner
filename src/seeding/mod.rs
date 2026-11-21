@@ -24,14 +24,27 @@ pub const MASK_LASTZ11: &str = "111010011001010111";
 #[inline]
 fn is_low_complexity_window(sub: &[u8]) -> bool {
     let mut counts = [0usize; 4];
+    let mut total = 0usize;
     for &b in sub {
         if let Some(idx) = base_to_idx(b) {
             counts[idx] += 1;
+            total += 1;
         }
     }
-    let max_c = counts[0].max(counts[1]).max(counts[2]).max(counts[3]);
-    let distinct = counts.iter().filter(|&&c| c > 0).count();
-    max_c * 4 >= sub.len() * 3 || (sub.len() >= 14 && distinct <= 2)
+    if total == 0 {
+        return true;
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let inv_n = 1.0 / (total as f64);
+    let mut entropy_bits = 0.0_f64;
+    for &c in &counts {
+        if c > 0 {
+            #[allow(clippy::cast_precision_loss)]
+            let p = (c as f64) * inv_n;
+            entropy_bits -= p * p.log2();
+        }
+    }
+    entropy_bits <= 1.05
 }
 
 /// Linear-time SDUST-style triplet low-complexity masker (`W in {16, 24, 32}`, `T = 2.0`,
@@ -835,5 +848,14 @@ mod tests {
         assert_eq!(off10, [0, 1, 3, 4, 6, 7, 9, 10, 12, 13]);
         let rev10: Vec<usize> = off10.iter().map(|&o| span10 - 1 - o).collect();
         assert_eq!(rev10, [13, 12, 10, 9, 7, 6, 4, 3, 1, 0]);
+    }
+
+    #[test]
+    fn shannon_entropy_filters_low_complexity_windows() {
+        assert!(is_low_complexity_window(b"AAAAAAAAAAAAAAAA"));
+        assert!(is_low_complexity_window(b"ATATATATATATATAT")); // H = 1.0 <= 1.05
+        assert!(is_low_complexity_window(b"NNNNNNNNNNNNNNNN"));
+        assert!(!is_low_complexity_window(b"ACGTACGTACGTACGT")); // H = 2.0 > 1.05
+        assert!(!is_low_complexity_window(b"ACGTTCGAACGTACTG"));
     }
 }

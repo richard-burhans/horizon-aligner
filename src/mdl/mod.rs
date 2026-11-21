@@ -402,19 +402,22 @@ fn schedule_and_run_extension(ctx: &mut AlignCtx<'_>) -> Result<ExtensionOutput,
     let crc_min_bits = if dp_jobs.is_empty() {
         ctx.effective_min_bits
     } else {
+        const CRC_ALPHA: f64 = 0.07;
+        // Minimum sample count >= ceil(1 / CRC_ALPHA) so (0 + 1) / (n + 1) <= CRC_ALPHA.
+        const CRC_N_CAL: usize = 15;
         let observed_gc = dp::estimate_sampled_gc(ctx.seq_x, ctx.seq_y);
         let gc_crc = dp::calibrate_null_crc_for_gc(
             observed_gc,
-            15,
-            0.07,
+            CRC_N_CAL,
+            CRC_ALPHA,
             ctx.effective_min_bits,
             &hmm_params,
         );
         dp::calibrate_null_crc_from_seqs(
             ctx.seq_x,
             ctx.seq_y,
-            15,
-            0.07,
+            CRC_N_CAL,
+            CRC_ALPHA,
             ctx.effective_min_bits,
             &hmm_params,
         )
