@@ -1,9 +1,12 @@
 //! BOCPD compositional segmentation and MDL log-likelihood scoring primitives.
 
 pub(crate) const NEG_INF: f64 = -1e18;
-pub(crate) const GAP_OPEN_BITS: f64 = -4.5;
-pub(crate) const GAP_EXTEND_BITS: f64 = -0.8;
-pub(crate) const IDENTITY_PRIOR: f64 = 0.65;
+/// Default affine gap-open penalty (bits).
+pub const GAP_OPEN_BITS: f64 = -4.5;
+/// Default affine gap-extend penalty (bits).
+pub const GAP_EXTEND_BITS: f64 = -0.8;
+/// Default expected homologous nucleotide identity prior.
+pub const IDENTITY_PRIOR: f64 = 0.65;
 pub(crate) const MIN_POST_PROB: f64 = 0.15;
 
 const BASE_IDX_LUT: [u8; 256] = {
@@ -29,16 +32,21 @@ pub(crate) fn base_to_idx(b: u8) -> Option<usize> {
     if idx < 4 { Some(idx as usize) } else { None }
 }
 
+/// Background nucleotide probabilities `[A, C, G, T]` for a given GC fraction.
 #[inline]
-pub(crate) fn base_probs(gc: f64) -> [f64; 4] {
+#[must_use]
+pub fn base_probs(gc: f64) -> [f64; 4] {
     let p_gc = gc * 0.5;
     let p_at = (1.0 - gc) * 0.5;
     // Order matches A=0, C=1, G=2, T=3.
     [p_at, p_gc, p_gc, p_at]
 }
 
+/// Pair-HMM log2 likelihood ratio (bits) for aligned bases `(a, b)` under background
+/// compositions `pi_x`, `pi_y` and homologous identity prior `identity`.
 #[inline]
-pub(crate) fn joint_pair_bits(a: u8, b: u8, pi_x: [f64; 4], pi_y: [f64; 4], identity: f64) -> f64 {
+#[must_use]
+pub fn joint_pair_bits(a: u8, b: u8, pi_x: [f64; 4], pi_y: [f64; 4], identity: f64) -> f64 {
     let (Some(ia), Some(ib)) = (base_to_idx(a), base_to_idx(b)) else {
         return 0.0;
     };

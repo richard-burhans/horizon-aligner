@@ -121,6 +121,42 @@ const fn aa_group(ax: u8) -> u8 {
     }
 }
 
+/// Extract sorted, deduplicated 5-of-6 amino-acid spaced-seed keys (`< 59_049`) across
+/// all 3 forward reading frames of `seq`.
+#[must_use]
+pub fn aa5_keys(seq: &[u8]) -> Vec<u16> {
+    const AA_OFFSETS: [usize; 5] = [0, 1, 2, 4, 5];
+    if seq.len() < 18 {
+        return Vec::new();
+    }
+    let mut keys = Vec::with_capacity(seq.len() / 2);
+    for frame in 0..3 {
+        if seq.len() < frame + 18 {
+            continue;
+        }
+        let mut pos = frame;
+        while pos + 18 <= seq.len() {
+            let mut key = 0_usize;
+            let mut valid = true;
+            for &c in &AA_OFFSETS {
+                let s = &seq[pos + c * 3..pos + c * 3 + 3];
+                let Some(aa) = codon_to_aa(s[0], s[1], s[2]) else {
+                    valid = false;
+                    break;
+                };
+                key = key * 9 + usize::from(aa_group(aa));
+            }
+            if valid && let Ok(k16) = u16::try_from(key) {
+                keys.push(k16);
+            }
+            pos += 3;
+        }
+    }
+    keys.sort_unstable();
+    keys.dedup();
+    keys
+}
+
 const fn aa_pair_score(ax: u8, ay: u8) -> i32 {
     if ax == ay {
         return 15;

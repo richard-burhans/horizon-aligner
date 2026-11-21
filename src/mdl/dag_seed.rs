@@ -2,19 +2,20 @@
 
 use super::dag::{GraphAlignment, GraphNode, align_seq_to_dag_mdl};
 use crate::mdl::dp::HmmParams;
-use crate::seeding::{FlatSeedIndex, MASK_RY20, MASK_W10, sdust_mask};
+use crate::seeding::{FlatSeedIndex, MASK_RY20, MASK_W10, aa5_keys, sdust_mask};
 use std::collections::HashMap;
 
-/// Pre-built per-node spaced-seed indices (`MASK_W10` and `MASK_RY20`) for repeated
-/// queries against the same sequence DAG.
+/// Pre-built per-node spaced-seed indices (`MASK_W10`, `MASK_RY20`, and compact 5-of-6 `aa5`
+/// translated keys) for repeated queries against the same sequence DAG.
 #[derive(Debug, Clone)]
 pub struct DagSeedIndex {
     w10: Vec<Option<FlatSeedIndex>>,
     ry20: Vec<Option<FlatSeedIndex>>,
+    aa5: Vec<Vec<u16>>,
 }
 
 impl DagSeedIndex {
-    /// Build `MASK_W10` and `MASK_RY20` seed indices once for all nodes in `nodes`.
+    /// Build `MASK_W10`, `MASK_RY20`, and compact `aa5` seed indices once for all nodes in `nodes`.
     #[must_use]
     pub fn build(nodes: &[GraphNode]) -> Self {
         let w10 = nodes
@@ -39,8 +40,36 @@ impl DagSeedIndex {
                     .flatten()
             })
             .collect();
-        Self { w10, ry20 }
+        let aa5 = nodes
+            .iter()
+            .map(|nd| {
+                if nd.seq.len() >= 18 {
+                    aa5_keys(&nd.seq)
+                } else {
+                    Vec::new()
+                }
+            })
+            .collect();
+        Self { w10, ry20, aa5 }
     }
+}
+
+fn sorted_u16_intersection_count(a: &[u16], b: &[u16]) -> usize {
+    let mut i = 0usize;
+    let mut j = 0usize;
+    let mut hits = 0usize;
+    while i < a.len() && j < b.len() {
+        match a[i].cmp(&b[j]) {
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+            std::cmp::Ordering::Equal => {
+                hits += 1;
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    hits
 }
 
 fn try_small_or_invalid_dag(
@@ -120,6 +149,20 @@ pub fn align_seq_to_dag_seeded_indexed(
                 let shared = q_idx.shared_unique_keys(n_idx);
                 if shared >= min_hits {
                     *seed_scores.entry(nid).or_insert(0) += shared;
+                }
+            }
+        }
+    }
+
+    if seed_scores.is_empty() && seq_y.len() >= 18 {
+        let q_aa5 = aa5_keys(seq_y);
+        if !q_aa5.is_empty() {
+            for (nid, n_aa5) in index.aa5.iter().enumerate() {
+                if !n_aa5.is_empty() {
+                    let shared = sorted_u16_intersection_count(&q_aa5, n_aa5);
+                    if shared > 0 {
+                        *seed_scores.entry(nid).or_insert(0) += shared;
+                    }
                 }
             }
         }

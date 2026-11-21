@@ -5,6 +5,8 @@ use crate::bocpd::base_to_idx;
 use rayon::prelude::*;
 use std::collections::HashMap;
 
+pub use translated::aa5_keys;
+
 /// KP-14 spaced seed mask (weight 11, span 15).
 pub const MASK_PRIMARY_11_15: &str = "111011011011011";
 /// Optimal non-periodic weight-11 `PatternHunter` spaced seed (Ma et al., 2002).
@@ -36,7 +38,7 @@ fn is_low_complexity_window(sub: &[u8]) -> bool {
 /// Morgulis et al., 2006). Masks homopolymers, dinucleotide, trinucleotide, and tetranucleotide
 /// simple repeats in `O(N)` time so seeders avoid `O(span)` per-position checks.
 #[must_use]
-pub(crate) fn sdust_mask(seq: &[u8]) -> Vec<bool> {
+pub fn sdust_mask(seq: &[u8]) -> Vec<bool> {
     let n = seq.len();
     let mut masked = vec![false; n];
     if n < 16 {

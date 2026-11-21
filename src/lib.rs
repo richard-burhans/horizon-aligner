@@ -9,6 +9,7 @@ pub mod hal;
 pub mod mdl;
 pub mod merge;
 pub mod netting;
+pub mod paf;
 pub mod seeding;
 
 pub use bocpd::bocpd_gc_profile;

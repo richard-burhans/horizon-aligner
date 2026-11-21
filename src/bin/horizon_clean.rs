@@ -148,11 +148,31 @@ struct CleanStats {
     split_walks: usize,
 }
 
+fn parse_cigar_overlap_bp(cigar: &str) -> usize {
+    if cigar.is_empty() || cigar == "*" {
+        return 0;
+    }
+    let mut ov = 0usize;
+    let mut num = 0usize;
+    for b in cigar.bytes() {
+        if b.is_ascii_digit() {
+            num = num.saturating_mul(10).saturating_add(usize::from(b - b'0'));
+        } else {
+            if matches!(b, b'M' | b'=' | b'X') {
+                ov = ov.saturating_add(num);
+            }
+            num = 0;
+        }
+    }
+    ov
+}
+
 struct CleanPass1 {
     seg_ids: HashMap<String, u32>,
     seg_flanks: HashMap<u32, SegFlank>,
     links: Vec<GfaLink>,
     walk_support: HashMap<DirectedEdge, usize>,
+    link_overlaps: HashMap<DirectedEdge, usize>,
 }
 
 fn collect_clean_pass1(gfa_path: &str, flank_bp: usize) -> Result<CleanPass1> {
@@ -161,6 +181,7 @@ fn collect_clean_pass1(gfa_path: &str, flank_bp: usize) -> Result<CleanPass1> {
     let mut seg_flanks = HashMap::<u32, SegFlank>::new();
     let mut links = Vec::<GfaLink>::new();
     let mut walk_support = HashMap::<DirectedEdge, usize>::new();
+    let mut link_overlaps = HashMap::<DirectedEdge, usize>::new();
 
     stream_gfa_records(gfa_path, |rec| {
         match rec {
@@ -188,8 +209,14 @@ fn collect_clean_pass1(gfa_path: &str, flank_bp: usize) -> Result<CleanPass1> {
                 );
             }
             GfaRecord::Link(l) => {
-                intern_seg(&mut seg_ids, &mut next_seg_id, &l.from);
-                intern_seg(&mut seg_ids, &mut next_seg_id, &l.to);
+                let u = intern_seg(&mut seg_ids, &mut next_seg_id, &l.from);
+                let v = intern_seg(&mut seg_ids, &mut next_seg_id, &l.to);
+                let ov = parse_cigar_overlap_bp(&l.overlap);
+                if ov > 0 {
+                    let e = DirectedEdge::new(u, l.from_orient != b'-', v, l.to_orient != b'-');
+                    link_overlaps.entry(e).or_insert(ov);
+                    link_overlaps.entry(e.rev()).or_insert(ov);
+                }
                 links.push(l);
             }
             GfaRecord::Path(p) => {
@@ -227,6 +254,7 @@ fn collect_clean_pass1(gfa_path: &str, flank_bp: usize) -> Result<CleanPass1> {
         seg_flanks,
         links,
         walk_support,
+        link_overlaps,
     })
 }
 
@@ -356,12 +384,13 @@ fn emit_clean_path<W: Write>(
 
 fn emit_clean_walk<W: Write>(
     w: &horizon_aligner::gfa::GfaWalk,
-    seg_ids: &HashMap<String, u32>,
-    seg_flanks: &HashMap<u32, SegFlank>,
+    pass1: &CleanPass1,
     severed_info: &HashMap<DirectedEdge, f64>,
     out: &mut W,
 ) -> Result<bool> {
     type WalkChunk<'a> = (usize, usize, Vec<(&'a str, bool)>);
+    let seg_ids = &pass1.seg_ids;
+    let seg_flanks = &pass1.seg_flanks;
     let emit_walk = |out: &mut dyn Write, cs: usize, ce: usize, walk_str: &str| -> Result<()> {
         if let Some(ref tags) = w.tags {
             writeln!(
@@ -397,21 +426,22 @@ fn emit_clean_walk<W: Write>(
             .get(win[1].0)
             .and_then(|id| seg_flanks.get(id))
             .map_or(0, |f| f.len);
-        let is_severed = seg_ids
+        let edge_opt = seg_ids
             .get(win[0].0)
             .zip(seg_ids.get(win[1].0))
-            .is_some_and(|(&u, &v)| {
-                let e = DirectedEdge::new(u, win[0].1, v, win[1].1);
-                severed_info.contains_key(&e)
-            });
+            .map(|(&u, &v)| DirectedEdge::new(u, win[0].1, v, win[1].1));
+        let ov_bp = edge_opt
+            .and_then(|e| pass1.link_overlaps.get(&e).copied())
+            .unwrap_or(0);
+        let is_severed = edge_opt.is_some_and(|e| severed_info.contains_key(&e));
         if is_severed {
             chunks.push((cur_start, cur_end, std::mem::take(&mut cur_steps)));
-            cur_start = cur_end;
+            cur_start = cur_end.saturating_sub(ov_bp);
             cur_end = cur_start.saturating_add(step_len);
             cur_steps.push(win[1]);
         } else {
             cur_steps.push(win[1]);
-            cur_end = cur_end.saturating_add(step_len);
+            cur_end = cur_end.saturating_add(step_len.saturating_sub(ov_bp));
         }
     }
     chunks.push((cur_start, cur_end, cur_steps));
@@ -480,7 +510,7 @@ fn clean_gfa<W: Write>(gfa_path: &str, cfg: &CleanConfig, out: &mut W) -> Result
                 }
             }
             GfaRecord::Walk(w) => {
-                if emit_clean_walk(&w, &pass1.seg_ids, &pass1.seg_flanks, &severed_info, out)? {
+                if emit_clean_walk(&w, &pass1, &severed_info, out)? {
                     split_walks += 1;
                 }
             }
@@ -756,5 +786,41 @@ mod tests {
         let out_str = String::from_utf8(out).unwrap();
         assert!(!out_str.contains("\nL\t"));
         assert!(out_str.contains("HB:i:1"));
+    }
+
+    #[test]
+    fn walk_split_accounts_for_link_overlap_cigar() {
+        let gfa_path = std::env::temp_dir().join(format!(
+            "horizon_clean_ov_test_{}.gfa",
+            std::process::id()
+        ));
+        let s1 = "ATATATATATATATATATATATATATATATATATATATATATATATATATATATATATAT";
+        let s2 = "GCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGC";
+        let s3 = "ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT";
+        let gfa = format!(
+            "H\tVN:Z:1.1\n\
+             S\ts1\t{s1}\n\
+             S\ts2\t{s2}\n\
+             S\ts3\t{s3}\n\
+             L\ts1\t+\ts2\t+\t10M\n\
+             L\ts2\t+\ts3\t+\t10M\n\
+             W\tCHM13\t0\tchr1\t0\t160\t>s1>s2>s3\n"
+        );
+        std::fs::write(&gfa_path, gfa).unwrap();
+
+        let cfg = CleanConfig {
+            flank_bp: 60,
+            min_cp_bits: 5.0,
+            prune_unsupported: false,
+        };
+        let mut out = Vec::new();
+        let stats = clean_gfa(gfa_path.to_str().unwrap(), &cfg, &mut out).unwrap();
+        let _ = std::fs::remove_file(&gfa_path);
+
+        assert_eq!(stats.split_walks, 1);
+        let out_str = String::from_utf8(out).unwrap();
+        assert!(out_str.contains("W\tCHM13\t0\tchr1\t0\t60\t>s1\n"));
+        assert!(out_str.contains("W\tCHM13\t0\tchr1\t50\t110\t>s2\n"));
+        assert!(out_str.contains("W\tCHM13\t0\tchr1\t100\t160\t>s3\n"));
     }
 }
