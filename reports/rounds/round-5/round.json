@@ -718,8 +718,9 @@
     }
   ],
   "discharges": {
-    "Round 5 (Round 4 C1 sampling unchallenged slot re-examined across all 7 lenses on empirical C1-C4)": [
-      "4-h5c2c20"
+    "Round 5 (Round 4 C1 sampling and statistics unchallenged slots re-examined across all 7 lenses on empirical C1-C4)": [
+      "4-h5c2c20",
+      "4-hfcb834"
     ]
   },
   "decisions": [],
