@@ -392,11 +392,26 @@ pub(crate) fn remap_consensus_maf_to_hinge(
         let s0 = r0.start;
         let e0 = s0 + r0_size;
         if let Some(spans) = covered_by_contig.get(&r0.src) {
+            let mut clipped: Vec<(usize, usize)> = spans
+                .iter()
+                .filter(|&&(a, b)| a < e0 && b > s0)
+                .map(|&(a, b)| (a.max(s0), b.min(e0)))
+                .collect();
+            clipped.sort_unstable();
             let mut ov = 0usize;
-            for &(a, b) in spans {
-                if a < e0 && b > s0 {
-                    ov += b.min(e0) - a.max(s0);
+            let mut cur: Option<(usize, usize)> = None;
+            for (a, b) in clipped {
+                match cur {
+                    Some((cs, ce)) if a <= ce => cur = Some((cs, ce.max(b))),
+                    Some((cs, ce)) => {
+                        ov += ce - cs;
+                        cur = Some((a, b));
+                    }
+                    None => cur = Some((a, b)),
                 }
+            }
+            if let Some((cs, ce)) = cur {
+                ov += ce - cs;
             }
             if ov * 10 >= r0_size * 9 {
                 continue;

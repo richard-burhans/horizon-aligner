@@ -39,10 +39,15 @@ pub(crate) fn partition_colinear_blocks(pairs: &[(usize, usize)]) -> Vec<(Vec<(u
             } else {
                 (py - y, true)
             };
-            if dx <= 20 && dy <= 20 && rev_opt.is_none_or(|r| r == rev_step) && dx.abs_diff(dy) <= 4
+            if dx > 0
+                && dy > 0
+                && dx <= 20
+                && dy <= 20
+                && rev_opt.is_none_or(|r| r == rev_step)
+                && dx.abs_diff(dy) <= 4
             {
                 chain.push((x, y));
-                if rev_opt.is_none() && (dx > 0 || dy > 0) {
+                if rev_opt.is_none() {
                     *rev_opt = Some(rev_step);
                 }
                 placed = true;
@@ -382,5 +387,18 @@ mod tests {
         assert!(!groups[0].1);
         assert_eq!(groups[1].0[0].x_start, 100);
         assert!(!groups[1].1);
+    }
+
+    #[test]
+    fn partition_colinear_blocks_rejects_zero_step_duplicates() {
+        let mut pairs: Vec<(usize, usize)> = (0..14).map(|i| (i, i)).collect();
+        pairs.insert(5, (5, 4)); // duplicate x=5 with backward y=4
+        pairs.insert(8, (7, 7)); // duplicate y=7
+        let blocks = partition_colinear_blocks(&pairs);
+        assert_eq!(blocks.len(), 1);
+        for w in blocks[0].0.windows(2) {
+            assert!(w[1].0 > w[0].0);
+            assert!(w[1].1 > w[0].1);
+        }
     }
 }

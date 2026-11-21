@@ -32,9 +32,7 @@ pub(crate) fn parse_features(path: &Path, is_gff: bool) -> Result<Vec<InputFeatu
         }
         let cols: Vec<&str> = trimmed.split('\t').collect();
         if is_gff {
-            if cols.len() < 9 {
-                continue;
-            }
+            anyhow::ensure!(cols.len() >= 9, "malformed GFF3 line {}", idx + 1);
             let chrom = cols[0].to_string();
             let start_1: usize = cols[3]
                 .parse()
@@ -57,11 +55,11 @@ pub(crate) fn parse_features(path: &Path, is_gff: bool) -> Result<Vec<InputFeatu
             };
             let id_attr = cols[8]
                 .split(';')
-                .find_map(|kv| kv.strip_prefix("ID="))
+                .find_map(|kv| kv.trim().strip_prefix("ID="))
                 .filter(|v| !v.is_empty());
             let name_attr = cols[8]
                 .split(';')
-                .find_map(|kv| kv.strip_prefix("Name="))
+                .find_map(|kv| kv.trim().strip_prefix("Name="))
                 .filter(|v| !v.is_empty());
             let name = id_attr.or(name_attr).unwrap_or(cols[2]).to_string();
             out.push(InputFeature {
@@ -73,9 +71,7 @@ pub(crate) fn parse_features(path: &Path, is_gff: bool) -> Result<Vec<InputFeatu
                 strand,
             });
         } else {
-            if cols.len() < 3 {
-                continue;
-            }
+            anyhow::ensure!(cols.len() >= 3, "malformed BED line {}", idx + 1);
             let chrom = cols[0].to_string();
             let start: usize = cols[1]
                 .parse()

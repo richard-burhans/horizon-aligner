@@ -7,7 +7,6 @@ use horizon_aligner::{
 };
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
-use std::fs;
 use std::io::BufRead as _;
 use std::path::Path;
 use std::time::Instant;
@@ -44,8 +43,7 @@ type MafEntry = ((String, String), HashSet<(usize, usize)>);
 
 #[allow(clippy::similar_names)]
 fn parse_maf_pairs_by_contig(path: &Path, cx: &str, cy: &str) -> Result<MafPairMap> {
-    let file = fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
-    let mut reader = std::io::BufReader::new(file);
+    let mut reader = horizon_aligner::io_util::open_text_reader(path)?;
     let mut out: MafPairMap = HashMap::new();
     let mut cur: Vec<MafRow> = Vec::new();
     let flush = |cur: &mut Vec<MafRow>, out: &mut MafPairMap| -> Result<()> {
@@ -276,6 +274,7 @@ fn main() -> Result<()> {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn parses_named_contigs_and_maf_pairs() {

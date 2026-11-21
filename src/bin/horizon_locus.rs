@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail};
 use horizon_aligner::formats::{format_maf_blocks_runs, read_fasta_contigs};
 use horizon_aligner::mdl::{AlignConfig, RunAlignment, align_contig_pair_runs};
 use horizon_aligner::merge::merge_pairwise_mafs;
-use horizon_aligner::seeding::{ContigIndex, prepare_contig_index};
+use horizon_aligner::seeding::{ContigIndex, complement_base, prepare_contig_index};
 use rayon::prelude::*;
 use std::env;
 use std::fmt::Write as _;
@@ -42,16 +42,22 @@ fn count_run_matches(seq_x: &[u8], seq_y: &[u8], aln: &RunAlignment) -> usize {
     for r in &aln.aligned_runs {
         for off in 0..r.len {
             let x = r.x_start + off;
-            let y = if r.is_rc {
-                r.y_start.saturating_sub(off)
+            let Some(y) = (if r.is_rc {
+                r.y_start.checked_sub(off)
             } else {
-                r.y_start + off
+                Some(r.y_start + off)
+            }) else {
+                continue;
             };
-            if x < seq_x.len()
-                && y < seq_y.len()
-                && seq_x[x].eq_ignore_ascii_case(&seq_y[y])
-            {
-                matches += 1;
+            if x < seq_x.len() && y < seq_y.len() {
+                let yb = if r.is_rc {
+                    complement_base(seq_y[y])
+                } else {
+                    seq_y[y]
+                };
+                if seq_x[x].eq_ignore_ascii_case(&yb) {
+                    matches += 1;
+                }
             }
         }
     }
@@ -177,7 +183,8 @@ fn run_locus(cli: &LocusCli) -> Result<()> {
     let ref_idx = if let Some(ref wanted) = cli.focal_ref {
         contigs
             .iter()
-            .position(|(name, _)| name == wanted || name.starts_with(wanted))
+            .position(|(name, _)| name == wanted)
+            .or_else(|| contigs.iter().position(|(name, _)| name.starts_with(wanted)))
             .with_context(|| format!("focal reference '{wanted}' not found in FASTA"))?
     } else {
         contigs
@@ -380,11 +387,13 @@ mod tests {
             base_bytes.push(b"ACGT"[((x >> 62) & 3) as usize]);
         }
         let base = String::from_utf8(base_bytes).expect("ascii");
+        let rc_bytes: Vec<u8> = base.bytes().rev().map(complement_base).collect();
+        let rc_base = String::from_utf8(rc_bytes).expect("ascii");
         let mut mut_b = base.as_bytes().to_vec();
         mut_b[40] = if mut_b[40] == b'A' { b'T' } else { b'A' };
         mut_b[100] = if mut_b[100] == b'C' { b'G' } else { b'C' };
         let fa = format!(
-            ">sp1\n{base}\n>sp2\n{}\n>sp3\n{base}\n",
+            ">sp1\n{base}\n>sp2\n{}\n>sp3\n{base}\n>sp4_rc\n{rc_base}\n",
             String::from_utf8_lossy(&mut_b)
         );
         fs::write(&fa_path, fa).expect("write fa");
@@ -410,6 +419,10 @@ mod tests {
         assert!(tsv.contains("sp1\tsp2\t160\t160\t"), "tsv:\n{tsv}");
         assert!(
             tsv.contains("sp1\tsp3\t160\t160\t160\t160\t1.000000\t0.000000\t0.000000"),
+            "tsv:\n{tsv}"
+        );
+        assert!(
+            tsv.contains("sp1\tsp4_rc\t160\t160\t160\t160\t1.000000\t0.000000\t0.000000"),
             "tsv:\n{tsv}"
         );
         assert!(maf.contains("##maf version=1"));

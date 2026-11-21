@@ -333,7 +333,7 @@ fn collect_ry_and_w10_1trans_lcbs<F: Fn(&mut AnchorPairs)>(
     let x_ry = FlatSeedIndex::build_with_sdust(
         &ctx.idx_x.seq,
         MASK_RY20,
-        2,
+        ctx.cfg.fallback_max_occ,
         ctx.cfg.skip_softmasked,
         true,
         Some(&ctx.idx_x.sdust),
@@ -341,7 +341,7 @@ fn collect_ry_and_w10_1trans_lcbs<F: Fn(&mut AnchorPairs)>(
     let y_ry = FlatSeedIndex::build_with_sdust(
         &ctx.idx_y.seq,
         MASK_RY20,
-        2,
+        ctx.cfg.fallback_max_occ,
         ctx.cfg.skip_softmasked,
         true,
         Some(&ctx.idx_y.sdust),
@@ -407,7 +407,7 @@ fn collect_ry_lcbs<F: Fn(&mut AnchorPairs)>(
         let x_ry = FlatSeedIndex::build_with_sdust(
             &ctx.idx_x.seq,
             MASK_RY20,
-            2,
+            ctx.cfg.fallback_max_occ,
             ctx.cfg.skip_softmasked,
             true,
             Some(&ctx.idx_x.sdust),
@@ -415,12 +415,15 @@ fn collect_ry_lcbs<F: Fn(&mut AnchorPairs)>(
         let y_ry = FlatSeedIndex::build_with_sdust(
             &ctx.idx_y.seq,
             MASK_RY20,
-            2,
+            ctx.cfg.fallback_max_occ,
             ctx.cfg.skip_softmasked,
             true,
             Some(&ctx.idx_y.sdust),
         )?;
-        x_ry.intersect(&y_ry)
+        let (mut fwd, mut rc) = x_ry.intersect(&y_ry);
+        (ctx.filter_uncovered)(&mut fwd);
+        (ctx.filter_uncovered)(&mut rc);
+        (fwd, rc)
     };
     let prev_fwd = ctx.combined_fwd.len();
     append_nonoverlapping_lcbs(

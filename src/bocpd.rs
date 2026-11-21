@@ -36,6 +36,7 @@ pub(crate) fn base_to_idx(b: u8) -> Option<usize> {
 #[inline]
 #[must_use]
 pub fn base_probs(gc: f64) -> [f64; 4] {
+    let gc = gc.clamp(0.02, 0.98);
     let p_gc = gc * 0.5;
     let p_at = (1.0 - gc) * 0.5;
     // Order matches A=0, C=1, G=2, T=3.
@@ -53,6 +54,9 @@ pub fn joint_pair_bits(a: u8, b: u8, pi_x: [f64; 4], pi_y: [f64; 4], identity: f
     let pa = pi_x[ia];
     let pb = pi_y[ib];
     let p_null = pa * pb;
+    if p_null <= 0.0 {
+        return 0.0;
+    }
     let p_avg = f64::midpoint(pa, pb);
     let match_term = if ia == ib { identity * p_avg } else { 0.0 };
     let p_joint = match_term + (1.0 - identity) * p_null;

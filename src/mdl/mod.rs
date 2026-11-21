@@ -215,6 +215,8 @@ pub fn align_contig_pair_with_config(
     })
 }
 
+static PROFILE_ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
 /// Align two pre-indexed contigs using an explicit [`AlignConfig`], returning compact
 /// run-encoded intervals without materializing per-base `(usize, usize)` pairs.
 ///
@@ -232,7 +234,7 @@ pub fn align_contig_pair_runs(
     let seq_y = &idx_y.seq;
     let seq_y_rc = &idx_y.seq_rc;
 
-    let profile = std::env::var_os("HORIZON_PROFILE").is_some();
+    let profile = *PROFILE_ENABLED.get_or_init(|| std::env::var_os("HORIZON_PROFILE").is_some());
     let t_start = std::time::Instant::now();
     let (raw_fwd, raw_rc) = find_w12_raw_lcbs(idx_x, idx_y);
     let t_w12 = t_start.elapsed();

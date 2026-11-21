@@ -349,13 +349,12 @@ fn main() -> Result<()> {
     let mut candidate_pairs: Vec<(usize, usize)> = Vec::new();
     for (x_i, (_, ix)) in idx_x.iter().enumerate() {
         for (y_i, (_, iy)) in idx_y.iter().enumerate() {
-            if let Some(mask) = allowed.as_ref()
-                && !mask[x_i][y_i]
-            {
-                pruned_pairs += 1;
-                continue;
-            }
-            if shared_seed_count(ix, iy) < cli.min_shared_seeds {
+            if let Some(mask) = allowed.as_ref() {
+                if !mask[x_i][y_i] {
+                    pruned_pairs += 1;
+                    continue;
+                }
+            } else if shared_seed_count(ix, iy) < cli.min_shared_seeds {
                 pruned_pairs += 1;
                 continue;
             }
@@ -563,7 +562,7 @@ fn estimate_dag_hmm_params(nodes: &[GraphNode], seq_y: &[u8]) -> HmmParams {
         node_hits.sort_unstable();
         for w in node_hits.windows(2).take(64) {
             let dx = w[1].0.saturating_sub(w[0].0);
-            let dy = w[1].1.saturating_sub(w[0].1);
+            let dy = w[1].1.abs_diff(w[0].1);
             if dx > 0 && dy > 0 && dx <= 500 && dy <= 500 {
                 total_span += dx.max(dy);
                 if dx != dy {

@@ -5,7 +5,7 @@ use horizon_aligner::bocpd::{
     GAP_EXTEND_BITS, GAP_OPEN_BITS, IDENTITY_PRIOR, base_probs, joint_pair_bits,
 };
 use horizon_aligner::formats::read_fasta_contigs;
-use horizon_aligner::gfa::open_output_writer;
+use horizon_aligner::io_util::open_text_writer;
 use horizon_aligner::paf::{CigarOp, PafRecord, stream_paf_records};
 use horizon_aligner::seeding::{complement_base, sdust_mask};
 use std::collections::HashMap;
@@ -310,7 +310,7 @@ fn run_filter(cfg: &FilterConfig) -> Result<()> {
     };
     let t_ref = t_map.as_ref().or(q_map.as_ref());
 
-    let mut out = open_output_writer(cfg.out_path.as_deref())?;
+    let mut out = open_text_writer(cfg.out_path.as_deref())?;
     let mut total = 0usize;
     let mut kept = 0usize;
     let mut filtered_mdl = 0usize;
@@ -420,7 +420,9 @@ fn parse_args() -> Result<Option<FilterConfig>> {
             }
             "--min-bits" => {
                 let v = args.get(i + 1).context("missing value for --min-bits")?;
-                min_bits_override = Some(v.parse().context("parsing --min-bits")?);
+                let val: f64 = v.parse().context("parsing --min-bits")?;
+                anyhow::ensure!(val.is_finite(), "--min-bits must be finite, got {val}");
+                min_bits_override = Some(val);
                 i += 2;
             }
             "--min-nonrepeat-bp" => {

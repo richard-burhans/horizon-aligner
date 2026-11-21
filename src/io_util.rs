@@ -18,17 +18,30 @@ fn has_ext(path: &Path, exts: &[&str]) -> bool {
 struct ZstdReadChild {
     child: Child,
     stdout: ChildStdout,
+    exited: bool,
 }
 
 impl Read for ZstdReadChild {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.stdout.read(buf)
+        let n = self.stdout.read(buf)?;
+        if n == 0 && !self.exited {
+            self.exited = true;
+            let status = self.child.wait()?;
+            if !status.success() {
+                return Err(io::Error::other(format!(
+                    "`zstd -dc` failed with exit status {status}"
+                )));
+            }
+        }
+        Ok(n)
     }
 }
 
 impl Drop for ZstdReadChild {
     fn drop(&mut self) {
-        let _ = self.child.wait();
+        if !self.exited {
+            let _ = self.child.wait();
+        }
     }
 }
 
@@ -86,7 +99,11 @@ pub fn open_text_reader(path: &Path) -> Result<Box<dyn BufRead>> {
             .context("capturing `zstd -dc` stdout pipe")?;
         return Ok(Box::new(BufReader::with_capacity(
             256 * 1024,
-            ZstdReadChild { child, stdout },
+            ZstdReadChild {
+                child,
+                stdout,
+                exited: false,
+            },
         )));
     }
     let file = File::open(path).with_context(|| format!("opening '{}'", path.display()))?;
@@ -132,4 +149,29 @@ pub fn open_text_writer(out_path: Option<&str>) -> Result<BufWriter<Box<dyn Writ
         ))));
     }
     Ok(BufWriter::new(Box::new(file)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn roundtrip_plain_and_gz_text_io() {
+        let dir = std::env::temp_dir().join(format!("horizon_io_util_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        for ext in ["txt", "txt.gz"] {
+            let path = dir.join(format!("sample.{ext}"));
+            let path_str = path.to_string_lossy().into_owned();
+            {
+                let mut w = open_text_writer(Some(&path_str)).expect("open writer");
+                writeln!(w, "line1\nline2").expect("write");
+                w.flush().expect("flush");
+            }
+            let mut r = open_text_reader(&path).expect("open reader");
+            let mut got = String::new();
+            r.read_to_string(&mut got).expect("read");
+            assert_eq!(got, "line1\nline2\n");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -331,6 +331,9 @@ pub fn format_maf_blocks(
         });
 
         for &(x, y) in blk.iter().skip(1) {
+            if x <= prev_x || (is_rev && y >= prev_y) || (!is_rev && y <= prev_y) {
+                continue;
+            }
             for &bx in &seq_x[(prev_x + 1)..x] {
                 ax.push(bx.to_ascii_uppercase() as char);
                 ay.push('-');
