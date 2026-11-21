@@ -425,7 +425,22 @@ fn schedule_and_run_extension(ctx: &mut AlignCtx<'_>) -> Result<ExtensionOutput,
         } else {
             0.5
         };
-        dp::calibrate_null_crc_for_gc(observed_gc, 15, 0.07, ctx.effective_min_bits, &hmm_params)
+        let gc_crc = dp::calibrate_null_crc_for_gc(
+            observed_gc,
+            15,
+            0.07,
+            ctx.effective_min_bits,
+            &hmm_params,
+        );
+        dp::calibrate_null_crc_from_seqs(
+            ctx.seq_x,
+            ctx.seq_y,
+            15,
+            0.07,
+            ctx.effective_min_bits,
+            &hmm_params,
+        )
+        .max(gc_crc)
     };
 
     let t_dp_start = std::time::Instant::now();

@@ -6,6 +6,7 @@ use horizon_aligner::bocpd::{
 };
 use horizon_aligner::formats::read_fasta_contigs;
 use horizon_aligner::io_util::open_text_writer;
+use horizon_aligner::mdl::{HmmParams, calibrate_null_crc_from_seqs};
 use horizon_aligner::paf::{CigarOp, PafRecord, stream_paf_records};
 use horizon_aligner::seeding::{complement_base, sdust_mask};
 use std::collections::HashMap;
@@ -190,13 +191,14 @@ fn score_paf_record(
     q_map: Option<&HashMap<String, IndexedSeq>>,
     t_map: Option<&HashMap<String, IndexedSeq>>,
     min_bits_override: Option<f64>,
+    crc_cache: &mut HashMap<(String, String), f64>,
 ) -> ScoreResult {
     #[allow(clippy::cast_precision_loss)]
     let search_space_bits = ((rec.qlen.max(1) as f64) * (rec.tlen.max(1) as f64))
         .log2()
         .max(10.0);
-    let threshold_bits =
-        min_bits_override.unwrap_or_else(|| (KARLIN_MDL_COEFF * search_space_bits).max(10.0));
+    let base_floor = (KARLIN_MDL_COEFF * search_space_bits).max(10.0);
+    let mut threshold_bits = min_bits_override.unwrap_or(base_floor);
 
     let (Some(qm), Some(tm)) = (q_map, t_map) else {
         return score_from_counts_only(rec, threshold_bits);
@@ -205,6 +207,20 @@ fn score_paf_record(
     else {
         return score_from_counts_only(rec, threshold_bits);
     };
+    if min_bits_override.is_none() {
+        let key = (rec.qname.clone(), rec.tname.clone());
+        let crc_floor = *crc_cache.entry(key).or_insert_with(|| {
+            calibrate_null_crc_from_seqs(
+                &qs.seq,
+                &ts.seq,
+                15,
+                0.07,
+                base_floor,
+                &HmmParams::default(),
+            )
+        });
+        threshold_bits = threshold_bits.max(crc_floor);
+    }
     let Some(cigar_iter) = rec.cigar_ops() else {
         return score_from_counts_only(rec, threshold_bits);
     };
@@ -347,10 +363,17 @@ fn run_filter(cfg: &FilterConfig) -> Result<()> {
     let mut filtered_mdl = 0usize;
     let mut filtered_len = 0usize;
     let mut net_buf: Vec<(PafRecord, ScoreResult)> = Vec::new();
+    let mut crc_cache: HashMap<(String, String), f64> = HashMap::new();
 
     stream_paf_records(&cfg.paf_path, |rec| {
         total += 1;
-        let res = score_paf_record(&rec, q_map.as_ref(), t_ref, cfg.min_bits_override);
+        let res = score_paf_record(
+            &rec,
+            q_map.as_ref(),
+            t_ref,
+            cfg.min_bits_override,
+            &mut crc_cache,
+        );
         let pass_len = rec.aln_len >= cfg.min_aln_len && res.nonrepeat_bp >= cfg.min_nonrepeat_bp;
         let pass_mdl = res.mdl_bits >= res.threshold_bits;
         let pass = pass_len && pass_mdl;
@@ -546,11 +569,19 @@ mod tests {
             PafRecord::parse_line("q_r\t80\t0\t80\t+\tt_r\t80\t0\t80\t80\t80\t60\tcg:Z:80=")
                 .expect("paf");
 
-        let res_c = score_paf_record(&paf_c, Some(&q_map), Some(&t_map), None);
-        let res_r = score_paf_record(&paf_r, Some(&q_map), Some(&t_map), None);
+        let mut crc_cache = HashMap::new();
+        let res_c = score_paf_record(&paf_c, Some(&q_map), Some(&t_map), None, &mut crc_cache);
+        let res_r = score_paf_record(&paf_r, Some(&q_map), Some(&t_map), None, &mut crc_cache);
         assert!(res_c.mdl_bits > res_c.threshold_bits);
         assert_eq!(res_c.nonrepeat_bp, 80);
         assert!(res_r.mdl_bits <= 0.0, "repeat should be SDUST-masked");
         assert_eq!(res_r.nonrepeat_bp, 0);
+
+        // Empirical biological CRC calibration over >=128 bp sequences stays >= base_floor.
+        let bio_x = complex.repeat(4);
+        let bio_y = bio_x.iter().rev().copied().collect::<Vec<u8>>();
+        let crc_floor =
+            calibrate_null_crc_from_seqs(&bio_x, &bio_y, 15, 0.07, 10.0, &HmmParams::default());
+        assert!(crc_floor >= 10.0);
     }
 }

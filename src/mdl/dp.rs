@@ -164,6 +164,84 @@ pub fn calibrate_null_crc_for_gc(
     calibrate_crc_threshold(&scores, alpha, base_floor_bits)
 }
 
+/// Calibrate `λ̂` from `n_cal` empirical biological negative windows drawn from
+/// `seq_x` and reversed non-collinear windows of `seq_y`, falling back to
+/// [`calibrate_null_crc_for_gc`] when fewer than `n_cal` valid ACGT windows exist.
+#[must_use]
+pub fn calibrate_null_crc_from_seqs(
+    seq_x: &[u8],
+    seq_y: &[u8],
+    n_cal: usize,
+    alpha: f64,
+    base_floor_bits: f64,
+    params: &HmmParams,
+) -> f64 {
+    const WIN: usize = 64;
+    if n_cal == 0 || seq_x.len() < WIN * 2 || seq_y.len() < WIN * 2 {
+        let mut gc = 0usize;
+        let mut acgt = 0usize;
+        for &b in seq_x.iter().take(4096).chain(seq_y.iter().take(4096)) {
+            match b.to_ascii_uppercase() {
+                b'G' | b'C' => {
+                    gc += 1;
+                    acgt += 1;
+                }
+                b'A' | b'T' => acgt += 1,
+                _ => {}
+            }
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let obs_gc = if acgt > 0 {
+            gc as f64 / acgt as f64
+        } else {
+            0.5
+        };
+        return calibrate_null_crc_for_gc(obs_gc, n_cal, alpha, base_floor_bits, params);
+    }
+
+    let max_x = seq_x.len() - WIN;
+    let max_y = seq_y.len() - WIN;
+    let mut scores = Vec::with_capacity(n_cal);
+    let mut y_rev = [b'A'; WIN];
+    let mut tries = 0usize;
+    let max_tries = n_cal * 4;
+    let mut draw = 0usize;
+    while scores.len() < n_cal && tries < max_tries {
+        tries += 1;
+        draw += 1;
+        let sx = (draw.wrapping_mul(max_x / n_cal.max(1) + 97)) % (max_x + 1);
+        let sy = (max_y.saturating_sub(sx % (max_y + 1)) + draw.wrapping_mul(131)) % (max_y + 1);
+        let wx = &seq_x[sx..sx + WIN];
+        let wy = &seq_y[sy..sy + WIN];
+        let acgt_x = wx
+            .iter()
+            .filter(|b| matches!(b.to_ascii_uppercase(), b'A' | b'C' | b'G' | b'T'))
+            .count();
+        let acgt_y = wy
+            .iter()
+            .filter(|b| matches!(b.to_ascii_uppercase(), b'A' | b'C' | b'G' | b'T'))
+            .count();
+        if acgt_x * 2 < WIN || acgt_y * 2 < WIN {
+            continue;
+        }
+        for (dst, &src) in y_rev.iter_mut().zip(wy.iter().rev()) {
+            *dst = src;
+        }
+        let res =
+            banded_mdl_gap_with_min_post(wx, &y_rev, 16, base_floor_bits, params, MIN_POST_PROB);
+        let null_bits = if res.kept_pairs.is_empty() {
+            0.0
+        } else {
+            res.score_bits.max(0.0)
+        };
+        scores.push(null_bits);
+    }
+    if scores.len() < n_cal {
+        return calibrate_null_crc_for_gc(0.5, n_cal, alpha, base_floor_bits, params);
+    }
+    calibrate_crc_threshold(&scores, alpha, base_floor_bits)
+}
+
 /// Result of aligning one inter-anchor gap.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GapResult {

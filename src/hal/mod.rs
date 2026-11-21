@@ -261,13 +261,16 @@ impl HalAlignment {
         let n_q = queries.len();
         let n_b = ref_genome.bottom_segments.len();
 
-        // Build internal ancestral nodes Anc0..Anc_{n_q-1} sharing ref_genome's coordinate frame.
+        // Build internal ancestral nodes Anc0..Anc_{n_q-1} sharing ref_genome's coordinate frame,
+        // inferring ancestral bases bottom-up via majority-vote consensus across aligned leaves.
         // Genome layout:
         //   0..n_q         : Anc_{n_q-1} (root, idx 0) .. Anc0 (idx n_q - 1)
         //   n_q            : ref_name (leaf, child of Anc0)
         //   n_q + 1 ..     : queries[0..n_q] (query j is child of Anc_j)
         let ref_leaf_idx = n_q;
         let q_leaf_base = n_q + 1;
+        let mut anc_dnas = infer_ancestral_dnas(&star, n_q);
+
         let mut genomes = Vec::with_capacity(1 + 2 * n_q);
 
         for level_rev in 0..n_q {
@@ -317,7 +320,7 @@ impl HalAlignment {
                 parent,
                 children: vec![left_child, right_child],
                 sequences: ref_genome.sequences.clone(),
-                dna: ref_genome.dna.clone(),
+                dna: std::mem::take(&mut anc_dnas[level]),
                 top_segments,
                 bottom_segments,
             });
@@ -490,6 +493,62 @@ impl HalAlignment {
         }
         Some(out)
     }
+}
+
+fn infer_ancestral_dnas(star: &HalAlignment, n_q: usize) -> Vec<Vec<u8>> {
+    let ref_genome = &star.genomes[0];
+    let mut anc_dnas = Vec::with_capacity(n_q);
+    for level in 0..n_q {
+        let mut dna = ref_genome.dna.clone();
+        for bseg in &ref_genome.bottom_segments {
+            let r_end = bseg.start.saturating_add(bseg.length).min(dna.len());
+            for (off, dst) in dna[bseg.start..r_end].iter_mut().enumerate() {
+                let ref_b = ref_genome.dna[bseg.start + off].to_ascii_uppercase();
+                let mut counts = [0u16; 4];
+                let add_base = |counts: &mut [u16; 4], base: u8| match base.to_ascii_uppercase() {
+                    b'A' => counts[0] += 1,
+                    b'C' => counts[1] += 1,
+                    b'G' => counts[2] += 1,
+                    b'T' => counts[3] += 1,
+                    _ => {}
+                };
+                add_base(&mut counts, ref_b);
+                for j in 0..=level {
+                    if let Some((t_idx, _)) = bseg.child_tops[j]
+                        && let Some(q_gen) = star.genomes.get(1 + j)
+                        && let Some(tseg) = q_gen.top_segments.get(t_idx)
+                    {
+                        let q_pos = if tseg.parent_reversed {
+                            tseg.start + bseg.length - 1 - off
+                        } else {
+                            tseg.start + off
+                        };
+                        if let Some(&qb) = q_gen.dna.get(q_pos) {
+                            let oriented = if tseg.parent_reversed {
+                                crate::seeding::complement_base(qb)
+                            } else {
+                                qb
+                            };
+                            add_base(&mut counts, oriented);
+                        }
+                    }
+                }
+                let mut best_b = ref_b;
+                let mut best_cnt = 0u16;
+                for (&b, &c) in b"ACGT".iter().zip(counts.iter()) {
+                    if c > best_cnt || (c == best_cnt && b == ref_b && best_cnt > 0) {
+                        best_cnt = c;
+                        best_b = b;
+                    }
+                }
+                if best_cnt > 0 {
+                    *dst = best_b;
+                }
+            }
+        }
+        anc_dnas.push(dna);
+    }
+    anc_dnas
 }
 
 fn format_oriented_maf_slice(

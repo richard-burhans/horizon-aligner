@@ -238,9 +238,9 @@ fn hdf5_deflated_chunk_and_hal_bottom_seqname_decode() {
 }
 
 #[test]
-#[ignore = "requires HORIZON_TEST_HAL=/path/to/file.hal"]
 fn real_hal_decode_from_env() {
-    let path = std::env::var("HORIZON_TEST_HAL").expect("set HORIZON_TEST_HAL");
+    let default_fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/halTest.hal");
+    let path = std::env::var("HORIZON_TEST_HAL").unwrap_or_else(|_| default_fixture.to_owned());
     let mut f = std::io::BufReader::new(std::fs::File::open(&path).expect("open hal file"));
     let hdr = read_at(&mut f, 0, 512).expect("read header");
     let sb = read_hdf5_superblock(&hdr).expect("superblock");
@@ -978,6 +978,24 @@ fn progressive_multi_contig_hal_builds_ancestral_tree_and_roundtrips() {
     assert_eq!(hal.genomes.len(), 5);
     assert_eq!(hal.genomes[0].name, "Anc1");
     assert_eq!(hal.genomes[0].bottom_segments.len(), 2);
+    // Verify ancestral consensus inference: if panTro4 and mm10 share 'G' at pos 0 of c1 while hg38 has 'A',
+    // Anc1 (root) must infer 'G' rather than cloning hg38.
+    let consensus_hal = HalAlignment::from_multi_contig_progressive_blocks(
+        "hg38",
+        &[("c1".to_owned(), b"AAAAAAAA".to_vec())],
+        &[
+            (
+                "panTro4".to_owned(),
+                vec![("q1".to_owned(), b"GAAAAAAA".to_vec())],
+            ),
+            (
+                "mm10".to_owned(),
+                vec![("q2".to_owned(), b"GAAAAAAA".to_vec())],
+            ),
+        ],
+        &[(0, 0, 0, 0, 0, 8, false), (1, 0, 0, 0, 0, 8, false)],
+    );
+    assert_eq!(consensus_hal.genomes[0].dna[0], b'G');
 
     let bytes = hal.to_hdf5_bytes();
     let sb = read_hdf5_superblock(&bytes).expect("superblock");
