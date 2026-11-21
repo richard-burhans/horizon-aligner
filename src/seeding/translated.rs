@@ -14,7 +14,6 @@ struct Aa5Index {
 
 impl Aa5Index {
     fn build(seq: &[u8], max_occ: usize, skip_softmasked: bool) -> Self {
-        const AA_OFFSETS: [usize; 5] = [0, 1, 2, 4, 5];
         let max_occ = max_occ.min(u16::MAX as usize - 1);
         let Some(slot_len) = (max_occ > 0)
             .then(|| AA5_KEY_SPACE.checked_mul(max_occ))
@@ -41,21 +40,7 @@ impl Aa5Index {
             }
             let mut pos = frame;
             while pos + 18 <= seq.len() {
-                let mut key = 0_usize;
-                let mut valid = true;
-                for &c in &AA_OFFSETS {
-                    let s = &seq[pos + c * 3..pos + c * 3 + 3];
-                    if skip_softmasked && s.iter().any(u8::is_ascii_lowercase) {
-                        valid = false;
-                        break;
-                    }
-                    let Some(aa) = codon_to_aa(s[0], s[1], s[2]) else {
-                        valid = false;
-                        break;
-                    };
-                    key = key * 9 + usize::from(aa_group(aa));
-                }
-                if valid {
+                if let Some(key) = encode_aa5_key_at(seq, pos, skip_softmasked) {
                     let c = counts[key] as usize;
                     if c < max_occ {
                         slots[key * max_occ + c] = u32::try_from(pos).unwrap_or(u32::MAX);
@@ -121,11 +106,24 @@ const fn aa_group(ax: u8) -> u8 {
     }
 }
 
+fn encode_aa5_key_at(seq: &[u8], pos: usize, skip_softmasked: bool) -> Option<usize> {
+    const AA_OFFSETS: [usize; 5] = [0, 1, 2, 4, 5];
+    let mut key = 0_usize;
+    for &c in &AA_OFFSETS {
+        let s = &seq[pos + c * 3..pos + c * 3 + 3];
+        if skip_softmasked && s.iter().any(u8::is_ascii_lowercase) {
+            return None;
+        }
+        let aa = codon_to_aa(s[0], s[1], s[2])?;
+        key = key * 9 + usize::from(aa_group(aa));
+    }
+    Some(key)
+}
+
 /// Extract sorted, deduplicated 5-of-6 amino-acid spaced-seed keys (`< 59_049`) across
 /// all 3 forward reading frames of `seq`.
 #[must_use]
 pub fn aa5_keys(seq: &[u8]) -> Vec<u16> {
-    const AA_OFFSETS: [usize; 5] = [0, 1, 2, 4, 5];
     if seq.len() < 18 {
         return Vec::new();
     }
@@ -136,17 +134,9 @@ pub fn aa5_keys(seq: &[u8]) -> Vec<u16> {
         }
         let mut pos = frame;
         while pos + 18 <= seq.len() {
-            let mut key = 0_usize;
-            let mut valid = true;
-            for &c in &AA_OFFSETS {
-                let s = &seq[pos + c * 3..pos + c * 3 + 3];
-                let Some(aa) = codon_to_aa(s[0], s[1], s[2]) else {
-                    valid = false;
-                    break;
-                };
-                key = key * 9 + usize::from(aa_group(aa));
-            }
-            if valid && let Ok(k16) = u16::try_from(key) {
+            if let Some(key) = encode_aa5_key_at(seq, pos, false)
+                && let Ok(k16) = u16::try_from(key)
+            {
                 keys.push(k16);
             }
             pos += 3;

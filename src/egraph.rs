@@ -203,6 +203,15 @@ pub fn build_seq_expr(eg: &mut EGraph, blocks: &[(&str, i8)]) -> Option<usize> {
     Some(cur)
 }
 
+fn sorted_class_nodes(eg: &EGraph, id: usize) -> Vec<ENode> {
+    let mut nodes: Vec<ENode> = eg
+        .classes
+        .get(&id)
+        .map_or_default(|s| s.iter().cloned().collect());
+    nodes.sort_unstable_by(|a, b| a.op.cmp(&b.op).then_with(|| a.children.cmp(&b.children)));
+    nodes
+}
+
 /// Run bounded equality saturation for inversion cancellation, reversal, tandem collapse, and associativity.
 #[allow(clippy::too_many_lines)]
 pub fn saturate_synteny(eg: &mut EGraph, max_iters: usize, max_nodes: usize) {
@@ -213,14 +222,8 @@ pub fn saturate_synteny(eg: &mut EGraph, max_iters: usize, max_nodes: usize) {
         let mut merges: Vec<(usize, usize)> = Vec::new();
         let mut snapshot: Vec<(usize, Vec<ENode>)> = eg
             .classes
-            .iter()
-            .map(|(&id, set)| {
-                let mut nodes: Vec<ENode> = set.iter().cloned().collect();
-                nodes.sort_unstable_by(|a, b| {
-                    a.op.cmp(&b.op).then_with(|| a.children.cmp(&b.children))
-                });
-                (id, nodes)
-            })
+            .keys()
+            .map(|&id| (id, sorted_class_nodes(eg, id)))
             .collect();
         snapshot.sort_unstable_by_key(|(id, _)| *id);
 
@@ -234,14 +237,7 @@ pub fn saturate_synteny(eg: &mut EGraph, max_iters: usize, max_nodes: usize) {
                 }
                 if node.op == "inv" && node.children.len() == 1 {
                     let child = eg.find(node.children[0]);
-                    let mut cnodes: Vec<ENode> = eg
-                        .classes
-                        .get(&child)
-                        .map_or_default(|s| s.iter().cloned().collect());
-                    cnodes.sort_unstable_by(|a, b| {
-                        a.op.cmp(&b.op).then_with(|| a.children.cmp(&b.children))
-                    });
-                    for cnode in cnodes {
+                    for cnode in sorted_class_nodes(eg, child) {
                         if eg.memo.len() >= max_nodes {
                             break;
                         }
@@ -274,14 +270,7 @@ pub fn saturate_synteny(eg: &mut EGraph, max_iters: usize, max_nodes: usize) {
                         });
                         merges.push((eid, dup_x));
                     }
-                    let mut anodes: Vec<ENode> = eg
-                        .classes
-                        .get(&a)
-                        .map_or_default(|s| s.iter().cloned().collect());
-                    anodes.sort_unstable_by(|x, y| {
-                        x.op.cmp(&y.op).then_with(|| x.children.cmp(&y.children))
-                    });
-                    for anode in anodes {
+                    for anode in sorted_class_nodes(eg, a) {
                         if eg.memo.len() >= max_nodes {
                             break;
                         }
@@ -298,14 +287,7 @@ pub fn saturate_synteny(eg: &mut EGraph, max_iters: usize, max_nodes: usize) {
                             merges.push((eid, rhs));
                         }
                     }
-                    let mut bnodes: Vec<ENode> = eg
-                        .classes
-                        .get(&b)
-                        .map_or_default(|s| s.iter().cloned().collect());
-                    bnodes.sort_unstable_by(|x, y| {
-                        x.op.cmp(&y.op).then_with(|| x.children.cmp(&y.children))
-                    });
-                    for bnode in bnodes {
+                    for bnode in sorted_class_nodes(eg, b) {
                         if eg.memo.len() >= max_nodes {
                             break;
                         }

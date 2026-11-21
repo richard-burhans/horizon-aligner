@@ -9,12 +9,16 @@ use crate::mdl::dp::{HmmParams, NormalizedHmmParams};
 /// Adaptive banded per-node DP grid (`abPOA`, Gao et al. 2021).
 #[derive(Clone)]
 struct DagBandGrid {
-    bounds: Vec<(usize, usize, usize)>, // (j_lo, j_hi, offset) per row 0..=nu
+    bounds: std::sync::Arc<[(usize, usize, usize)]>, // (j_lo, j_hi, offset) per row 0..=nu
     data: Vec<f64>,
 }
 
 impl DagBandGrid {
-    fn new(bounds: Vec<(usize, usize, usize)>, total_cells: usize, init: f64) -> Option<Self> {
+    fn new(
+        bounds: std::sync::Arc<[(usize, usize, usize)]>,
+        total_cells: usize,
+        init: f64,
+    ) -> Option<Self> {
         let mut data = Vec::new();
         if data.try_reserve_exact(total_cells).is_err() {
             return None;
@@ -230,9 +234,10 @@ pub fn align_seq_to_dag_mdl(
                 score_bits: 0.0,
             };
         };
+        let bounds: std::sync::Arc<[(usize, usize, usize)]> = bounds.into();
         let (Some(g_fm), Some(g_fix), Some(g_fiy)) = (
-            DagBandGrid::new(bounds.clone(), cells, NEG_INF),
-            DagBandGrid::new(bounds.clone(), cells, NEG_INF),
+            DagBandGrid::new(std::sync::Arc::clone(&bounds), cells, NEG_INF),
+            DagBandGrid::new(std::sync::Arc::clone(&bounds), cells, NEG_INF),
             DagBandGrid::new(bounds, cells, NEG_INF),
         ) else {
             return GraphAlignment {
@@ -332,7 +337,7 @@ pub fn align_seq_to_dag_mdl(
     let alloc_like = |template: &[DagBandGrid]| -> Option<Vec<DagBandGrid>> {
         template
             .iter()
-            .map(|g| DagBandGrid::new(g.bounds.clone(), g.data.len(), NEG_INF))
+            .map(|g| DagBandGrid::new(std::sync::Arc::clone(&g.bounds), g.data.len(), NEG_INF))
             .collect()
     };
     let (Some(mut bm), Some(mut bix), Some(mut biy)) =
