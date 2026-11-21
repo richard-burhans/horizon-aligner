@@ -261,7 +261,15 @@ pub fn prepare_contig_index_opts(
     seq: &[u8],
     skip_softmasked: bool,
 ) -> Result<ContigIndex, AlignError> {
-    let max_occ = if seq.len() >= 100_000 { 2 } else { 4 };
+    // Weight-11 canonical spaced-seed space is 4^11 / 2 = 2,097,152 keys; once contig length
+    // exceeds ~1/21 of the key space (~100 kb), tighten max_occ from 4 to 2 to bound collisions.
+    const PRIMARY_SEED_WEIGHT: u32 = 11;
+    let canonical_key_space = 4_usize.pow(PRIMARY_SEED_WEIGHT) / 2;
+    let max_occ = if seq.len().saturating_mul(21) >= canonical_key_space {
+        2
+    } else {
+        4
+    };
     let sdust = sdust_mask(seq);
     let seeds = FlatSeedIndex::build_with_sdust(
         seq,

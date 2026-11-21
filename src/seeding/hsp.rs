@@ -1,20 +1,41 @@
 //! DNA ungapped HSP extension and `w=12` LCB helpers.
 
 use super::{AnchorPairs, ContigIndex, LcbList, cluster_strand_lcbs};
-use crate::bocpd::base_to_idx;
+use crate::bocpd::{IDENTITY_PRIOR, base_to_idx};
 use rayon::prelude::*;
 
+const HSP_SCALE: f64 = 7.25;
+const HSP_KAPPA: f64 = 2.0;
+const HSP_XDROP_BITS: f64 = 8.0;
+
 #[inline]
-fn hsp_pair_score(a: u8, b: u8) -> i32 {
+fn k80_hsp_params() -> (i32, i32, i32, i32) {
+    let p_id = IDENTITY_PRIOR.clamp(0.25, 0.999);
+    let p_mismatch = 1.0 - p_id;
+    let p_ts = p_mismatch * (HSP_KAPPA / (HSP_KAPPA + 2.0));
+    let p_tv_each = p_mismatch * (1.0 / (HSP_KAPPA + 2.0));
+    #[allow(clippy::cast_possible_truncation)]
+    let match_sc = ((p_id / 0.25).log2() * HSP_SCALE).round() as i32;
+    #[allow(clippy::cast_possible_truncation)]
+    let transition_sc = ((p_ts / 0.25).log2() * HSP_SCALE).round() as i32;
+    #[allow(clippy::cast_possible_truncation)]
+    let tv_sc = ((p_tv_each / 0.25).log2() * HSP_SCALE).round() as i32;
+    #[allow(clippy::cast_possible_truncation)]
+    let xdrop = (HSP_XDROP_BITS * HSP_SCALE).round() as i32;
+    (match_sc, transition_sc, tv_sc, xdrop)
+}
+
+#[inline]
+fn hsp_pair_score(a: u8, b: u8, match_sc: i32, transition_sc: i32, tv_sc: i32) -> i32 {
     let (Some(ia), Some(ib)) = (base_to_idx(a), base_to_idx(b)) else {
-        return -15;
+        return tv_sc - 3;
     };
     if ia == ib {
-        10
+        match_sc
     } else if (ia ^ ib) == 2 {
-        -3 // transition (A<->G, C<->T)
+        transition_sc // transition (A<->G, C<->T)
     } else {
-        -12 // transversion
+        tv_sc // transversion
     }
 }
 
@@ -27,13 +48,19 @@ fn extend_ungapped_hsp(
     py: usize,
     min_score: i32,
 ) -> Option<(usize, usize, usize, usize, i32)> {
-    const XDROP: i32 = 60;
+    let (match_sc, transition_sc, tv_sc, xdrop) = k80_hsp_params();
     if px + 19 > seq_x.len() || py + 19 > seq_y.len() {
         return None;
     }
     let mut core = 0i32;
     for off in 0..19 {
-        core += hsp_pair_score(seq_x[px + off], seq_y[py + off]);
+        core += hsp_pair_score(
+            seq_x[px + off],
+            seq_y[py + off],
+            match_sc,
+            transition_sc,
+            tv_sc,
+        );
     }
 
     let mut cur = 0i32;
@@ -45,12 +72,12 @@ fn extend_ungapped_hsp(
     while ix > 0 && iy > 0 {
         ix -= 1;
         iy -= 1;
-        cur += hsp_pair_score(seq_x[ix], seq_y[iy]);
+        cur += hsp_pair_score(seq_x[ix], seq_y[iy], match_sc, transition_sc, tv_sc);
         if cur > best_left {
             best_left = cur;
             lx = ix;
             ly = iy;
-        } else if best_left - cur > XDROP {
+        } else if best_left - cur > xdrop {
             break;
         }
     }
@@ -62,14 +89,14 @@ fn extend_ungapped_hsp(
     ix = px + 19;
     iy = py + 19;
     while ix < seq_x.len() && iy < seq_y.len() {
-        cur += hsp_pair_score(seq_x[ix], seq_y[iy]);
+        cur += hsp_pair_score(seq_x[ix], seq_y[iy], match_sc, transition_sc, tv_sc);
         ix += 1;
         iy += 1;
         if cur > best_right {
             best_right = cur;
             rx = ix;
             ry = iy;
-        } else if best_right - cur > XDROP {
+        } else if best_right - cur > xdrop {
             break;
         }
     }
@@ -170,5 +197,13 @@ mod tests {
         let mut lcbs: LcbList = Vec::new();
         append_hsp_gated_lastz12_lcbs(&mut lcbs, &seq, &seq, &hits, 120);
         assert_ne!(lcbs.len(), 0);
+    }
+
+    #[test]
+    fn k80_hsp_params_match_expected_ordering_and_signs() {
+        let (match_sc, transition_sc, tv_sc, xdrop) = super::k80_hsp_params();
+        assert!(match_sc > 0);
+        assert!(transition_sc < 0 && tv_sc < transition_sc);
+        assert!(xdrop > match_sc);
     }
 }
