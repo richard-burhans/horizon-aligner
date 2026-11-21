@@ -464,9 +464,9 @@ fn interval_overlaps(
 }
 
 fn seq_contains_interval(seqs: &[HalSequence], start: usize, end: usize) -> bool {
-    let idx = seqs.partition_point(|s| s.offset + s.length <= start);
+    let idx = seqs.partition_point(|s| s.offset.saturating_add(s.length) <= start);
     seqs.get(idx)
-        .is_some_and(|s| start >= s.offset && end <= s.offset + s.length)
+        .is_some_and(|s| start >= s.offset && end <= s.offset.saturating_add(s.length))
 }
 
 fn finalize_child_top_segments(

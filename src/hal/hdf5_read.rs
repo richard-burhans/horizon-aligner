@@ -742,6 +742,9 @@ pub fn read_hdf5_v0_dataset_bytes_seek<R: std::io::Read + std::io::Seek>(
     let Some((btree_addr, ndim)) = chunk_btree else {
         return Ok(None);
     };
+    if btree_addr == u64::MAX {
+        return Ok(None);
+    }
     let mut chunks = Vec::new();
     let mut visited = std::collections::HashSet::new();
     walk_chunk_btree_v1_seek(r, btree_addr, ndim, &mut chunks, &mut visited, 0)?;

@@ -456,6 +456,10 @@ fn parse_args() -> Result<Option<FilterConfig>> {
         }
     }
 
+    anyhow::ensure!(
+        !(keep_all && max_occ.is_some()),
+        "--keep-all cannot be combined with --net or --max-occ"
+    );
     let paf_path = paf_path.context("missing required --paf <in.paf[.gz]|->")?;
     Ok(Some(FilterConfig {
         paf_path,

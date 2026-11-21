@@ -809,7 +809,8 @@ fn pass2_rewrite<W: Write>(
             continue;
         };
         let fwd_edge = (u, uf, v, vf);
-        if !has_paths_or_walks || used_edges.contains(&fwd_edge) {
+        if (!has_paths_or_walks || used_edges.contains(&fwd_edge)) && !seen_edges.contains(&fwd_edge)
+        {
             writeln!(
                 out,
                 "L\t{}\t{}\t{}\t{}\t{}",

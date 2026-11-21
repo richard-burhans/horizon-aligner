@@ -17,15 +17,19 @@ fn has_ext(path: &Path, exts: &[&str]) -> bool {
 
 struct ZstdReadChild {
     child: Child,
-    stdout: ChildStdout,
+    stdout: Option<ChildStdout>,
     exited: bool,
 }
 
 impl Read for ZstdReadChild {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let n = self.stdout.read(buf)?;
+        let Some(ref mut stdout) = self.stdout else {
+            return Ok(0);
+        };
+        let n = stdout.read(buf)?;
         if n == 0 && !self.exited {
             self.exited = true;
+            self.stdout = None;
             let status = self.child.wait()?;
             if !status.success() {
                 return Err(io::Error::other(format!(
@@ -39,7 +43,9 @@ impl Read for ZstdReadChild {
 
 impl Drop for ZstdReadChild {
     fn drop(&mut self) {
+        drop(self.stdout.take());
         if !self.exited {
+            let _ = self.child.kill();
             let _ = self.child.wait();
         }
     }
@@ -101,7 +107,7 @@ pub fn open_text_reader(path: &Path) -> Result<Box<dyn BufRead>> {
             256 * 1024,
             ZstdReadChild {
                 child,
-                stdout,
+                stdout: Some(stdout),
                 exited: false,
             },
         )));
@@ -128,14 +134,20 @@ pub fn open_text_writer(out_path: Option<&str>) -> Result<BufWriter<Box<dyn Writ
     let path = Path::new(raw);
     let file = File::create(path).with_context(|| format!("creating '{}'", path.display()))?;
     if has_ext(path, &["zst", "zstd"]) {
-        let mut child = Command::new("zstd")
+        let mut child = match Command::new("zstd")
             .arg("-c")
             .arg("-T0")
             .stdin(Stdio::piped())
             .stdout(Stdio::from(file))
             .stderr(Stdio::inherit())
             .spawn()
-            .with_context(|| format!("spawning `zstd -c` for '{}'", path.display()))?;
+        {
+            Ok(c) => c,
+            Err(e) => {
+                let _ = std::fs::remove_file(path);
+                return Err(e).with_context(|| format!("spawning `zstd -c` for '{}'", path.display()));
+            }
+        };
         let stdin = child.stdin.take().context("capturing `zstd -c` stdin pipe")?;
         return Ok(BufWriter::new(Box::new(ZstdWriteChild {
             child,
@@ -171,6 +183,38 @@ mod tests {
             let mut got = String::new();
             r.read_to_string(&mut got).expect("read");
             assert_eq!(got, "line1\nline2\n");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn zst_roundtrip_and_early_drop_do_not_deadlock() {
+        let has_zstd = Command::new("zstd")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success());
+        if !has_zstd {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("horizon_io_zst_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join("big.txt.zst");
+        let path_str = path.to_string_lossy().into_owned();
+        {
+            let mut w = open_text_writer(Some(&path_str)).expect("open zst writer");
+            for i in 0..20_000 {
+                writeln!(w, "record_{i:06}\tpayload_0123456789abcdef").expect("write");
+            }
+            w.flush().expect("flush");
+        }
+        // Read just 1 line and drop early to verify ZstdReadChild::drop does not deadlock.
+        {
+            let mut r = open_text_reader(&path).expect("open zst reader");
+            let mut first = String::new();
+            r.read_line(&mut first).expect("read_line");
+            assert!(first.starts_with("record_000000\t"));
         }
         let _ = std::fs::remove_dir_all(&dir);
     }

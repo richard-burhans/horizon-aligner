@@ -15,15 +15,16 @@ const USAGE: &str = "usage: horizon_eval <ref_name> <target_name> <ref.fa> <targ
 
 fn read_named_contigs(path: &Path, target: &str) -> Result<HashMap<String, Vec<u8>>> {
     let all = horizon_aligner::read_fasta_contigs(path, usize::MAX)?;
-    let matched: HashMap<String, Vec<u8>> = all
+    let has_match = all
         .iter()
-        .filter(|(id, _)| horizon_aligner::matches_sample_prefix(id, target))
-        .map(|(id, seq)| (id.clone(), seq.clone()))
-        .collect();
-    if matched.is_empty() {
-        Ok(all.into_iter().collect())
+        .any(|(id, _)| horizon_aligner::matches_sample_prefix(id, target));
+    if has_match {
+        Ok(all
+            .into_iter()
+            .filter(|(id, _)| horizon_aligner::matches_sample_prefix(id, target))
+            .collect())
     } else {
-        Ok(matched)
+        Ok(all.into_iter().collect())
     }
 }
 
