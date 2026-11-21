@@ -372,5 +372,9 @@
     "by": "41339bd9-abd8-429d-baa2-2a031bfb0344",
     "date": "2026-11-21",
     "evidence": "Cold audit of the working-tree diff on docs/COMMUNITY_UTILITIES_PROPOSAL.md (+31/-98 vs 0f31c26cf24e) found no stale derived quantities, unit mismatches, or Executive-Summary-vs-body contradictions; ./scripts/round corrections 8 (R8-CORR-1 applied), ./scripts/round check 8 --full (drift reviewed), and cargo test --quiet (129 passed, 0 failed) all exited 0."
+  },
+  "closed": "2026-11-21",
+  "closed_at_code": {
+    "horizon-aligner": "6a2f7219248b9d6f3b4ae092f04dfc38e60e0a76"
   }
 }

@@ -77,3 +77,13 @@
 - **Class:** open-item-discharge-and-progressive-hal
 - **What survived:** 122 active Rust unit tests (88 lib + 34 bin, +1 #[ignore]d halTest.hal verified via HORIZON_TEST_HAL), 0 clippy warnings, cargo fmt --check clean, progressive ancestral-node HAL (2,103 bottom segments on 5-mammal chrM.maf in 0.258s), and chr6 FastGA horizon_filter --net (99.12% exact recall, 99.65% cond. / 99.32% uncond. exact precision).
 - **Still open:** {"id": "R7-SWEEPGA", "summary": "Install/benchmark SweepGA, impg, and KegAlign head-to-head on identical hardware (currently unavailable on host; narrowed residual of R2-RESOLVE-LIFT)."}; {"id": "R7-CRC-BIO", "summary": "Calibrate CRC on biological empirical negatives beyond 64-bp synthetic decoys and wire decoy CRC into horizon_filter (narrowed residual of R1-HMM)."}; {"id": "R7-HAL-ANC", "summary": "Infer ancestral sequences for Anc0..Anc3 (beyond hg38 cloning on pectinate tree), un-ignore real_hal_decode_from_env with a tracked fixture, and benchmark multi-hundred-GB external .hal alignments (narrowed residual of R2-HMM-XDROP)."}
+
+## Round 8 -- FULL: Evaluate which proposed community utilities in docs/COMMUNITY_UTILITIES_PROPOSAL.md are worth building (2026-11-21) -> TRIAGED_AND_REPAIRED
+
+- **Claims under attack:** 6, one fixed list, 4 lenses (correctness, prior-art, provenance, reproduction). Artifacts: `reports/rounds/round-8/`.
+- **The attack that landed:** Rewrote docs/COMMUNITY_UTILITIES_PROPOSAL.md (+31/-98 vs 0f31c26) to reflect Round 8 adjudicated verdicts: narrowed horizon hal (P1 build, requiring streaming HDF5-to-HAL loader and removal of 256 MiB MAX_CHUNK_DECOMPRESSED_BYTES cap) and horizon gfa-qc (P2 conditional low-RSS path-retention/component summary), deferred horizon gfa-prune (P3, behind vg clip), and rejected horizon inversions, horizon eval-null (as CLI), and horizon synteny.
+- **What the ADJUDICATORS overturned:** None; all 6 proposal claims were adjudicated with C1/C2/C4 narrowed and C3/C5/C6 refuted, and all corrections applied to docs/COMMUNITY_UTILITIES_PROPOSAL.md before close.
+- **Diversity statistic:** 17 distinct flaws, 4 named by more than one attacker (duplicate rate 0.235); mean pairwise attack similarity 0.239; verdict agreement 0.0 over 6 claim(s) with two or more voters. Agreement among agents of one model family is not corroboration.
+- **Verdicts filed:** NARROWED 10, REFUTED 13, SURVIVED 1 *(⚠ MIXED: some attacks carry a verdict table and some do not)*
+- **Class:** proposal-triage
+- **What survived:** Zero-libhdf5 static-binary packaging for horizon hal (with host 5.53 GiB orangutan and 56.43 GiB bird HAL fixtures passing --hal-info) and a tightly scoped low-RSS streaming path-retention / component-bridge summary for horizon gfa-qc.
