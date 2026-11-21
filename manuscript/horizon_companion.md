@@ -16,12 +16,14 @@ This companion document provides the data-format specifications, mathematical de
 | `src/bocpd.rs` | Beta-Bernoulli Bayesian Online Changepoint Detection (`bocpd_gc_profile`) |
 | `src/coord.rs` | 0-based half-open & UCSC reverse-strand interval arithmetic (`Interval`) |
 | `src/gfa/mod.rs` | Streaming `GFA v1.0/v1.1` reader (`MultiGzDecoder` + bounded `SpoolableGfaInput` stdin spooling) |
-| `src/mdl/` | Flat `BandLayout`, three-state MDL forward-backward DP (`dp.rs`), seeded topological DAG/POA DP (`dag.rs`), adaptive `HmmParams` shrinkage (`mod.rs`), X-drop flank extension |
-| `src/merge.rs` | `O(N log N)` sweep-line `interval_match_score` netting, `thread_interval_columns`, transitive rescue |
+| `src/io_util.rs` | Transparent plain, `.gz`/`.bgz`, `.zst`/`.zstd`, and `stdin`/`stdout` streaming I/O |
+| `src/paf.rs` | Streaming `PAF v1` + CIGAR (`cg:Z:`) parser and writer |
+| `src/mdl/` | Flat `BandLayout`, three-state MDL forward-backward DP (`dp.rs`), seeded topological DAG/POA DP (`dag.rs`, `dag_seed.rs` with `MASK_W10`, `MASK_RY20`, and `aa5_keys`), adaptive `HmmParams` shrinkage (`mod.rs`), X-drop flank extension |
+| `src/merge.rs` / `src/netting.rs` | `O(N log N)` sweep-line `interval_match_score` netting, `thread_interval_columns`, transitive rescue |
 | `src/formats.rs` | `MAF`, reference-anchored `rGFA`, `partition_colinear_blocks` multi-chain partitioning, and `# HB:Z:` / `# EG:Z:` metadata emission |
 | `src/egraph.rs` | Congruence-closed equality saturation with `MdlCostModel` for tandem duplications and nested inversions |
 | `src/hal/` | Pure-Rust `Seek`-based HDF5 `v0`/`v1` parser (`hdf5_read.rs`), `libhdf5`-compatible `v0` writer (`hdf5_write.rs`), and `HAL` binary array decoders |
-| `src/bin/` | `horizon` (unified subcommand CLI), `horizon_wga`, `horizon_merge`, `horizon_guide`, `horizon_gfa`, `horizon_lift`, `horizon_clean`, `horizon_resolve`, `horizon_eval`, `bench_chr1` |
+| `src/bin/` | `horizon` (subcommand dispatcher), `horizon_wga`, `horizon_merge`, `horizon_guide`, `horizon_gfa`, `horizon_lift`, `horizon_clean`, `horizon_resolve`, `horizon_filter`, `horizon_locus`, `horizon_eval`, `bench_chr1` |
 
 ---
 
@@ -153,7 +155,7 @@ Horizon treats alignment emission as a calibrated statistical decision. Using Co
    Bottom-up `MdlCostModel` extraction (`extract_min_mdl_cost`) prices leaf catalog pointers (`log₂ K` bits), composition (`seq`, `inv` at `1.0` bit), and duplication residuals (`H₂(d) + d log₂ 3` bits) to select `dup(X)` across both pairwise LCBs (`# EG:Z:`) and GFA `P`/`W` walks (`horizon_resolve`). This recovers duplicated and inverted regions that greedy 1-to-1 synteny filters discard (Figure C3B).
 2. **`horizon_merge` Sweep-Line (`src/merge.rs`):** Sorts all pairwise intervals by reference start in `O(N log N)` time. It applies `interval_match_score` netting to resolve overlapping chains into a non-overlapping backbone, then runs `thread_interval_columns` to insert shared gap columns across all taxa simultaneously.
 3. **`horizon_guide` Transitive Rescue (`src/bin/horizon_guide/main.rs`):** Aligns sister taxa progressively along a Newick guide tree. It applies `rescue_transitive_maf`—using an intermediate sibling with high pairwise identity to bridge divergent outgroup intervals—before ancestral consensus construction and single-contig star-tree HDF5 `v0` `.hal` export (`src/hal/hdf5_write.rs`).
-4. **Streaming GFA Pangenome Tools (`src/gfa/mod.rs`, `src/coord.rs`, `src/mdl/dag.rs`):** `horizon_gfa` provides `O(1)`-memory graph `stats` and two-pass chromosome `extract`; `horizon_lift` performs two-pass `P`/`W` BED/GFF3 liftover with `--bridge-bp` coalescing; `horizon_clean` scores `L`-junctions with `bocpd_gc_profile` changepoint bits; and `horizon_wga --graph` aligns queries to bidirected GFA DAGs via `MASK_W10` + `MASK_RY20` seeding and topological Pair-HMM MDL DP (`align_seq_to_dag_seeded`).
+4. **Streaming GFA, PAF, and Locus Tools (`src/io_util.rs`, `src/gfa/mod.rs`, `src/paf.rs`, `src/coord.rs`, `src/mdl/dag_seed.rs`):** `horizon_gfa` provides `O(1)`-memory graph `stats` and two-pass chromosome `extract`; `horizon_lift` performs two-pass `P`/`W` BED/GFF3 liftover with `--bridge-bp` coalescing; `horizon_clean` scores `L`-junctions with `bocpd_gc_profile` changepoint bits and accounts for `L`-line overlap CIGARs when splitting `W` walks; `horizon_resolve` builds a `u32`-interned `PackedGraph` with $O(V + E)$ Tarjan biedged snarl decomposition and per-window divergence estimation; `horizon_wga --graph` aligns queries to bidirected GFA DAGs via `MASK_W10` + `MASK_RY20` + compact `aa5_keys` 6-frame translated seeding and topological Pair-HMM MDL DP (`align_seq_to_dag_seeded`); `horizon_filter` streams `.paf[.gz|.zst]` with SDUST+BOCPD+MDL scoring and `--net` interval netting; and `horizon_locus` performs all-pairs regional multi-FASTA locus alignment emitting `.similarity.tsv`, `.maf`, and `.gfa`.
 
 ---
 

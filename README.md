@@ -6,11 +6,14 @@ A pure-Rust **information-theoretic genome alignment and pangenome suite** combi
 
 - **Pairwise & DAG/POA MDL alignment (`horizon_wga`):** Canonical `fwd.min(rc)` spaced-seed (`11-of-15`) indexing in `FlatSeedIndex` (`12 bytes/entry` + 16-bit prefix buckets) with SDUST repeat masking, Rayon-parallel `LASTZ12`/`LASTZ11` transition seeding, `w=10`/`w=9`, 1-bit `R/Y`, and 6-frame `AA5` fallback seeding, driving flat `BandLayout` Pair-HMM forward-backward alignment (`src/mdl/dp.rs`) and seeded DAG/POA alignment (`horizon_wga --graph`, `src/mdl/dag.rs`).
 - **Calibrated epistemic abstention (Horizon Bubbles):** Intervals falling below the search-space-scaled MDL floor (`0.55 log2(N*M)` + fixed `10.0`-bit conformal floor) or `min_post_prob` abstain explicitly as `# HB:Z:` / `HB:i:1` Horizon Bubbles rather than forcing spurious base pairs.
-- **Streaming `12 GB+` GFA pangenome toolkit (`src/gfa/mod.rs`, `src/coord.rs`):**
-  - `horizon_gfa`: Single-pass counter-only BGZF/gzip (`MultiGzDecoder`) `stats` (`196.93 s`, `96.9 MB` RSS across `81.4M` segments / `3.29 Gbp`) and two-pass chromosome `extract`.
+- **Streaming `12 GB+` GFA & PAF pangenome toolkit (`src/gfa/mod.rs`, `src/paf.rs`, `src/io_util.rs`, `src/coord.rs`):**
+  - Transparent plain, `.gz`/`.bgz`, `.zst`/`.zstd`, and `stdin`/`stdout` streaming across GFA, PAF, FASTA, and MAF (`src/io_util.rs`).
+  - `horizon_gfa`: Single-pass counter-only BGZF/gzip/zstd `stats` (`196.93 s`, `96.9 MB` RSS across `81.4M` segments / `3.29 Gbp`) and two-pass chromosome `extract`.
   - `horizon_lift`: Graph-aware BED/GFF3 coordinate liftover with `--bridge-bp` micro-bubble coalescing and UCSC reverse-strand arithmetic.
-  - `horizon_clean`: Two-pass `S`-flank-indexed BOCPD+MDL junction scoring that severs unsupported (`sup=0`) discordant links into Horizon Bubbles.
-  - `horizon_resolve`: Standalone MDL-calibrated e-graph resolution (`MdlCostModel`) over GFA `P`/`W` walks (`--collapse-dups`, `--tag-walks`).
+  - `horizon_clean`: Two-pass `S`-flank-indexed BOCPD+MDL junction scoring that severs low-support discordant links into Horizon Bubbles and accounts for `L`-line overlap CIGARs when splitting `W` walks.
+  - `horizon_resolve`: Standalone MDL-calibrated e-graph resolution (`MdlCostModel`) over `u32` `PackedGraph` + `O(V+E)` Tarjan biedged snarl decomposition with per-window divergence estimation (`--collapse-dups`, `--tag-walks`), updating `W`-line `end` bounds and pruning/synthesizing `L` links.
+  - `horizon_filter`: Streaming SDUST + BOCPD + Pair-HMM MDL filter and `--net`/`--max-occ` interval netter for `FastGA`/`wfmash` PAF alignments (`md:f:` and `hb:i:` tags).
+  - `horizon_locus`: Regional `impg`-style multi-FASTA all-pairs locus aligner (`SDUST + BOCPD/MDL + Aa5Index`), emitting `<out>.similarity.tsv`, `<out>.maf`, and `<out>.gfa`.
 - **Multi-species merging & progressive guide-tree WGA (`horizon_merge`, `horizon_guide`):** `O(N log N)` coordinate sweep-line MAF/rGFA merging with best-score interval netting (`src/merge.rs`) and iterative ancestral consensus rescue.
 - **Pure-Rust HDF5 / HAL reader & writer (`src/hal/`):** Streaming `Read + Seek` HDF5 `v0`/`v1` parser (`hdf5_read.rs`) and `libhdf5`-compatible HDF5 `v0` writer (`hdf5_write.rs`) with zero `libhdf5` dependency.
 
@@ -23,9 +26,12 @@ src/
 ├── coord.rs            # 0-based half-open & UCSC reverse-strand coordinate arithmetic
 ├── egraph.rs           # Congruence-closed e-graph & MdlCostModel paralog resolution
 ├── formats.rs          # MAF v1, GFA v1.1, FASTA I/O, and e-graph paralog formatting
+├── io_util.rs          # Transparent plain / .gz / .bgz / .zst / stdin / stdout streaming
 ├── merge.rs            # Multi-species reference-guided MAF/rGFA sweep-line merger
+├── netting.rs          # Interval netting & coordinate sweep-line primitives
+├── paf.rs              # Streaming PAF v1 + CIGAR (cg:Z:) parser and writer
 ├── gfa/
-│   └── mod.rs          # Streaming GFA v1.0/v1.1 reader (MultiGzDecoder + SpoolableGfaInput)
+│   └── mod.rs          # Streaming GFA v1.0/v1.1 reader (.gz/.zst + SpoolableGfaInput)
 ├── seeding/
 │   ├── mod.rs          # SDUST masking, multi-shape seeding, LIS & LCB clustering
 │   ├── flat_index.rs   # Compact FlatSeedIndex with 16-bit prefix buckets
@@ -33,7 +39,8 @@ src/
 ├── mdl/
 │   ├── mod.rs          # Contig-pair alignment pipeline & adaptive HmmParams shrinkage
 │   ├── dp.rs           # Flat BandLayout Pair-HMM Forward-Backward & X-drop extension
-│   └── dag.rs          # Seeded topological DAG/POA MDL alignment (--graph)
+│   ├── dag.rs          # Seeded topological DAG/POA MDL alignment (--graph)
+│   └── dag_seed.rs     # MASK_W10, MASK_RY20 & compact aa5_keys DAG seeding
 ├── hal/
 │   ├── mod.rs          # In-memory HalAlignment model, paralog chaining, MAF export
 │   ├── hdf5_read.rs    # Streaming Read+Seek HDF5 v0/v1 & HAL binary array decoder
@@ -46,7 +53,9 @@ src/
     ├── horizon_gfa.rs      # Streaming GFA stats & two-pass chromosome extract
     ├── horizon_lift/       # Graph-aware BED/GFF3 coordinate liftover
     ├── horizon_clean.rs    # BOCPD+MDL GFA junction scorer & bubble cutter
-    ├── horizon_resolve.rs  # Standalone GFA walk e-graph duplication resolver
+    ├── horizon_resolve.rs  # Standalone GFA snarl/walk e-graph duplication resolver
+    ├── horizon_filter.rs   # Streaming SDUST+BOCPD+MDL PAF filter & netter
+    ├── horizon_locus.rs    # Regional multi-FASTA locus aligner & similarity matrix
     ├── horizon_eval.rs     # Pairwise MAF recall/precision evaluator
     └── bench_chr1.rs       # Pairwise chromosome benchmark harness
 ```
@@ -87,6 +96,10 @@ target/release/horizon_lift hprc.gfa.gz regions.bed --from GRCh38#0#chr22 --to C
 target/release/horizon_clean --gfa in.gfa.gz --min-cp-bits 12.0 > clean.gfa
 target/release/horizon_resolve in.gfa.gz --collapse-dups --tag-walks > resolved.gfa
 
+# Streaming PAF MDL filtering & regional impg-style locus alignment
+target/release/horizon_filter --paf raw.paf.zst --query q.fa --target t.fa --net --out filtered.paf.zst
+target/release/horizon_locus --fasta locus.fa --out-prefix locus_out --threads 4
+
 # Multi-species sweep-line MAF/rGFA merge & progressive guide-tree WGA
 target/release/horizon_merge ref_species out.maf out.gfa pair1.maf pair2.maf
 target/release/horizon_guide --progressive --rbest --hal out.hal tree.nwk genomes.tsv
@@ -107,6 +120,10 @@ target/release/horizon_guide --progressive --rbest --hal out.hal tree.nwk genome
   - `horizon_lift --bridge-bp 10` (`500` `GRCh38.chr22` 1-kb windows → `CHM13.chr22`): **177.55 s**, **708.8 MB** peak RSS (`472` exact, `5` partial, `15` split, `8` unmapped).
   - `horizon_wga --resolve-dups` (`GRCh38.chr22` vs `CHM13.chr22`): **69.10 s**, **3,971.6 MB** peak RSS (`95.6%` of `CHM13.chr22` q-arm).
   - `horizon_wga --resolve-dups` (`GRCh38.chr6` `170.8 Mbp` vs `CHM13.chr6` `110.7 Mbp`): **258.88s–267.86s** on `8cd5db0` (`304.53s` on `2896229` with multi-chain `partition_colinear_blocks`, `282.2M` pairs, `98.9%` of `CHM13.chr6` q-arm), **99.54%** base-coverage recall, **97.96%** exact base-coordinate recall, **48.63%** conditioned exact pair precision (**38.22%** unconditional across all emitted pairs) against `1,628,018` `1-to-1` HPRC graph segments (vs `minimap2 -x asm5`: `46.95s`, `2,947.5 MB` RSS, `99.71%` exact recall, `99.75%` conditioned / `99.60%` unconditional exact precision).
+- **VGP / GenomeArk PAF Filtering & Regional Locus Benchmarks (`9dfec4a`):**
+  - `horizon_filter --net` on `chr6` FastGA (`93 MB`, `56,857` records): **0.47s** sequence-free (`0.49s` `.paf.zst` → `.paf.zst`) and **4.73s** with SDUST+BOCPD+MDL, raising 2D HPRC truth hit rate from `1.6%` to `81.2%` while retaining `99.7%` of `110.08 Mbp` 1-to-1 coverage.
+  - Real GenomeArk VGP Koala (`GCA_003287225.2`) × Amphioxus (`GCA_015852565.1`, `36,601` raw FastGA records): `horizon_filter --net` runs in **0.10s** (`1,976` records, `71.6%` overlap with VGP `FastGA_11`); sequence-aware `--query --target` flags `FastGA_11`'s #1 longest hit (`3,548 bp`) as a `GA`/`AT`/`CA` simple tandem repeat (`md:f:-210.51 hb:i:1`), while `horizon_locus` aligns the extracted 25 kb locus in **0.25s** (`46.8 MB` RSS).
+  - `horizon_locus` (`4` threads): **0.86s** (`236.7 MB` RSS) on avian 2-way (`galGal` `386.7 kb` × `taeGut` `349.4 kb`, `231,444` aligned bp, `p_dist = 0.192552`, `jc69_dist = 0.222528`) and **0.32s** (`165.8 MB` RSS) on human 4-way 25 kb (`grch38_mhc`, `hla_dup`, `grch38_peri`, `chm13_peri`, `29` MAF blocks / `20` multi-species).
 
 ## Documentation
 

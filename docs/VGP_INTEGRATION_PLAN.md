@@ -1,7 +1,7 @@
 # Horizon Suite Updates & Additions for the VGP All-to-All Alignment Project
 
 > **Target context:** [`pangenome/vgp-align-allocation/alignment-2026/main.md`](https://github.com/pangenome/vgp-align-allocation/blob/main/alignment-2026/main.md)
-> **Horizon baseline:** `horizon-aligner` (`d8339b7`, 112 passing unit tests across library and 9 CLI binaries).
+> **Horizon status (`9dfec4a`):** **P0–P4 complete & benchmarked on real VGP/GenomeArk + HPRC data** (`118` passing unit tests: `86` lib + `32` bin, `1` ignored; `11` suite CLI binaries + `bench_chr1`).
 
 ## 1. VGP Scale, Bottlenecks, and Where Horizon Fits
 
@@ -65,12 +65,12 @@ These workflows work today without new binary development:
 
 ---
 
-## 4. Suggested Implementation Priority
+## 4. Implementation Status (P0–P4 Complete at `9dfec4a`)
 
-| Priority | Item | Effort | VGP Benefit |
+| Priority | Item | Status | Real-Data Verification |
 | :--- | :--- | :--- | :--- |
-| **P0** | `src/paf.rs` + `horizon_filter` (MDL/BOCPD filter for `FastGA` PAF) | Medium | Directly targets VGP's #1 cost/quality bottleneck (filtering `FastGA` FPs at ~500 Myr without full `wfmash` calibration) |
-| **P1** | `horizon_clean` overlap-CIGAR `W` split fix + `horizon_resolve` per-window divergence | Small | Immediate accuracy fix for multi-clade vertebrate subgraphs from `impg` / `pggb` |
-| **P2** | `Aa5Index` wiring into `horizon_wga --graph` | Small | Improves distant vertebrate exon / BUSCO anchoring on pangenome graphs |
-| **P3** | `horizon_locus` (`impg query` FASTA -> clean GFA/MAF + similarity matrix) | Medium | Streamlines `O3` regional ILS and BUSCO conservation workflows |
-| **P4** | `u32` `PackedGraph` + snarl decomposition in `horizon_resolve` + `.zst` streaming | Large | Scales graph polishing/resolution to 800–4,467 assemblies |
+| **P0** | `src/paf.rs` + `horizon_filter` (SDUST+MDL+BOCPD PAF filter & `--net`) | **Implemented** | `chr6` FastGA (`56,857` recs): `0.47s` seq-free / `4.73s` SDUST+MDL (truth hit rate `1.6% -> 81.2%`, `99.7%` 1-to-1 cov retained); GenomeArk Koala × Amphioxus (`36,601` recs): `0.10s` (`71.6%` overlap with VGP `FastGA_11`) and rejects `FastGA_11`'s #1 longest hit (`3,548 bp` simple tandem repeat, `md:f:-210.51 hb:i:1`) |
+| **P1** | `horizon_clean` overlap-CIGAR `W` split fix + `horizon_resolve` per-window divergence | **Implemented** | Unit-tested & verified across synthetic and HPRC `10k` subgraphs |
+| **P2** | `aa5_keys` 6-frame translated fallback in `horizon_wga --graph` (`src/mdl/dag_seed.rs`) | **Implemented** | Unit-tested & active alongside `MASK_W10` + `MASK_RY20` |
+| **P3** | `horizon_locus` (`impg query` multi-FASTA -> `.similarity.tsv`, `.maf`, `.gfa`) | **Implemented** | Avian 2-way (`386.7 kb` × `349.4 kb`): `0.86s` (`236.7 MB` RSS); Human 4-way 25 kb: `0.32s` (`165.8 MB` RSS); Koala × Amphioxus 25 kb locus: `0.25s` (`46.8 MB` RSS) |
+| **P4** | `u32` `PackedGraph` + $O(V+E)$ Tarjan biedged snarl decomposition in `horizon_resolve` + `.zst` streaming (`src/io_util.rs`) | **Implemented** | `chr6` `.paf.zst` → `.paf.zst` streaming filter in `0.49s`; HPRC `10k` `horizon_resolve` in `5.571s` (`23.6 MB` RSS) |

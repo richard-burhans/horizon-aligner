@@ -50,10 +50,18 @@ Instead of forcing low-confidence sequences to align or arbitrarily breaking the
 cargo build --release
 ```
 
-Binaries will be placed in `target/release/`. 
-* `horizon_wga`: The core pairwise aligner.
-* `horizon_merge`: The exact-coordinate multi-species merger.
-* `horizon_guide`: The progressive guide-tree aligner.
+Binaries will be placed in `target/release/`:
+* `horizon`: Unified subcommand dispatcher (`wga`, `merge`, `guide`, `gfa`, `lift`, `clean`, `resolve`, `eval`, `bench-chr1`).
+* `horizon_wga`: Pairwise WGA, DAG/POA (`--graph`), and HAL inspection (`--hal-info`).
+* `horizon_merge`: Exact-coordinate multi-species MAF/rGFA merger.
+* `horizon_guide`: Progressive guide-tree aligner with HAL export.
+* `horizon_gfa`: Streaming GFA v1.0/v1.1 `stats` and chromosome `extract`.
+* `horizon_lift`: Graph-aware BED/GFF3 coordinate liftover.
+* `horizon_clean`: BOCPD+MDL GFA junction scorer and Horizon Bubble cutter.
+* `horizon_resolve`: Standalone GFA `PackedGraph` snarl + e-graph walk resolver.
+* `horizon_filter`: Streaming SDUST+BOCPD+MDL PAF filter and `--net` interval netter.
+* `horizon_locus`: Regional `impg`-style multi-FASTA locus aligner and similarity matrix emitter.
+* `horizon_eval`: Pairwise MAF recall/precision evaluator.
 
 ---
 
@@ -126,17 +134,31 @@ horizon_lift <in.gfa[.gz]> <intervals.bed|gff3> --from <src_prefix> --to <tgt_pr
 ```
 
 ### `horizon_clean`
-Scores candidate GFA `L`-line junctions with `bocpd_gc_profile` and MDL two-regime changepoint bit gain (`--min-cp-bits`), severing unsupported (`walk_support == 0`) discordant edges into `HB:i:1` Horizon Bubbles.
+Scores candidate GFA `L`-line junctions with `bocpd_gc_profile` and MDL two-regime changepoint bit gain (`--min-cp-bits`), severing low-support (`walk_support <= 1` by default, or `0` with `--prune-unsupported`) discordant edges into `HB:i:1` Horizon Bubbles while accounting for `L`-line overlap CIGARs when splitting `W` walks.
 
 ```bash
-horizon_clean --gfa <in.gfa[.gz]|-> [--flank 128] [--min-cp-bits 12.0] > clean.gfa
+horizon_clean --gfa <in.gfa[.gz|.zst]|-> [--flank 128] [--min-cp-bits 12.0] [--prune-unsupported] > clean.gfa
 ```
 
 ### `horizon_resolve`
-Runs standalone MDL-calibrated e-graph resolution (`MdlCostModel`) over GFA `P`/`W` walks to cancel double inversions and collapse adjacent tandem duplications.
+Runs standalone MDL-calibrated e-graph resolution (`MdlCostModel`) over a `u32`-interned `PackedGraph` with $O(V + E)$ Tarjan biedged snarl decomposition and per-window divergence estimation (optional `--divergence` override), canceling double inversions, collapsing adjacent tandem duplications, updating `W`-line `end` bounds, and pruning/synthesizing `L` links.
 
 ```bash
-horizon_resolve <in.gfa[.gz]|-> [--max-bubble-steps 64] [--collapse-dups] [--tag-walks] > resolved.gfa
+horizon_resolve <in.gfa[.gz|.zst]|-> [--max-bubble-steps 16] [--min-anchor-bp 200] [--divergence 0.02] [--collapse-dups] [--tag-walks] > resolved.gfa
+```
+
+### `horizon_filter`
+Streams `.paf[.gz|.zst]` or `stdin`, evaluates `FastGA`/`wfmash` PAF alignments with SDUST repeat masking, BOCPD compositional tracking, and Pair-HMM MDL bit-savings (`md:f:` and `hb:i:` tags), and optionally nets overlapping alignments (`--net` / `--max-occ`).
+
+```bash
+horizon_filter --paf <in.paf[.gz|.zst]|-> [--query <q.fa>] [--target <t.fa>] [--seqs <all.fa>] [--out <out.paf[.gz|.zst]>] [--min-bits <F>] [--min-nonrepeat-bp <N>] [--min-len <N>] [--net | --max-occ <K>] [--keep-all]
+```
+
+### `horizon_locus`
+Aligns all sequence pairs in a regional `impg`-style multi-FASTA (`.fa[.gz|.zst]`) using `SDUST + BOCPD/MDL + Aa5Index`, emitting `<prefix>.similarity.tsv` (`jaccard_cov`, `p_dist`, `jc69_dist`, Horizon Bubbles), `<prefix>.maf`, and `<prefix>.gfa`.
+
+```bash
+horizon_locus --fasta <locus.fa[.gz|.zst]> --out-prefix <prefix> [--ref <seq_name>] [--threads <N>] [--respect-softmask]
 ```
 
 ### `horizon_eval`
@@ -151,7 +173,7 @@ horizon_eval <ref_name> <tgt_name> <ref.fa> <tgt.fa> <truth.maf> [extra_horizon_
 ## 5. Processing Stages in Detail
 
 ### Sequence Input
-Sequences are read from standard FASTA files. If `--respect-softmask` is supplied, lowercase bases (e.g. `a`, `c`, `g`, `t`) are ignored during indexing, dramatically reducing seed collision depth in repetitive regions.
+Sequences are read from plain, `.gz`/`.bgz`, or `.zst`/`.zstd` FASTA files via `src/io_util.rs`. If `--respect-softmask` is supplied, lowercase bases (e.g. `a`, `c`, `g`, `t`) are ignored during indexing, dramatically reducing seed collision depth in repetitive regions.
 
 ### Indexing Target Seed Words
 `horizon-aligner` utilizes a custom `ContigIndex` struct mapping spaced-seed hashes to chromosomal offsets.

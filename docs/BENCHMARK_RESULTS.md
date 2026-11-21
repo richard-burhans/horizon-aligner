@@ -77,3 +77,15 @@ These sets were completely locked away during algorithm development to prevent o
 | Real 10k HPRC Junction Cleaner | `horizon_clean --min-cp-bits 10.0` | `10,000` segs (`10.94 Mbp`), `10,300` links, `1` `P`, `4` `W` | `10,300` kept, `0` severed on valid HPRC walks | **33.4 MB** | 0.13s |
 | Real 10k HPRC E-Graph Resolver | `horizon_resolve --collapse-dups --tag-walks` | `10,000` segs (`10.94 Mbp`), `10,300` links, `1` `P`, `4` `W` | `223` anchors, `755` snarl/bubble windows | **23.6 MB** | 5.571s |
 | Real 20k-Node HPRC DAG Alignment | `horizon_wga --graph` | `20,000` bidirected DAG nodes (`10.94 Mbp`) + `258`/`356`/`400`-bp queries | `122/258` bp (`6` bubbles), `197/356` bp (`8` bubbles), `0/400` all-`N` | **154.6 MB** | 2.98s–6.09s |
+
+## VGP / GenomeArk PAF Filtering & Regional Locus Benchmarks (`9dfec4a`)
+
+| Stage | Binary | Scope | Result | Peak RSS | Wall Time |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `chr6` FastGA PAF Netting (seq-free) | `horizon_filter --net` | `93 MB` (`56,857` `FastGA` records, `GRCh38.chr6` × `CHM13.chr6`) | `1,004` records (`110.22 Mbp`), `81.2%` 2D HPRC truth hit rate (from `1.6%`), `99.7%` 1-to-1 cov | — | **0.47s** (`0.49s` `.paf.zst`) |
+| `chr6` FastGA PAF SDUST+MDL Filter | `horizon_filter --net --query --target` | `56,857` `FastGA` records with `GRCh38.chr6` & `CHM13.chr6` FASTAs | `848` records (`109.76 Mbp`), `99.7%` of `110.08 Mbp` 1-to-1 HPRC coverage retained | — | 4.73s |
+| GenomeArk VGP Koala × Amphioxus PAF | `horizon_filter --net` | `GCA_003287225.2` × `GCA_015852565.1` (`36,601` raw `FastGA` records) | `1,976` records (`71.6%` exact overlap with VGP `FastGA_11`'s `1,535` records) | — | **0.10s** |
+| Koala × Amphioxus 25 kb Locus Audit | `horizon_filter --query --target` | VGP `FastGA_11` #1 longest hit (`3,548 bp`, `2,646` matches) | Rejected (`md:f:-210.51 hb:i:1`; caught `GA`/`AT`/`CA` simple tandem repeat) | — | <0.05s |
+| Koala × Amphioxus 25 kb Locus Align | `horizon_locus` | Extracted 25 kb Koala × Amphioxus locus | Clean `similarity.tsv`, `.maf`, `.gfa` | **46.8 MB** | **0.25s** |
+| Avian 2-Way Regional Locus | `horizon_locus` (`4` threads) | `galGal` (`386.7 kb`) × `taeGut` (`349.4 kb`) | `231,444` aligned bp, `p_dist = 0.192552`, `jc69_dist = 0.222528`, `1,364` MAF blocks | **236.7 MB** | **0.86s** |
+| Human 4-Way 25 kb Regional Locus | `horizon_locus` (`4` threads) | `grch38_mhc`, `hla_dup`, `grch38_peri`, `chm13_peri` (`6` pairs) | `29` MAF blocks (`20` multi-sp); `grch38_mhc` vs `hla_dup` `jaccard_cov = 0.999400`, `p_dist = 0.124507` | **165.8 MB** | **0.32s** |
