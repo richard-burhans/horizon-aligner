@@ -27,14 +27,18 @@ pub use mdl::{
     align_seq_to_dag_mdl, align_seq_to_dag_seeded, align_seq_to_dag_seeded_indexed, banded_mdl_gap,
     banded_mdl_gap_with_params, mdl_xdrop_extend, mdl_xdrop_extend_with_params,
 };
-pub use merge::merge_pairwise_mafs;
+pub use merge::{
+    DirectContigAlignment, merge_direct_alignments_prefixed_to_writers,
+    merge_pairwise_maf_paths_to_writers, merge_pairwise_mafs,
+    merge_pairwise_mafs_prefixed_to_writers, merge_pairwise_mafs_to_writers,
+};
 pub use netting::net_one_to_one_runs;
 pub use seeding::{
     ContigIndex, MASK_LASTZ11, MASK_LASTZ12, MASK_PH11_18, MASK_PRIMARY_11_15, MASK_W9, MASK_W10,
     canonical_spaced_seeds, canonical_spaced_seeds_with_opts, cluster_strand_lcbs, complement_base,
     find_lastz12_1transition_hits, find_lastz12_2transition_hits, lis_chain, local_w9_subchain,
     prepare_contig_index, prepare_contig_index_opts, revcomp, revcomp_preserve_case,
-    score_contig_pair_lcb, select_top_k_pairs, shared_seed_count,
+    score_contig_pair_lcb, select_top_k_pairs, shared_seed_count, shared_sketch_count,
 };
 
 use thiserror::Error;
@@ -429,5 +433,19 @@ mod tests {
             !aa_gated.is_empty(),
             "expected AA HSP gate to accept synonymous 12-codon stretch"
         );
+    }
+
+    #[test]
+    fn cli_arg_parsers_validate_bounds() {
+        assert_eq!(parse_min_fallback_cov_arg("0.0").expect("0.0"), 0.0);
+        assert_eq!(parse_min_fallback_cov_arg("1.0").expect("1.0"), 1.0);
+        assert!(parse_min_fallback_cov_arg("NaN").is_err());
+        assert!(parse_min_fallback_cov_arg("-0.1").is_err());
+        assert!(parse_min_fallback_cov_arg("1.1").is_err());
+
+        assert_eq!(parse_hsp_threshold_arg("0").expect("0"), 0);
+        assert_eq!(parse_hsp_threshold_arg("42").expect("42"), 42);
+        assert!(parse_hsp_threshold_arg("-1").is_err());
+        assert!(parse_hsp_threshold_arg("abc").is_err());
     }
 }

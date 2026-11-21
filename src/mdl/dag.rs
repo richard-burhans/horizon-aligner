@@ -221,6 +221,7 @@ pub fn align_seq_to_dag_mdl(
     let mut fm: Vec<DagBandGrid> = Vec::with_capacity(num_nodes);
     let mut fix: Vec<DagBandGrid> = Vec::with_capacity(num_nodes);
     let mut fiy: Vec<DagBandGrid> = Vec::with_capacity(num_nodes);
+    let mut sub_grids: Vec<DagBandGrid> = Vec::with_capacity(num_nodes);
 
     for (u, nd) in nodes.iter().enumerate() {
         let Some((bounds, cells)) = build_node_bounds(
@@ -239,10 +240,11 @@ pub fn align_seq_to_dag_mdl(
             };
         };
         let bounds: std::sync::Arc<[(usize, usize, usize)]> = bounds.into();
-        let (Some(g_fm), Some(g_fix), Some(g_fiy)) = (
+        let (Some(g_fm), Some(g_fix), Some(g_fiy), Some(g_sub)) = (
             DagBandGrid::new(std::sync::Arc::clone(&bounds), cells, NEG_INF),
             DagBandGrid::new(std::sync::Arc::clone(&bounds), cells, NEG_INF),
-            DagBandGrid::new(bounds, cells, NEG_INF),
+            DagBandGrid::new(std::sync::Arc::clone(&bounds), cells, NEG_INF),
+            DagBandGrid::new(bounds, cells, 0.0),
         ) else {
             return GraphAlignment {
                 path_nodes: Vec::new(),
@@ -254,6 +256,7 @@ pub fn align_seq_to_dag_mdl(
         fm.push(g_fm);
         fix.push(g_fix);
         fiy.push(g_fiy);
+        sub_grids.push(g_sub);
     }
 
     for u in 0..num_nodes {
@@ -303,6 +306,7 @@ pub fn align_seq_to_dag_mdl(
                         pi_y[j - 1],
                         id_prior,
                     );
+                    sub_grids[u].set(i, j, sb);
                     let prev_fm = logsumexp3(
                         fm[u].get(i - 1, j - 1) + mm_ln,
                         fix[u].get(i - 1, j - 1) + im_ln,
@@ -385,13 +389,7 @@ pub fn align_seq_to_dag_mdl(
                     continue;
                 }
                 let m_next = if i < nu && j < m {
-                    let sb = joint_pair_bits(
-                        nodes[u].seq[i],
-                        seq_y[j],
-                        pi_nodes[u][i],
-                        pi_y[j],
-                        id_prior,
-                    );
+                    let sb = sub_grids[u].get(i + 1, j + 1);
                     bm[u].get(i + 1, j + 1) + sb * ln2
                 } else {
                     NEG_INF
@@ -552,13 +550,7 @@ pub fn align_seq_to_dag_mdl(
         };
         let up = fm[u].get(i - 1, j);
         if j > 0 && (cur - d).abs() < 1e-9 {
-            let sb = joint_pair_bits(
-                nodes[u].seq[i - 1],
-                seq_y[j - 1],
-                pi_nodes[u][i - 1],
-                pi_y[j - 1],
-                id_prior,
-            );
+            let sb = sub_grids[u].get(i, j);
             raw_cols.push((Some((u, i - 1)), Some(j - 1), sb, post_p));
             i -= 1;
             j -= 1;

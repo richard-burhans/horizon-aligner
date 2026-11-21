@@ -237,7 +237,6 @@ pub(crate) use flat_index::FlatSeedIndex;
 #[derive(Debug, Clone)]
 pub struct ContigIndex {
     pub(crate) seq: Vec<u8>,
-    pub(crate) seq_rc: Vec<u8>,
     pub(crate) sdust: Vec<bool>,
     pub(crate) seeds: FlatSeedIndex,
 }
@@ -281,7 +280,6 @@ pub fn prepare_contig_index_opts(
     )?;
     Ok(ContigIndex {
         seq: seq.to_vec(),
-        seq_rc: revcomp_preserve_case(seq),
         sdust,
         seeds,
     })
@@ -291,6 +289,63 @@ pub fn prepare_contig_index_opts(
 #[must_use]
 pub fn shared_seed_count(idx_x: &ContigIndex, idx_y: &ContigIndex) -> usize {
     idx_x.seeds.shared_unique_keys(&idx_y.seeds)
+}
+
+#[inline]
+const fn splitmix64(mut x: u64) -> u64 {
+    x = x.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    x ^ (x >> 31)
+}
+
+impl ContigIndex {
+    /// Extract a sorted bottom-`k` `MinHash` sketch of unique KP-14 seed keys in this contig.
+    #[must_use]
+    pub fn minhash_sketch(&self, k: usize) -> Vec<u64> {
+        use std::collections::BinaryHeap;
+        if k == 0 || self.seeds.keys.is_empty() {
+            return Vec::new();
+        }
+        let mut heap: BinaryHeap<u64> = BinaryHeap::with_capacity(k);
+        let mut prev: Option<u64> = None;
+        for &raw in &self.seeds.keys {
+            if prev == Some(raw) {
+                continue;
+            }
+            prev = Some(raw);
+            let h = splitmix64(raw);
+            if heap.len() < k {
+                heap.push(h);
+            } else if let Some(&top) = heap.peek()
+                && h < top
+            {
+                heap.pop();
+                heap.push(h);
+            }
+        }
+        heap.into_sorted_vec()
+    }
+}
+
+/// Count shared hashes between two sorted bottom-`k` `MinHash` sketches.
+#[must_use]
+pub fn shared_sketch_count(a: &[u64], b: &[u64]) -> usize {
+    let mut i = 0usize;
+    let mut j = 0usize;
+    let mut shared = 0usize;
+    while i < a.len() && j < b.len() {
+        match a[i].cmp(&b[j]) {
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+            std::cmp::Ordering::Equal => {
+                shared += 1;
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    shared
 }
 
 pub(crate) type LcbList = Vec<Vec<(usize, usize)>>;
@@ -448,6 +503,21 @@ pub fn find_lastz12_2transition_hits<S: std::hash::BuildHasher>(
     )
 }
 
+#[inline]
+pub(crate) fn is_masked_window(seq: &[u8], sdust: Option<&[bool]>, i: usize, span: usize) -> bool {
+    if let Some(m) = sdust {
+        let mid = m.get(i + span / 2).copied().unwrap_or(false);
+        let end = span
+            .checked_sub(1)
+            .and_then(|d| m.get(i + d).copied())
+            .unwrap_or(false);
+        if m.get(i).copied().unwrap_or(false) || mid || end {
+            return true;
+        }
+    }
+    sdust.is_none() && span >= 12 && is_low_complexity_window(&seq[i..i + span])
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn find_spaced_transition_hits_flat(
     seq_x: &[u8],
@@ -472,15 +542,10 @@ pub(crate) fn find_spaced_transition_hits_flat(
         let mut hits_rc = Vec::new();
         let mut keys = Vec::with_capacity(w * w + 2 * w + 1);
         for i in start_i..end_i {
-            if let Some(m) = sdust_x
-                && (m[i] || m[i + span / 2] || m[i + span - 1])
-            {
+            if is_masked_window(seq_x, sdust_x, i, span) {
                 continue;
             }
             let sub = &seq_x[i..i + span];
-            if sdust_x.is_none() && span >= 12 && is_low_complexity_window(sub) {
-                continue;
-            }
             let Some((fwd, rc)) =
                 encode_spaced_pair(sub, offsets, rev_offsets, skip_softmasked, false)
             else {
@@ -636,22 +701,6 @@ pub(crate) fn append_two_hit_diagonal_lcbs(
     }
 }
 
-fn codon_to_aa(b0: u8, b1: u8, b2: u8) -> Option<u8> {
-    // Standard genetic code indexed by (A=0, C=1, G=2, T=3): 0..20 = amino acids, 255 = stop.
-    const TABLE: [u8; 64] = [
-        // AAA..ATT
-        8, 11, 8, 11, 16, 16, 16, 16, 14, 15, 14, 15, 7, 7, 10, 7, // CAA..CTT
-        13, 6, 13, 6, 12, 12, 12, 12, 14, 14, 14, 14, 9, 9, 9, 9, // GAA..GTT
-        3, 2, 3, 2, 0, 0, 0, 0, 5, 5, 5, 5, 17, 17, 17, 17, // TAA..TTT
-        255, 19, 255, 19, 15, 15, 15, 15, 255, 1, 18, 1, 9, 4, 9, 4,
-    ];
-    let (Some(i0), Some(i1), Some(i2)) = (base_to_idx(b0), base_to_idx(b1), base_to_idx(b2)) else {
-        return None;
-    };
-    let aa = TABLE[(i0 << 4) | (i1 << 2) | i2];
-    if aa == 255 { None } else { Some(aa) }
-}
-
 mod flat_index;
 mod hsp;
 mod translated;
@@ -678,27 +727,67 @@ pub fn select_top_k_pairs(
     top_k: usize,
     min_shared_seeds: usize,
 ) -> Vec<Vec<bool>> {
-    let scores: Vec<((usize, usize), (usize, usize))> = (0..target_idx.len())
+    let seed_counts: Vec<Vec<usize>> = (0..target_idx.len())
         .into_par_iter()
-        .flat_map(|x_i| {
-            (0..query_idx.len()).into_par_iter().map(move |y_i| {
-                let seeds = shared_seed_count(&target_idx[x_i].1, &query_idx[y_i].1);
-                let lcb = if seeds >= min_shared_seeds {
-                    score_contig_pair_lcb(&target_idx[x_i].1, &query_idx[y_i].1)
-                } else {
-                    0
-                };
-                ((x_i, y_i), (lcb, seeds))
-            })
+        .map(|x_i| {
+            (0..query_idx.len())
+                .map(|y_i| shared_seed_count(&target_idx[x_i].1, &query_idx[y_i].1))
+                .collect()
         })
         .collect();
+
+    let shortlist_k = top_k.saturating_mul(4).max(8);
+    let mut need_lcb = vec![vec![false; query_idx.len()]; target_idx.len()];
+    let mut row_cands: Vec<(usize, usize)> = Vec::new();
+    for (x_i, row) in seed_counts.iter().enumerate() {
+        row_cands.clear();
+        for (y_i, &seeds) in row.iter().enumerate() {
+            if seeds >= min_shared_seeds {
+                row_cands.push((seeds, y_i));
+            }
+        }
+        row_cands.sort_unstable_by_key(|&(s, y_i)| (std::cmp::Reverse(s), y_i));
+        for &(_, y_i) in row_cands.iter().take(shortlist_k) {
+            need_lcb[x_i][y_i] = true;
+        }
+    }
+    let mut col_cands: Vec<(usize, usize)> = Vec::new();
+    for y_i in 0..query_idx.len() {
+        col_cands.clear();
+        for (x_i, row) in seed_counts.iter().enumerate() {
+            let seeds = row[y_i];
+            if seeds >= min_shared_seeds {
+                col_cands.push((seeds, x_i));
+            }
+        }
+        col_cands.sort_unstable_by_key(|&(s, x_i)| (std::cmp::Reverse(s), x_i));
+        for &(_, x_i) in col_cands.iter().take(shortlist_k) {
+            need_lcb[x_i][y_i] = true;
+        }
+    }
+
+    let mut lcb_jobs: Vec<(usize, usize)> = Vec::new();
+    for (x_i, row) in need_lcb.iter().enumerate() {
+        for (y_i, &needed) in row.iter().enumerate() {
+            if needed {
+                lcb_jobs.push((x_i, y_i));
+            }
+        }
+    }
+    let lcb_scores: Vec<((usize, usize), usize)> = lcb_jobs
+        .into_par_iter()
+        .map(|(x_i, y_i)| {
+            let lcb = score_contig_pair_lcb(&target_idx[x_i].1, &query_idx[y_i].1);
+            ((x_i, y_i), lcb)
+        })
+        .collect();
+
     let mut by_x: Vec<Vec<((usize, usize), usize)>> = vec![Vec::new(); target_idx.len()];
     let mut by_y: Vec<Vec<((usize, usize), usize)>> = vec![Vec::new(); query_idx.len()];
-    for &((x_i, y_i), sc) in &scores {
-        if sc.1 >= min_shared_seeds {
-            by_x[x_i].push((sc, y_i));
-            by_y[y_i].push((sc, x_i));
-        }
+    for ((x_i, y_i), lcb) in lcb_scores {
+        let seeds = seed_counts[x_i][y_i];
+        by_x[x_i].push(((lcb, seeds), y_i));
+        by_y[y_i].push(((lcb, seeds), x_i));
     }
     let mut mask = vec![vec![false; query_idx.len()]; target_idx.len()];
     for (x_i, list) in by_x.iter_mut().enumerate() {
@@ -743,13 +832,7 @@ pub fn revcomp_preserve_case(seq: &[u8]) -> Vec<u8> {
 pub fn revcomp(seq: &[u8]) -> Vec<u8> {
     seq.iter()
         .rev()
-        .map(|&b| match b.to_ascii_uppercase() {
-            b'A' => b'T',
-            b'T' => b'A',
-            b'C' => b'G',
-            b'G' => b'C',
-            other => other,
-        })
+        .map(|&b| complement_base(b).to_ascii_uppercase())
         .collect()
 }
 
@@ -865,5 +948,24 @@ mod tests {
         assert!(is_low_complexity_window(b"NNNNNNNNNNNNNNNN"));
         assert!(!is_low_complexity_window(b"ACGTACGTACGTACGT")); // H = 2.0 > 1.05
         assert!(!is_low_complexity_window(b"ACGTTCGAACGTACTG"));
+    }
+
+    #[test]
+    fn minhash_sketch_estimates_shared_seeds() {
+        let seq_a = b"ACGTACGTACGTACGTTTGCATGCATGCATGCATGCAACCGGTTAA".repeat(4);
+        let mut seq_b = seq_a.clone();
+        seq_b[40..50].copy_from_slice(b"GGGGTTTTAA");
+        let seq_c = b"CCCCCCCCCCCCCCCCGGGGGGGGGGGGGGGGTTTTTTTTTTTTTTTT".repeat(4);
+
+        let ia = prepare_contig_index(&seq_a).expect("ia");
+        let ib = prepare_contig_index(&seq_b).expect("ib");
+        let ic = prepare_contig_index(&seq_c).expect("ic");
+
+        let sa = ia.minhash_sketch(64);
+        let sb = ib.minhash_sketch(64);
+        let sc = ic.minhash_sketch(64);
+        assert_ne!(sa, [] as [u64; 0]);
+        assert!(sa.windows(2).all(|w| w[0] < w[1]));
+        assert!(shared_sketch_count(&sa, &sb) > shared_sketch_count(&sa, &sc));
     }
 }

@@ -271,7 +271,7 @@ pub(crate) fn partition_colinear_run_groups(runs: &[AlignedRun]) -> Vec<(Vec<Ali
         let mut idx = 0usize;
         while idx < active.len() {
             let last = active[idx][active[idx].len() - 1];
-            if last.x_start + last.len + 40 < r.x_start {
+            if last.x_start.saturating_add(last.len).saturating_add(40) < r.x_start {
                 let ch = active.swap_remove(idx);
                 retire_chain(ch, &mut blocks);
             } else {
@@ -284,7 +284,7 @@ pub(crate) fn partition_colinear_run_groups(runs: &[AlignedRun]) -> Vec<(Vec<Ali
             if prev.is_rc != r.is_rc {
                 continue;
             }
-            let prev_x_end = prev.x_start + prev.len;
+            let prev_x_end = prev.x_start.saturating_add(prev.len);
             if r.x_start < prev_x_end || r.x_start - prev_x_end > 40 {
                 continue;
             }
@@ -298,7 +298,7 @@ pub(crate) fn partition_colinear_run_groups(runs: &[AlignedRun]) -> Vec<(Vec<Ali
                 };
                 r.y_start < prev_y_lim && (prev_y_lim - 1 - r.y_start) <= 40
             } else {
-                let prev_y_lim = prev.y_start + prev.len;
+                let prev_y_lim = prev.y_start.saturating_add(prev.len);
                 r.y_start >= prev_y_lim && (r.y_start - prev_y_lim) <= 40
             };
             if ok_y {
@@ -311,7 +311,7 @@ pub(crate) fn partition_colinear_run_groups(runs: &[AlignedRun]) -> Vec<(Vec<Ali
             if active.len() >= 32
                 && let Some((oldest_idx, _)) = active.iter().enumerate().min_by_key(|(_, ch)| {
                     let last = ch[ch.len() - 1];
-                    last.x_start + last.len
+                    last.x_start.saturating_add(last.len)
                 })
             {
                 let ch = active.swap_remove(oldest_idx);

@@ -328,7 +328,7 @@ fn write_locus_outputs(
 
 fn parse_args() -> Result<Option<LocusCli>> {
     let args: Vec<String> = env::args().skip(1).collect();
-    if args.is_empty() || args.iter().any(|a| a == "-h" || a == "--help") {
+    if args.is_empty() {
         println!(
             "usage: horizon_locus --fasta <locus.fa[.gz]> --out-prefix <prefix> [--ref <seq_name>] [--threads <N>] [--respect-softmask]"
         );
@@ -343,6 +343,12 @@ fn parse_args() -> Result<Option<LocusCli>> {
     let mut i = 0usize;
     while i < args.len() {
         match args[i].as_str() {
+            "-h" | "--help" => {
+                println!(
+                    "usage: horizon_locus --fasta <locus.fa[.gz]> --out-prefix <prefix> [--ref <seq_name>] [--threads <N>] [--respect-softmask]"
+                );
+                return Ok(None);
+            }
             "--fasta" | "-i" => {
                 i += 1;
                 fasta_path = Some(args.get(i).context("missing value for --fasta")?.clone());
@@ -361,12 +367,13 @@ fn parse_args() -> Result<Option<LocusCli>> {
             }
             "--threads" | "-t" => {
                 i += 1;
-                threads = Some(
-                    args.get(i)
-                        .context("missing value for --threads")?
-                        .parse()
-                        .context("invalid --threads")?,
-                );
+                let n: usize = args
+                    .get(i)
+                    .context("missing value for --threads")?
+                    .parse()
+                    .context("invalid --threads")?;
+                anyhow::ensure!(n >= 1, "--threads must be >= 1");
+                threads = Some(n);
             }
             "--respect-softmask" => respect_softmask = true,
             other => bail!("unknown argument: {other}"),

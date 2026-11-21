@@ -3,13 +3,12 @@
 use anyhow::{Context, Result, bail};
 use horizon_aligner::{
     AlignConfig, ContigIndex, align_contig_pair_runs, format_maf_blocks_runs, hal::HalAlignment,
-    merge_pairwise_mafs, parse_two_row_maf_blocks, prepare_contig_index_opts, read_fasta_contigs,
-    select_top_k_pairs, shared_seed_count,
+    parse_two_row_maf_blocks, prepare_contig_index_opts, read_fasta_contigs, select_top_k_pairs,
+    shared_seed_count, shared_sketch_count,
 };
 use rayon::prelude::*;
 use rescue::{run_ancestral_consensus_rescue, run_progressive_sister_rescue};
 use std::collections::HashMap;
-use std::fs;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -18,25 +17,39 @@ mod rescue;
 pub(crate) type ContigList = Vec<(String, Vec<u8>)>;
 pub(crate) type IndexedSpecies = (String, ContigList, Vec<(String, ContigIndex)>);
 
-fn select_central_hinge(species: &[IndexedSpecies]) -> usize {
-    (0..species.len())
+fn compute_species_sketches(species: &[IndexedSpecies]) -> Vec<Vec<u64>> {
+    const HINGE_SKETCH_K: usize = 512;
+    species
+        .par_iter()
+        .map(|(_, _, idx_list)| {
+            use std::collections::BinaryHeap;
+            let mut heap: BinaryHeap<u64> = BinaryHeap::with_capacity(HINGE_SKETCH_K);
+            for (_, ix) in idx_list {
+                for h in ix.minhash_sketch(HINGE_SKETCH_K) {
+                    if heap.len() < HINGE_SKETCH_K {
+                        heap.push(h);
+                    } else if let Some(&top) = heap.peek()
+                        && h < top
+                    {
+                        heap.pop();
+                        heap.push(h);
+                    }
+                }
+            }
+            let mut sorted = heap.into_sorted_vec();
+            sorted.dedup();
+            sorted
+        })
+        .collect()
+}
+
+fn select_central_hinge(sketches: &[Vec<u64>]) -> usize {
+    (0..sketches.len())
         .into_par_iter()
         .map(|i| {
-            let idx_i = &species[i].2;
-            let total: usize = (0..species.len())
+            let total: usize = (0..sketches.len())
                 .filter(|&j| j != i)
-                .map(|j| {
-                    let idx_j = &species[j].2;
-                    idx_i
-                        .iter()
-                        .map(|(_, ix)| {
-                            idx_j
-                                .iter()
-                                .map(|(_, iy)| shared_seed_count(ix, iy))
-                                .sum::<usize>()
-                        })
-                        .sum::<usize>()
-                })
+                .map(|j| shared_sketch_count(&sketches[i], &sketches[j]))
                 .sum();
             (total, std::cmp::Reverse(i))
         })
@@ -46,6 +59,20 @@ fn select_central_hinge(species: &[IndexedSpecies]) -> usize {
 
 type HalBlock = (usize, usize, usize, usize, usize, bool);
 type HalBlockList = Vec<HalBlock>;
+
+fn runs_to_hal_blocks(xi: usize, yi: usize, runs: &[horizon_aligner::AlignedRun]) -> Vec<HalBlock> {
+    runs.iter()
+        .filter(|r| r.len > 0)
+        .filter_map(|r| {
+            let q_start = if r.is_rc {
+                (r.y_start + 1).checked_sub(r.len)?
+            } else {
+                r.y_start
+            };
+            Some((xi, yi, r.x_start, q_start, r.len, r.is_rc))
+        })
+        .collect()
+}
 
 pub(crate) fn align_species_pair(
     ref_contigs: &ContigList,
@@ -90,19 +117,7 @@ pub(crate) fn align_species_pair(
             let sx = &ref_contigs[xi].1;
             let sy = &qry_contigs[yi].1;
             let maf = format_maf_blocks_runs(nx, sx.len(), ny, sy.len(), sx, sy, &aln);
-            let hblks: Vec<HalBlock> = aln
-                .aligned_runs
-                .iter()
-                .filter(|r| r.len > 0)
-                .filter_map(|r| {
-                    let q_start = if r.is_rc {
-                        (r.y_start + 1).checked_sub(r.len)?
-                    } else {
-                        r.y_start
-                    };
-                    Some((xi, yi, r.x_start, q_start, r.len, r.is_rc))
-                })
-                .collect();
+            let hblks = runs_to_hal_blocks(xi, yi, &aln.aligned_runs);
             Ok((maf, hblks))
         })
         .collect::<Result<Vec<_>>>()?;
@@ -191,10 +206,19 @@ fn parse_args() -> Result<Option<GuideCliArgs>> {
     let max_contigs: usize = pos[1].parse().context("parsing max_contigs")?;
     let top_k = top_k_opt.unwrap_or(usize::from(max_contigs != 1));
     let mut specs = Vec::new();
+    let mut seen_species = std::collections::HashSet::new();
     for spec in &pos[2..] {
         let Some((sp, path)) = spec.split_once('=') else {
             bail!("expected <species>=<fasta>, got {spec}");
         };
+        anyhow::ensure!(
+            !sp.is_empty() && !path.is_empty(),
+            "expected non-empty <species>=<fasta>, got {spec}"
+        );
+        anyhow::ensure!(
+            seen_species.insert(sp.to_owned()),
+            "duplicate species name: {sp}"
+        );
         specs.push((sp.to_owned(), PathBuf::from(path)));
     }
     Ok(Some(GuideCliArgs {
@@ -233,11 +257,13 @@ fn main() -> Result<()> {
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let hinge_idx = select_central_hinge(&indexed);
+    let species_sketches = compute_species_sketches(&indexed);
+    let hinge_idx = select_central_hinge(&species_sketches);
     let mut pairwise_mafs: Vec<(String, String)> = Vec::new();
     let mut hal_query_indices: Vec<usize> = Vec::new();
     let mut hal_all_blocks: Vec<(usize, usize, usize, usize, usize, usize, bool)> = Vec::new();
     let mut sp_to_pw_idx: HashMap<usize, usize> = HashMap::new();
+    let mut direct_runs: Vec<(usize, usize, usize, horizon_aligner::RunAlignment)> = Vec::new();
 
     {
         let (_, hinge_contigs, hinge_indices) = &indexed[hinge_idx];
@@ -246,32 +272,77 @@ fn main() -> Result<()> {
             ..AlignConfig::default()
         };
 
-        for (i, (qry_sp, qry_contigs, qry_indices)) in indexed.iter().enumerate() {
-            if i == hinge_idx {
-                continue;
-            }
-            let (maf_buf, hblocks) = align_species_pair(
-                hinge_contigs,
-                hinge_indices,
-                qry_contigs,
-                qry_indices,
-                &cfg,
-                cli.top_k,
-            )?;
-            if cli.write_hal {
-                let q_idx = hal_query_indices.len();
-                hal_query_indices.push(i);
-                for (xi, yi, rs, qs, len, rev) in hblocks {
-                    hal_all_blocks.push((q_idx, xi, yi, rs, qs, len, rev));
+        // Flatten all (species, ref_contig, qry_contig) alignment jobs into a single Rayon pool
+        // so slow or uneven species do not leave worker threads idle at per-species barriers.
+        let min_shared_seeds = 8usize;
+        let query_species_indices: Vec<usize> =
+            (0..indexed.len()).filter(|&i| i != hinge_idx).collect();
+        let all_jobs: Vec<(usize, usize, usize)> = query_species_indices
+            .par_iter()
+            .flat_map(|&sp_i| {
+                let qry_indices = &indexed[sp_i].2;
+                let top_mask = (cli.top_k > 0).then(|| {
+                    select_top_k_pairs(hinge_indices, qry_indices, cli.top_k, min_shared_seeds)
+                });
+                let mut sp_jobs = Vec::new();
+                for xi in 0..hinge_indices.len() {
+                    for yi in 0..qry_indices.len() {
+                        let keep = if let Some(mask) = &top_mask {
+                            mask[xi][yi]
+                        } else {
+                            shared_seed_count(&hinge_indices[xi].1, &qry_indices[yi].1)
+                                >= min_shared_seeds
+                        };
+                        if keep {
+                            sp_jobs.push((sp_i, xi, yi));
+                        }
+                    }
                 }
-            }
-            sp_to_pw_idx.insert(i, pairwise_mafs.len());
-            pairwise_mafs.push((qry_sp.clone(), maf_buf));
-        }
+                sp_jobs
+            })
+            .collect();
 
         if cli.progressive && indexed.len() >= 3 {
+            let job_results: Vec<(usize, String)> = all_jobs
+                .par_iter()
+                .map(|&(sp_i, xi, yi)| {
+                    let (_, qry_contigs, qry_indices) = &indexed[sp_i];
+                    let (nx, ix) = &hinge_indices[xi];
+                    let (ny, iy) = &qry_indices[yi];
+                    let aln = align_contig_pair_runs(ix, iy, &cfg)?;
+                    if aln.aligned_runs.is_empty() {
+                        return Ok((sp_i, String::new()));
+                    }
+                    let sx = &hinge_contigs[xi].1;
+                    let sy = &qry_contigs[yi].1;
+                    let maf = format_maf_blocks_runs(nx, sx.len(), ny, sy.len(), sx, sy, &aln);
+                    Ok((sp_i, maf))
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            let mut maf_by_sp: Vec<String> =
+                vec![String::from("##maf version=1 scoring=horizon_mdl\n"); indexed.len()];
+            for (sp_i, maf) in job_results {
+                if !maf.is_empty() {
+                    let body = maf
+                        .strip_prefix("##maf version=1 scoring=horizon_mdl\n")
+                        .unwrap_or(&maf);
+                    maf_by_sp[sp_i].push_str(body);
+                }
+            }
+
+            for i in query_species_indices {
+                let qry_sp = &indexed[i].0;
+                if cli.write_hal {
+                    hal_query_indices.push(i);
+                }
+                sp_to_pw_idx.insert(i, pairwise_mafs.len());
+                pairwise_mafs.push((qry_sp.clone(), std::mem::take(&mut maf_by_sp[i])));
+            }
+
             run_progressive_sister_rescue(
                 &indexed,
+                &species_sketches,
                 hinge_idx,
                 &sp_to_pw_idx,
                 &mut pairwise_mafs,
@@ -287,18 +358,89 @@ fn main() -> Result<()> {
                 cli.top_k,
                 cli.respect_softmask,
             )?;
+        } else {
+            let job_results: Vec<(usize, usize, usize, horizon_aligner::RunAlignment)> = all_jobs
+                .par_iter()
+                .map(|&(sp_i, xi, yi)| {
+                    let qry_indices = &indexed[sp_i].2;
+                    let aln =
+                        align_contig_pair_runs(&hinge_indices[xi].1, &qry_indices[yi].1, &cfg)?;
+                    Ok((sp_i, xi, yi, aln))
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            let mut hblks_by_sp: Vec<Vec<HalBlock>> = vec![Vec::new(); indexed.len()];
+            for (sp_i, xi, yi, aln) in job_results {
+                if aln.aligned_runs.is_empty() {
+                    continue;
+                }
+                if cli.write_hal {
+                    hblks_by_sp[sp_i].extend(runs_to_hal_blocks(xi, yi, &aln.aligned_runs));
+                }
+                direct_runs.push((sp_i, xi, yi, aln));
+            }
+            if cli.write_hal {
+                for i in query_species_indices {
+                    let q_idx = hal_query_indices.len();
+                    hal_query_indices.push(i);
+                    for (xi, yi, rs, qs, len, rev) in std::mem::take(&mut hblks_by_sp[i]) {
+                        hal_all_blocks.push((q_idx, xi, yi, rs, qs, len, rev));
+                    }
+                }
+            }
         }
     }
 
+    // Drop heavy KP-14 seed indices, SDUST masks, and RC sequences before merging & HAL export.
+    for (_, _, idxs) in &mut indexed {
+        idxs.clear();
+        idxs.shrink_to_fit();
+    }
+
     let hinge_sp = indexed[hinge_idx].0.clone();
-    let (merged_maf, merged_gfa, total_blocks, multi_blocks) =
-        merge_pairwise_mafs(&hinge_sp, &pairwise_mafs, 1000);
-    let merged_maf = prefix_hinge_species_in_maf(&hinge_sp, &merged_maf);
     let out_prefix = &cli.out_prefix;
-    fs::write(format!("{out_prefix}.maf"), merged_maf)
-        .with_context(|| format!("writing {out_prefix}.maf"))?;
-    fs::write(format!("{out_prefix}.gfa"), merged_gfa)
-        .with_context(|| format!("writing {out_prefix}.gfa"))?;
+    let mut maf_writer =
+        horizon_aligner::io_util::open_text_writer(Some(&format!("{out_prefix}.maf")))
+            .with_context(|| format!("creating {out_prefix}.maf"))?;
+    let mut gfa_writer =
+        horizon_aligner::io_util::open_text_writer(Some(&format!("{out_prefix}.gfa")))
+            .with_context(|| format!("creating {out_prefix}.gfa"))?;
+    let (total_blocks, multi_blocks) = if !direct_runs.is_empty() || pairwise_mafs.is_empty() {
+        let (_, hinge_contigs, _) = &indexed[hinge_idx];
+        let direct_refs: Vec<horizon_aligner::DirectContigAlignment<'_>> = direct_runs
+            .iter()
+            .map(|(sp_i, xi, yi, aln)| {
+                let (ref_contig, ref_seq) = &hinge_contigs[*xi];
+                let (qry_sp, qry_contigs, _) = &indexed[*sp_i];
+                let (qry_contig, qry_seq) = &qry_contigs[*yi];
+                horizon_aligner::DirectContigAlignment {
+                    ref_contig,
+                    ref_seq,
+                    qry_species: qry_sp,
+                    qry_contig,
+                    qry_seq,
+                    aln,
+                }
+            })
+            .collect();
+        horizon_aligner::merge_direct_alignments_prefixed_to_writers(
+            &hinge_sp,
+            &direct_refs,
+            1000,
+            &mut maf_writer,
+            &mut gfa_writer,
+        )?
+    } else {
+        horizon_aligner::merge_pairwise_mafs_prefixed_to_writers(
+            &hinge_sp,
+            &pairwise_mafs,
+            1000,
+            &mut maf_writer,
+            &mut gfa_writer,
+        )?
+    };
+    maf_writer.finish()?;
+    gfa_writer.finish()?;
     let (hal_tree_desc, hal_bottom_segs) = if cli.write_hal {
         let hinge_contigs = std::mem::take(&mut indexed[hinge_idx].1);
         let hal_queries: Vec<(String, ContigList)> = hal_query_indices
@@ -357,36 +499,29 @@ fn extract_hal_blocks_from_pairwise_mafs(
         .enumerate()
         .map(|(idx, (name, _))| (name.as_str(), idx))
         .collect();
-    let mut out = Vec::new();
-    for (q_idx, ((_, q_contigs), (_, maf_buf))) in
-        hal_queries.iter().zip(pairwise_mafs.iter()).enumerate()
-    {
-        let q_idx_by_name: HashMap<&str, usize> = q_contigs
-            .iter()
-            .enumerate()
-            .map(|(idx, (name, _))| (name.as_str(), idx))
-            .collect();
-        for (h_row, q_row) in parse_two_row_maf_blocks(maf_buf) {
-            let Some(&xi) = hinge_idx_by_name.get(h_row.src.as_str()) else {
-                continue;
-            };
-            let Some(&yi) = q_idx_by_name.get(q_row.src.as_str()) else {
-                continue;
-            };
-            let rev = h_row.strand != q_row.strand;
-            let mut h_off = 0usize;
-            let mut q_off = 0usize;
-            let mut hinge_run_start = 0usize;
-            let mut qry_run_start = 0usize;
-            let mut run_len = 0usize;
-            for (hb, qb) in h_row.seq.bytes().zip(q_row.seq.bytes()) {
-                if hb != b'-' && qb != b'-' {
-                    if run_len == 0 {
-                        hinge_run_start = h_off;
-                        qry_run_start = q_off;
-                    }
-                    run_len += 1;
-                } else if run_len > 0 {
+    let per_query: Vec<Vec<(usize, usize, usize, usize, usize, usize, bool)>> = hal_queries
+        .par_iter()
+        .zip(pairwise_mafs.par_iter())
+        .enumerate()
+        .map(|(q_idx, ((_, q_contigs), (_, maf_buf)))| {
+            let mut local_out = Vec::new();
+            let q_idx_by_name: HashMap<&str, usize> = q_contigs
+                .iter()
+                .enumerate()
+                .map(|(idx, (name, _))| (name.as_str(), idx))
+                .collect();
+            for (h_row, q_row) in parse_two_row_maf_blocks(maf_buf) {
+                let Some(&xi) = hinge_idx_by_name.get(h_row.src.as_str()) else {
+                    continue;
+                };
+                let Some(&yi) = q_idx_by_name.get(q_row.src.as_str()) else {
+                    continue;
+                };
+                let rev = h_row.strand != q_row.strand;
+                let push_run = |out: &mut Vec<(usize, usize, usize, usize, usize, usize, bool)>,
+                                hinge_run_start: usize,
+                                qry_run_start: usize,
+                                run_len: usize| {
                     let rs = if h_row.strand == '+' {
                         h_row.start + hinge_run_start
                     } else {
@@ -402,88 +537,47 @@ fn extract_hal_blocks_from_pairwise_mafs(
                             .saturating_sub(q_row.start + qry_run_start + run_len)
                     };
                     out.push((q_idx, xi, yi, rs, qs, run_len, rev));
-                    run_len = 0;
-                }
-                if hb != b'-' {
-                    h_off += 1;
-                }
-                if qb != b'-' {
-                    q_off += 1;
-                }
-            }
-            if run_len > 0 {
-                let rs = if h_row.strand == '+' {
-                    h_row.start + hinge_run_start
-                } else {
-                    h_row
-                        .src_size
-                        .saturating_sub(h_row.start + hinge_run_start + run_len)
                 };
-                let qs = if q_row.strand == '+' {
-                    q_row.start + qry_run_start
-                } else {
-                    q_row
-                        .src_size
-                        .saturating_sub(q_row.start + qry_run_start + run_len)
-                };
-                out.push((q_idx, xi, yi, rs, qs, run_len, rev));
+                let mut h_off = 0usize;
+                let mut q_off = 0usize;
+                let mut hinge_run_start = 0usize;
+                let mut qry_run_start = 0usize;
+                let mut run_len = 0usize;
+                for (hb, qb) in h_row.seq.bytes().zip(q_row.seq.bytes()) {
+                    if hb != b'-' && qb != b'-' {
+                        if run_len == 0 {
+                            hinge_run_start = h_off;
+                            qry_run_start = q_off;
+                        }
+                        run_len += 1;
+                    } else if run_len > 0 {
+                        push_run(&mut local_out, hinge_run_start, qry_run_start, run_len);
+                        run_len = 0;
+                    }
+                    if hb != b'-' {
+                        h_off += 1;
+                    }
+                    if qb != b'-' {
+                        q_off += 1;
+                    }
+                }
+                if run_len > 0 {
+                    push_run(&mut local_out, hinge_run_start, qry_run_start, run_len);
+                }
             }
-        }
-    }
-    out
-}
-
-fn prefix_hinge_species_in_maf(hinge_sp: &str, maf: &str) -> String {
-    let prefix = format!("{hinge_sp}.");
-    let mut out = String::with_capacity(maf.len() + 256);
-    let mut first_s_in_block = true;
-    for line in maf.lines() {
-        if line.is_empty() || line.starts_with("a ") || line == "a" {
-            first_s_in_block = true;
-            out.push_str(line);
-            out.push('\n');
-        } else if first_s_in_block && let Some(rest) = line.strip_prefix("s ") {
-            first_s_in_block = false;
-            if let Some((src, tail)) = rest.split_once(' ')
-                && !src.starts_with(&prefix)
-            {
-                out.push_str("s ");
-                out.push_str(&prefix);
-                out.push_str(src);
-                out.push(' ');
-                out.push_str(tail);
-                out.push('\n');
-            } else {
-                out.push_str(line);
-                out.push('\n');
-            }
-        } else {
-            if line.starts_with("s ") {
-                first_s_in_block = false;
-            }
-            out.push_str(line);
-            out.push('\n');
-        }
-    }
-    out
+            local_out
+        })
+        .collect();
+    per_query.into_iter().flatten().collect()
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use super::prefix_hinge_species_in_maf;
     use crate::rescue::{
         build_ancestral_consensus_contigs, remap_consensus_maf_to_hinge, rescue_transitive_maf,
     };
     use horizon_aligner::complement_base;
-
-    #[test]
-    fn prefix_hinge_species_adds_missing_species_prefix() {
-        let maf = "##maf version=1\na score=2.0\ns NBAG03001603.1 0 4 + 10 ACGT\ns hg38.chr22 0 4 + 10 ACGT\n\n";
-        let got = prefix_hinge_species_in_maf("Pan_troglodytes", maf);
-        assert!(got.contains("s Pan_troglodytes.NBAG03001603.1 0 4 + 10 ACGT\n"));
-        assert!(got.contains("s hg38.chr22 0 4 + 10 ACGT\n"));
-    }
 
     #[test]
     fn complement_and_fwd_pos_handle_both_strands() {

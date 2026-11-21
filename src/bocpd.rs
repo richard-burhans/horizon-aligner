@@ -60,9 +60,14 @@ pub fn joint_pair_bits(a: u8, b: u8, pi_x: [f64; 4], pi_y: [f64; 4], identity: f
     if p_null <= 0.0 {
         return 0.0;
     }
+    let id = if identity.is_finite() {
+        identity.clamp(0.0, 1.0)
+    } else {
+        IDENTITY_PRIOR
+    };
     let p_avg = f64::midpoint(pa, pb);
-    let match_term = if ia == ib { identity * p_avg } else { 0.0 };
-    let p_joint = match_term + (1.0 - identity) * p_null;
+    let match_term = if ia == ib { id * p_avg } else { 0.0 };
+    let p_joint = match_term + (1.0 - id) * p_null;
     (p_joint / p_null).log2()
 }
 

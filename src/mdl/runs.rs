@@ -15,8 +15,11 @@ pub struct AlignedRun {
 
 impl AlignedRun {
     /// Expand this run into `(x, y)` pairs.
+    ///
+    /// # Panics
+    /// Panics if `self.is_rc` and `self.y_start + 1 < self.len`.
     pub fn push_pairs(&self, out: &mut Vec<(usize, usize)>) {
-        debug_assert!(!self.is_rc || self.y_start + 1 >= self.len);
+        assert!(!self.is_rc || self.y_start + 1 >= self.len);
         out.reserve(self.len);
         if self.is_rc {
             for k in 0..self.len {
@@ -82,10 +85,10 @@ pub fn merge_colinear_runs(runs: &mut Vec<AlignedRun>) {
     for read_idx in 1..runs.len() {
         let next = runs[read_idx];
         let cur = &mut runs[write_idx];
-        let cur_x_end = cur.x_start + cur.len;
+        let cur_x_end = cur.x_start.saturating_add(cur.len);
         if cur.is_rc == next.is_rc && diag_key(cur) == diag_key(&next) && next.x_start <= cur_x_end
         {
-            let next_x_end = next.x_start + next.len;
+            let next_x_end = next.x_start.saturating_add(next.len);
             if next_x_end > cur_x_end {
                 cur.len = next_x_end - cur.x_start;
             }

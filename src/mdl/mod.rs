@@ -12,12 +12,15 @@ use crate::seeding::{
 };
 use rayon::prelude::*;
 
+mod crc;
 mod dag;
 mod dag_seed;
 mod dp;
+mod dp_fast;
 mod fallback;
 mod runs;
 mod xdrop;
+pub use crc::*;
 pub use dag::*;
 pub use dag_seed::*;
 pub use dp::*;
@@ -232,7 +235,6 @@ pub fn align_contig_pair_runs(
     let span = MASK_PRIMARY_11_15.len();
     let seq_x = &idx_x.seq;
     let seq_y = &idx_y.seq;
-    let seq_y_rc = &idx_y.seq_rc;
 
     let profile = *PROFILE_ENABLED.get_or_init(|| std::env::var_os("HORIZON_PROFILE").is_some());
     let t_start = std::time::Instant::now();
@@ -256,6 +258,8 @@ pub fn align_contig_pair_runs(
             internal_bubbles: 0,
         });
     }
+    let seq_y_rc_buf = crate::seeding::revcomp_preserve_case(seq_y);
+    let seq_y_rc = seq_y_rc_buf.as_slice();
 
     let PrimaryMetrics {
         covered_x,
@@ -280,6 +284,7 @@ pub fn align_contig_pair_runs(
     } = fallback::collect_fallback_lcbs(
         idx_x,
         idx_y,
+        seq_y_rc,
         &raw_fwd,
         &raw_rc,
         &covered_x,
@@ -405,22 +410,13 @@ fn schedule_and_run_extension(ctx: &mut AlignCtx<'_>) -> Result<ExtensionOutput,
         const CRC_ALPHA: f64 = 0.07;
         // Minimum sample count >= ceil(1 / CRC_ALPHA) so (0 + 1) / (n + 1) <= CRC_ALPHA.
         const CRC_N_CAL: usize = 15;
-        let observed_gc = dp::estimate_sampled_gc(ctx.seq_x, ctx.seq_y);
-        let gc_crc = dp::calibrate_null_crc_for_gc(
-            observed_gc,
-            CRC_N_CAL,
-            CRC_ALPHA,
-            ctx.effective_min_bits,
-            &hmm_params,
-        );
-        dp::calibrate_null_crc_from_seqs_with_gc_floor(
+        crc::calibrate_null_crc_from_seqs(
             ctx.seq_x,
             ctx.seq_y,
             CRC_N_CAL,
             CRC_ALPHA,
             ctx.effective_min_bits,
             &hmm_params,
-            gc_crc,
         )
     };
 

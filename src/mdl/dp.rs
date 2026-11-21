@@ -79,213 +79,6 @@ impl HmmParams {
     }
 }
 
-/// Calibrate a Conformal Risk Control (Angelopoulos et al. 2024) bit-savings
-/// threshold `λ̂ >= base_floor_bits` from `n_cal` null/decoy block bit scores
-/// such that the finite-sample false-positive bound `(count(score >= λ̂) + 1) / (n_cal + 1) <= alpha` holds.
-#[must_use]
-pub fn calibrate_crc_threshold(null_block_bits: &[f64], alpha: f64, base_floor_bits: f64) -> f64 {
-    if null_block_bits.is_empty() || !alpha.is_finite() || alpha <= 0.0 {
-        return base_floor_bits;
-    }
-    let mut scores: Vec<f64> = null_block_bits
-        .iter()
-        .copied()
-        .filter(|s| s.is_finite())
-        .collect();
-    if scores.is_empty() {
-        return base_floor_bits;
-    }
-    scores.sort_by(f64::total_cmp);
-    let n = scores.len();
-    #[allow(clippy::cast_precision_loss)]
-    let denom = (n + 1) as f64;
-    for (idx, &s) in scores.iter().enumerate() {
-        let candidate = s.max(base_floor_bits);
-        // Number of calibration scores >= candidate (strictly speaking, > s if we set λ̂ = s + eps,
-        // or >= s if we include ties). Count scores strictly above s if we add a tiny eps.
-        let n_ge = n - idx - 1;
-        #[allow(clippy::cast_precision_loss)]
-        let upper_risk = (n_ge as f64 + 1.0) / denom;
-        if upper_risk <= alpha {
-            return candidate + if s >= base_floor_bits { 1e-6 } else { 0.0 };
-        }
-    }
-    scores[n - 1].max(base_floor_bits) + 1e-6
-}
-
-/// Calibrate `λ̂` via `n_cal` deterministic decoy windows drawn at composition `gc_frac`
-/// under `params`, ensuring `(n_cal * R_hat + 1) / (n_cal + 1) <= alpha` while never
-/// dropping below `base_floor_bits`.
-#[must_use]
-pub fn calibrate_null_crc_for_gc(
-    gc_frac: f64,
-    n_cal: usize,
-    alpha: f64,
-    base_floor_bits: f64,
-    params: &HmmParams,
-) -> f64 {
-    if n_cal == 0 {
-        return base_floor_bits;
-    }
-    let gc = gc_frac.clamp(0.05, 0.95);
-    let win_len = 64usize;
-    let mut scores = Vec::with_capacity(n_cal);
-    let mut x = vec![b'A'; win_len];
-    let mut y = vec![b'A'; win_len];
-    let mut scratch = DpScratch::default();
-    for draw in 0..n_cal {
-        let mut state =
-            0x9E37_79B9_7F4A_7C15_u64 ^ ((draw as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9));
-        for buf in [&mut x, &mut y] {
-            for b in buf.iter_mut() {
-                state ^= state << 13;
-                state ^= state >> 7;
-                state ^= state << 17;
-                #[allow(clippy::cast_precision_loss)]
-                let u = ((state >> 11) as f64) / ((1_u64 << 53) as f64);
-                *b = if u < gc * 0.5 {
-                    b'G'
-                } else if u < gc {
-                    b'C'
-                } else if u < gc + (1.0 - gc) * 0.5 {
-                    b'A'
-                } else {
-                    b'T'
-                };
-            }
-        }
-        let res = banded_mdl_gap_with_scratch(
-            &x,
-            &y,
-            16,
-            base_floor_bits,
-            params,
-            MIN_POST_PROB,
-            &mut scratch,
-        );
-        let null_bits = if res.kept_pairs.is_empty() {
-            0.0
-        } else {
-            res.score_bits.max(0.0)
-        };
-        scores.push(null_bits);
-    }
-    calibrate_crc_threshold(&scores, alpha, base_floor_bits)
-}
-
-/// Calibrate `λ̂` from `n_cal` empirical biological negative windows drawn from
-/// `seq_x` and reversed non-collinear windows of `seq_y`, falling back to
-/// [`calibrate_null_crc_for_gc`] when fewer than `n_cal` valid ACGT windows exist.
-#[must_use]
-pub(crate) fn estimate_sampled_gc(seq_x: &[u8], seq_y: &[u8]) -> f64 {
-    let mut gc = 0usize;
-    let mut acgt = 0usize;
-    for &b in seq_x.iter().take(4096).chain(seq_y.iter().take(4096)) {
-        match b.to_ascii_uppercase() {
-            b'G' | b'C' => {
-                gc += 1;
-                acgt += 1;
-            }
-            b'A' | b'T' => acgt += 1,
-            _ => {}
-        }
-    }
-    #[allow(clippy::cast_precision_loss)]
-    if acgt > 0 {
-        gc as f64 / acgt as f64
-    } else {
-        0.5
-    }
-}
-
-#[must_use]
-pub fn calibrate_null_crc_from_seqs(
-    seq_x: &[u8],
-    seq_y: &[u8],
-    n_cal: usize,
-    alpha: f64,
-    base_floor_bits: f64,
-    params: &HmmParams,
-) -> f64 {
-    let obs_gc = estimate_sampled_gc(seq_x, seq_y);
-    let gc_crc = calibrate_null_crc_for_gc(obs_gc, n_cal, alpha, base_floor_bits, params);
-    calibrate_null_crc_from_seqs_with_gc_floor(
-        seq_x,
-        seq_y,
-        n_cal,
-        alpha,
-        base_floor_bits,
-        params,
-        gc_crc,
-    )
-}
-
-#[must_use]
-pub(crate) fn calibrate_null_crc_from_seqs_with_gc_floor(
-    seq_x: &[u8],
-    seq_y: &[u8],
-    n_cal: usize,
-    alpha: f64,
-    base_floor_bits: f64,
-    params: &HmmParams,
-    gc_crc: f64,
-) -> f64 {
-    const WIN: usize = 64;
-    if n_cal == 0 || seq_x.len() < WIN * 2 || seq_y.len() < WIN * 2 {
-        return gc_crc;
-    }
-
-    let max_x = seq_x.len() - WIN;
-    let max_y = seq_y.len() - WIN;
-    let mut scores = Vec::with_capacity(n_cal);
-    let mut y_rev = [b'A'; WIN];
-    let mut scratch = DpScratch::default();
-    let mut tries = 0usize;
-    let max_tries = n_cal * 4;
-    let mut draw = 0usize;
-    while scores.len() < n_cal && tries < max_tries {
-        tries += 1;
-        draw += 1;
-        let sx = (draw.wrapping_mul(max_x / n_cal.max(1) + 97)) % (max_x + 1);
-        let sy = (max_y.saturating_sub(sx % (max_y + 1)) + draw.wrapping_mul(131)) % (max_y + 1);
-        let wx = &seq_x[sx..sx + WIN];
-        let wy = &seq_y[sy..sy + WIN];
-        let acgt_x = wx
-            .iter()
-            .filter(|b| matches!(b.to_ascii_uppercase(), b'A' | b'C' | b'G' | b'T'))
-            .count();
-        let acgt_y = wy
-            .iter()
-            .filter(|b| matches!(b.to_ascii_uppercase(), b'A' | b'C' | b'G' | b'T'))
-            .count();
-        if acgt_x * 2 < WIN || acgt_y * 2 < WIN {
-            continue;
-        }
-        for (dst, &src) in y_rev.iter_mut().zip(wy.iter().rev()) {
-            *dst = src;
-        }
-        let res = banded_mdl_gap_with_scratch(
-            wx,
-            &y_rev,
-            16,
-            base_floor_bits,
-            params,
-            MIN_POST_PROB,
-            &mut scratch,
-        );
-        let null_bits = if res.kept_pairs.is_empty() {
-            0.0
-        } else {
-            res.score_bits.max(0.0)
-        };
-        scores.push(null_bits);
-    }
-    if scores.len() < n_cal {
-        return gc_crc;
-    }
-    calibrate_crc_threshold(&scores, alpha, base_floor_bits).max(gc_crc)
-}
-
 /// Result of aligning one inter-anchor gap.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GapResult {
@@ -317,9 +110,13 @@ pub(crate) struct DpScratch {
     biy: Vec<f64>,
     raw_cols: Vec<(Option<usize>, Option<usize>, f64, f64)>,
     abstain: Vec<bool>,
+    pub(super) vit_m: Vec<f32>,
+    pub(super) vit_x: Vec<f32>,
+    pub(super) vit_y: Vec<f32>,
+    pub(super) vit_trace: Vec<u8>,
 }
 
-pub(crate) fn prepare_grid_f64(buf: &mut Vec<f64>, total: usize, init: f64) -> bool {
+pub(crate) fn prepare_grid<T: Copy>(buf: &mut Vec<T>, total: usize, init: T) -> bool {
     buf.clear();
     if buf.capacity() < total && buf.try_reserve_exact(total).is_err() {
         return false;
@@ -478,6 +275,11 @@ pub(super) fn filter_mea_pairs_and_count_bubbles<X: Copy>(
     let k = raw_cols.len();
     abstain.clear();
     abstain.resize(k, false);
+    if min_block_bits.is_nan() || min_block_bits == f64::INFINITY {
+        abstain.fill(true);
+        let bubbles = usize::from(k >= 6);
+        return (Vec::new(), bubbles);
+    }
     let mut idx = 0;
     while idx < k {
         let (cx, cy, _, pp) = raw_cols[idx];
@@ -533,13 +335,6 @@ pub(super) fn filter_mea_pairs_and_count_bubbles<X: Copy>(
 }
 
 /// Run banded forward-backward MDL + BOCPD alignment on one gap reusing `scratch` buffers.
-#[allow(
-    clippy::too_many_lines,
-    clippy::similar_names,
-    clippy::many_single_char_names,
-    clippy::cast_possible_wrap,
-    clippy::cast_sign_loss
-)]
 pub(crate) fn banded_mdl_gap_with_scratch(
     seq_x: &[u8],
     seq_y: &[u8],
@@ -551,13 +346,115 @@ pub(crate) fn banded_mdl_gap_with_scratch(
 ) -> GapResult {
     let n = seq_x.len();
     let m = seq_y.len();
-    if n == 0 || m == 0 {
+    if n == 0 || m == 0 || !min_block_bits.is_finite() {
         return GapResult {
             kept_pairs: Vec::new(),
             bubbles: usize::from(n.max(m) >= 6),
             score_bits: 0.0,
         };
     }
+    if let Some(fast) =
+        super::dp_fast::try_diagonal_fast_path(seq_x, seq_y, min_block_bits, min_post_prob)
+    {
+        return fast;
+    }
+    if let Some(fast_vit) = super::dp_fast::try_banded_viterbi_fast_path(
+        seq_x,
+        seq_y,
+        band_w,
+        min_block_bits,
+        min_post_prob,
+        scratch,
+    ) {
+        return fast_vit;
+    }
+    if n >= 24 && m >= 24 && min_post_prob <= 0.90 {
+        let (pref, suff) = super::dp_fast::matching_prefix_suffix_lens(seq_x, seq_y);
+        if pref + suff >= 16 && (pref + suff) < n.min(m) {
+            let mid_x = &seq_x[pref..(n - suff)];
+            let mid_y = &seq_y[pref..(m - suff)];
+            #[allow(clippy::cast_precision_loss)]
+            let flank_bits = ((pref + suff) as f64) * 1.5;
+            let adj_min_bits = (min_block_bits - flank_bits).max(0.0);
+            let mid_res = banded_mdl_gap_core(
+                mid_x,
+                mid_y,
+                band_w,
+                adj_min_bits,
+                params,
+                min_post_prob,
+                scratch,
+            );
+            if mid_res.kept_pairs.is_empty()
+                || !mid_res.score_bits.is_finite()
+                || mid_res.score_bits <= NEG_INF * 0.5
+            {
+                let mut kept_pairs = Vec::new();
+                let mut score_bits = 0.0;
+                #[allow(clippy::cast_precision_loss)]
+                let pref_bits = (pref as f64) * 1.5;
+                #[allow(clippy::cast_precision_loss)]
+                let suff_bits = (suff as f64) * 1.5;
+                if pref > 0 && pref_bits >= min_block_bits {
+                    kept_pairs.extend((0..pref).map(|i| (i, i)));
+                    score_bits += pref_bits;
+                }
+                if suff > 0 && suff_bits >= min_block_bits {
+                    kept_pairs.extend((0..suff).map(|k| (n - suff + k, m - suff + k)));
+                    score_bits += suff_bits;
+                }
+                return GapResult {
+                    kept_pairs,
+                    bubbles: mid_res.bubbles,
+                    score_bits,
+                };
+            }
+            let mut kept_pairs = Vec::with_capacity(pref + mid_res.kept_pairs.len() + suff);
+            for i in 0..pref {
+                kept_pairs.push((i, i));
+            }
+            for (mx, my) in mid_res.kept_pairs {
+                kept_pairs.push((pref + mx, pref + my));
+            }
+            for k in 0..suff {
+                kept_pairs.push((n - suff + k, m - suff + k));
+            }
+            return GapResult {
+                kept_pairs,
+                bubbles: mid_res.bubbles,
+                score_bits: flank_bits + mid_res.score_bits,
+            };
+        }
+    }
+    banded_mdl_gap_core(
+        seq_x,
+        seq_y,
+        band_w,
+        min_block_bits,
+        params,
+        min_post_prob,
+        scratch,
+    )
+}
+
+#[allow(
+    clippy::too_many_lines,
+    clippy::similar_names,
+    clippy::many_single_char_names,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss
+)]
+fn banded_mdl_gap_core(
+    seq_x: &[u8],
+    seq_y: &[u8],
+    band_w: usize,
+    min_block_bits: f64,
+    params: &HmmParams,
+    min_post_prob: f64,
+    scratch: &mut DpScratch,
+) -> GapResult {
+    let n = seq_x.len();
+    let m = seq_y.len();
 
     bocpd_gc_profile_into(
         seq_x,
@@ -614,10 +511,10 @@ pub(crate) fn banded_mdl_gap_with_scratch(
     let stride = layout.stride;
     let total = layout.total;
 
-    if !prepare_grid_f64(&mut scratch.fm, total, 0.0)
-        || !prepare_grid_f64(&mut scratch.fix, total, 0.0)
-        || !prepare_grid_f64(&mut scratch.fiy, total, 0.0)
-        || !prepare_grid_f64(&mut scratch.sub_grid, total, 1.0)
+    if !prepare_grid(&mut scratch.fm, total, 0.0)
+        || !prepare_grid(&mut scratch.fix, total, 0.0)
+        || !prepare_grid(&mut scratch.fiy, total, 0.0)
+        || !prepare_grid(&mut scratch.sub_grid, total, 1.0)
     {
         return abstained_gap_result(usize::from(n.max(m) >= 6), 0.0);
     }
@@ -732,14 +629,14 @@ pub(crate) fn banded_mdl_gap_with_scratch(
     let z_scaled = layout.slot(n, m).map_or(0.0_f64, |snm| {
         scratch.fm[snm] + scratch.fix[snm] + scratch.fiy[snm]
     });
-    if z_scaled <= 0.0 {
+    if !z_scaled.is_finite() || z_scaled <= 0.0 {
         return abstained_gap_result(1, NEG_INF);
     }
     let score_bits = log2_scale_sum + z_scaled.log2();
 
-    if !prepare_grid_f64(&mut scratch.bm, total, 0.0)
-        || !prepare_grid_f64(&mut scratch.bix, total, 0.0)
-        || !prepare_grid_f64(&mut scratch.biy, total, 0.0)
+    if !prepare_grid(&mut scratch.bm, total, 0.0)
+        || !prepare_grid(&mut scratch.bix, total, 0.0)
+        || !prepare_grid(&mut scratch.biy, total, 0.0)
     {
         return abstained_gap_result(usize::from(n.max(m) >= 6), 0.0);
     }
@@ -954,23 +851,6 @@ mod tests {
     }
 
     #[test]
-    fn crc_threshold_respects_n_cal_15_and_alpha_0_07() {
-        let scores = vec![
-            1.2, 2.5, 3.1, 4.0, 4.5, 5.2, 6.0, 6.8, 7.1, 8.0, 8.5, 9.2, 9.8, 11.4, 12.6,
-        ];
-        // For n_cal = 15, alpha = 0.07: (0 + 1) / 16 = 0.0625 <= 0.07, so lambda_hat > 12.6
-        let lam = super::calibrate_crc_threshold(&scores, 0.07, 10.0);
-        assert!(lam > 12.6 && lam < 12.61, "got {lam}");
-
-        let low_scores = vec![1.0; 15];
-        assert!((super::calibrate_crc_threshold(&low_scores, 0.07, 10.0) - 10.0).abs() < 1e-9);
-
-        let params = super::HmmParams::default();
-        let gc_lam = super::calibrate_null_crc_for_gc(0.18, 15, 0.07, 10.0, &params);
-        assert!(gc_lam >= 10.0 && gc_lam.is_finite());
-    }
-
-    #[test]
     fn dip_bridging_does_not_bridge_across_gap_when_min_post_prob_zero() {
         let mut abstain = Vec::new();
         let cols2 = vec![
@@ -995,5 +875,42 @@ mod tests {
             low > mid && mid > high,
             "higher identity prior should penalize single-base mismatches more strongly: {low} > {mid} > {high}"
         );
+    }
+
+    #[test]
+    fn diagonal_fast_path_recovers_near_identical_gap() {
+        let x = b"ACGTACGTACGTACGTACGTACGTACGTACGTACGT";
+        let mut y = *x;
+        y[10] = b'T';
+        let res = super::banded_mdl_gap(x, &y, 16, 10.0);
+        assert_eq!(res.bubbles, 0);
+        assert_eq!(res.kept_pairs.len(), x.len());
+        assert_eq!(res.kept_pairs[0], (0, 0));
+        assert_eq!(res.kept_pairs[x.len() - 1], (x.len() - 1, x.len() - 1));
+    }
+
+    #[test]
+    fn prefix_suffix_trimming_handles_internal_indel() {
+        let mut x = b"ACGTACGTACGTACGTACGTACGT".to_vec();
+        x.extend_from_slice(b"GGG");
+        x.extend_from_slice(b"TGCATGCATGCATGCATGCATGCA");
+        let mut y = b"ACGTACGTACGTACGTACGTACGT".to_vec();
+        y.extend_from_slice(b"TGCATGCATGCATGCATGCATGCA");
+        let res = super::banded_mdl_gap(&x, &y, 16, 10.0);
+        assert_eq!(res.kept_pairs.len(), y.len());
+        assert_eq!(res.kept_pairs[0], (0, 0));
+        assert_eq!(res.kept_pairs[y.len() - 1], (x.len() - 1, y.len() - 1));
+    }
+
+    #[test]
+    fn banded_viterbi_fast_path_recovers_small_indel_with_flank_snps() {
+        let mut x = b"AACTGACTGACTGACTGACTGACTGACTGACTG".to_vec();
+        x.extend_from_slice(b"TTT");
+        x.extend_from_slice(b"GATTACAGATTACAGATTACAGATTACAA");
+        let mut y = b"ATCTGACTGACTGACTGACTGACTGACTGACTG".to_vec();
+        y.extend_from_slice(b"GATTACAGATTACAGATTACAGATTACAT");
+        let res = super::banded_mdl_gap(&x, &y, 16, 10.0);
+        assert_eq!(res.bubbles, 0);
+        assert_eq!(res.kept_pairs.len(), y.len());
     }
 }

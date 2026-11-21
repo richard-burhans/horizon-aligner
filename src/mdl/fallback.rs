@@ -36,6 +36,7 @@ fn record_spans(map: &mut HashMap<(usize, usize), usize>, lcbs: &[Vec<(usize, us
 struct FallbackCtx<'a, F: Fn(&mut AnchorPairs)> {
     idx_x: &'a ContigIndex,
     idx_y: &'a ContigIndex,
+    seq_y_rc: &'a [u8],
     filter_uncovered: &'a F,
     combined_fwd: &'a mut LcbList,
     combined_rc: &'a mut LcbList,
@@ -66,7 +67,7 @@ impl<F: Fn(&mut AnchorPairs)> FallbackCtx<'_, F> {
         append_hsp_gated_lcbs(
             self.combined_rc,
             &self.idx_x.seq,
-            &self.idx_y.seq_rc,
+            self.seq_y_rc,
             hits_rc,
             span_len,
             thresh,
@@ -79,6 +80,7 @@ impl<F: Fn(&mut AnchorPairs)> FallbackCtx<'_, F> {
 pub(super) fn collect_fallback_lcbs(
     idx_x: &ContigIndex,
     idx_y: &ContigIndex,
+    seq_y_rc: &[u8],
     raw_fwd: &[Vec<(usize, usize)>],
     raw_rc: &[Vec<(usize, usize)>],
     covered_x: &[bool],
@@ -107,6 +109,7 @@ pub(super) fn collect_fallback_lcbs(
     let mut ctx = FallbackCtx {
         idx_x,
         idx_y,
+        seq_y_rc,
         filter_uncovered: &filter_uncovered,
         combined_fwd: &mut combined_fwd,
         combined_rc: &mut combined_rc,
@@ -115,35 +118,33 @@ pub(super) fn collect_fallback_lcbs(
         cfg,
     };
 
-    // Sparse-exon fallback: w=10 exact seeds in intervals not covered by w=12 LCBs
-    // (skip when w=12 already covers >= min_fallback_cov of the reference contig).
-    let y10_idx_opt = if primary_cov < min_fallback_cov {
-        Some(collect_w10_lcbs(&mut ctx)?)
-    } else {
-        None
-    };
-    let t_w10 = t_start.elapsed();
-
-    // LASTZ-style 12-of-19 + 1-transition hits gated by ungapped X-drop HSP score
-    // (skip when w=12 already covers >= min_fallback_cov of the reference contig).
-    let y_lz12 = if primary_cov < min_fallback_cov {
-        Some(collect_lz12_lcbs(&mut ctx, base_hsp_thresh + hsp_bonus)?)
-    } else {
-        None
-    };
-    let t_lz1 = t_start.elapsed();
-
-    let mut cached_ry_hits = None;
-    if cfg.use_multi_shape_seeds && primary_cov < min_fallback_cov {
-        cached_ry_hits = collect_multi_shape_lcbs(
+    // Sparse-exon, LASTZ-style 12-of-19 + 1-transition, and multi-shape fallbacks
+    // (skipped when w=12 already covers >= min_fallback_cov of the reference contig).
+    let (t_w10, t_lz1, cached_ry_hits) = if primary_cov < min_fallback_cov {
+        let y10 = Some(collect_w10_lcbs(&mut ctx)?);
+        let tw10 = t_start.elapsed();
+        let ylz12 = Some(collect_lz12_lcbs(
             &mut ctx,
-            y_lz12.as_ref(),
-            y10_idx_opt.as_ref(),
-            base_hsp_thresh,
-            hsp_bonus,
-            aa_bonus,
-        )?;
-    }
+            base_hsp_thresh.saturating_add(hsp_bonus),
+        )?);
+        let tlz1 = t_start.elapsed();
+        let ry = if cfg.use_multi_shape_seeds {
+            collect_multi_shape_lcbs(
+                &mut ctx,
+                ylz12.as_ref().expect("lz12 index built above"),
+                y10.as_ref().expect("w10 index built above"),
+                base_hsp_thresh,
+                hsp_bonus,
+                aa_bonus,
+            )?
+        } else {
+            None
+        };
+        (tw10, tlz1, ry)
+    } else {
+        let now = t_start.elapsed();
+        (now, now, None)
+    };
 
     // Transition-tolerant R/Y (1-bit purine/pyrimidine) fallback for divergent homologs.
     if cfg.use_ry_seeds {
@@ -234,16 +235,15 @@ fn collect_lz12_lcbs<F: Fn(&mut AnchorPairs)>(
 
 fn collect_multi_shape_lcbs<F: Fn(&mut AnchorPairs)>(
     ctx: &mut FallbackCtx<'_, F>,
-    y_lz12: Option<&FlatSeedIndex>,
-    y10_idx_opt: Option<&FlatSeedIndex>,
+    lz_idx: &FlatSeedIndex,
+    y10_idx: &FlatSeedIndex,
     base_hsp_thresh: i32,
     hsp_bonus: i32,
     aa_bonus: i32,
 ) -> Result<Option<HitPair>, AlignError> {
+    const MAX_HEAVY_FALLBACK_CELLS: u128 = 1_000_000_000;
     let search_cells = (ctx.idx_x.seq.len() as u128) * (ctx.idx_y.seq.len() as u128);
-    if search_cells < 1_000_000_000
-        && let Some(lz_idx) = y_lz12
-    {
+    if search_cells < MAX_HEAVY_FALLBACK_CELLS {
         let (mut f, mut r) = find_lastz12_2transition_hits_flat(
             &ctx.idx_x.seq,
             Some(&ctx.idx_x.sdust),
@@ -252,7 +252,12 @@ fn collect_multi_shape_lcbs<F: Fn(&mut AnchorPairs)>(
         );
         (ctx.filter_uncovered)(&mut f);
         (ctx.filter_uncovered)(&mut r);
-        ctx.append_hsp_pair_lcbs(&f, &r, base_hsp_thresh + 30 + hsp_bonus, MASK_LASTZ12.len());
+        ctx.append_hsp_pair_lcbs(
+            &f,
+            &r,
+            base_hsp_thresh.saturating_add(30).saturating_add(hsp_bonus),
+            MASK_LASTZ12.len(),
+        );
     }
 
     let y_lz11 = FlatSeedIndex::build_with_sdust(
@@ -274,19 +279,23 @@ fn collect_multi_shape_lcbs<F: Fn(&mut AnchorPairs)>(
     ctx.append_hsp_pair_lcbs(
         &f11,
         &r11,
-        base_hsp_thresh + 30 + hsp_bonus,
+        base_hsp_thresh.saturating_add(30).saturating_add(hsp_bonus),
         MASK_LASTZ11.len(),
     );
 
     collect_ph11_lcbs(ctx)?;
 
-    let cached_ry_hits = if search_cells < 1_000_000_000 {
-        collect_ry_and_w10_1trans_lcbs(ctx, y10_idx_opt, base_hsp_thresh + 40 + hsp_bonus)?
+    let cached_ry_hits = if search_cells < MAX_HEAVY_FALLBACK_CELLS {
+        collect_ry_and_w10_1trans_lcbs(
+            ctx,
+            y10_idx,
+            base_hsp_thresh.saturating_add(40).saturating_add(hsp_bonus),
+        )?
     } else {
         None
     };
 
-    collect_aa5_lcbs(ctx, (base_hsp_thresh / 2) + aa_bonus);
+    collect_aa5_lcbs(ctx, (base_hsp_thresh / 2).saturating_add(aa_bonus));
 
     Ok(cached_ry_hits)
 }
@@ -324,7 +333,7 @@ fn collect_ph11_lcbs<F: Fn(&mut AnchorPairs)>(
 
 fn collect_ry_and_w10_1trans_lcbs<F: Fn(&mut AnchorPairs)>(
     ctx: &mut FallbackCtx<'_, F>,
-    y10_idx_opt: Option<&FlatSeedIndex>,
+    y10_idx: &FlatSeedIndex,
     thresh: i32,
 ) -> Result<Option<HitPair>, AlignError> {
     let x_ry = FlatSeedIndex::build_with_sdust(
@@ -348,17 +357,15 @@ fn collect_ry_and_w10_1trans_lcbs<F: Fn(&mut AnchorPairs)>(
     (ctx.filter_uncovered)(&mut rry);
     let cached = ctx.cfg.use_ry_seeds.then(|| (fry.clone(), rry.clone()));
     ctx.append_hsp_pair_lcbs(&fry, &rry, thresh, MASK_RY20.len());
-    if let Some(y10_idx) = y10_idx_opt {
-        let (mut fw10, mut rw10) = find_w10_1transition_hits_flat(
-            &ctx.idx_x.seq,
-            Some(&ctx.idx_x.sdust),
-            y10_idx,
-            ctx.cfg.skip_softmasked,
-        );
-        (ctx.filter_uncovered)(&mut fw10);
-        (ctx.filter_uncovered)(&mut rw10);
-        ctx.append_hsp_pair_lcbs(&fw10, &rw10, thresh, MASK_W10.len());
-    }
+    let (mut fw10, mut rw10) = find_w10_1transition_hits_flat(
+        &ctx.idx_x.seq,
+        Some(&ctx.idx_x.sdust),
+        y10_idx,
+        ctx.cfg.skip_softmasked,
+    );
+    (ctx.filter_uncovered)(&mut fw10);
+    (ctx.filter_uncovered)(&mut rw10);
+    ctx.append_hsp_pair_lcbs(&fw10, &rw10, thresh, MASK_W10.len());
     Ok(cached)
 }
 
@@ -368,7 +375,7 @@ fn collect_aa5_lcbs<F: Fn(&mut AnchorPairs)>(ctx: &mut FallbackCtx<'_, F>, thres
     let (mut aa_fwd, mut aa_rc) = find_translated_aa5_hits_both(
         &ctx.idx_x.seq,
         &ctx.idx_y.seq,
-        &ctx.idx_y.seq_rc,
+        ctx.seq_y_rc,
         4,
         ctx.cfg.skip_softmasked,
     );
@@ -387,7 +394,7 @@ fn collect_aa5_lcbs<F: Fn(&mut AnchorPairs)>(ctx: &mut FallbackCtx<'_, F>, thres
     append_hsp_gated_aa_lcbs(
         ctx.combined_rc,
         &ctx.idx_x.seq,
-        &ctx.idx_y.seq_rc,
+        ctx.seq_y_rc,
         &aa_rc,
         thresh,
     );

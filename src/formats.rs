@@ -173,7 +173,7 @@ pub fn format_gfa_blocks_runs(name_x: &str, name_y: &str, aln: &RunAlignment) ->
             let first = grp[0];
             let last = grp[grp.len() - 1];
             let total_bp: usize = grp.iter().map(|r| r.len).sum();
-            let x_end = last.x_start + last.len;
+            let x_end = last.x_start.saturating_add(last.len);
             (first.x_start, first.y_start, total_bp, x_end, strand)
         })
         .collect();
@@ -196,6 +196,116 @@ pub fn resolve_alignment_duplications_runs(aln: &RunAlignment, bin_bp: usize) ->
     dups.into_iter().collect()
 }
 
+/// Materialized alignment strings and coordinates for one colinear run group.
+pub(crate) struct MaterializedRunGroup {
+    pub x0: usize,
+    pub x_end: usize,
+    pub y_start: usize,
+    pub y_span: usize,
+    pub y_strand: char,
+    pub score_bp: usize,
+    pub ax: Vec<u8>,
+    pub ay: Vec<u8>,
+}
+
+/// Validate a colinear run group and materialize its uppercase gapped alignment rows.
+#[must_use]
+pub(crate) fn materialize_run_group(
+    len_x: usize,
+    len_y: usize,
+    seq_x: &[u8],
+    seq_y: &[u8],
+    grp: &[crate::mdl::AlignedRun],
+    is_rev: bool,
+) -> Option<MaterializedRunGroup> {
+    if grp.is_empty() || len_x < seq_x.len() || len_y < seq_y.len() {
+        return None;
+    }
+    let valid = grp.iter().all(|r| {
+        r.len > 0
+            && r.x_start
+                .checked_add(r.len)
+                .is_some_and(|e| e <= seq_x.len())
+            && if r.is_rc {
+                r.y_start < seq_y.len() && r.y_start + 1 >= r.len
+            } else {
+                r.y_start
+                    .checked_add(r.len)
+                    .is_some_and(|e| e <= seq_y.len())
+            }
+    });
+    if !valid {
+        return None;
+    }
+    let x0 = grp[0].x_start;
+    let last = grp[grp.len() - 1];
+    let x_end = last.x_start + last.len;
+    let score_bp: usize = grp.iter().map(|r| r.len).sum();
+    let mut ax = Vec::with_capacity(x_end - x0 + 16);
+    let mut ay = Vec::with_capacity(x_end - x0 + 16);
+
+    let mut prev_x_end = x0;
+    let mut prev_y_next = grp[0].y_start;
+    for (ri, r) in grp.iter().enumerate() {
+        if ri > 0 {
+            for &bx in &seq_x[prev_x_end..r.x_start] {
+                ax.push(bx.to_ascii_uppercase());
+                ay.push(b'-');
+            }
+            if is_rev {
+                for &by in seq_y[(r.y_start + 1)..prev_y_next].iter().rev() {
+                    ax.push(b'-');
+                    ay.push(complement_base(by.to_ascii_uppercase()));
+                }
+            } else {
+                for &by in &seq_y[prev_y_next..r.y_start] {
+                    ax.push(b'-');
+                    ay.push(by.to_ascii_uppercase());
+                }
+            }
+        }
+        for &bx in &seq_x[r.x_start..(r.x_start + r.len)] {
+            ax.push(bx.to_ascii_uppercase());
+        }
+        if is_rev {
+            let y_lo = r.y_start + 1 - r.len;
+            for &by in seq_y[y_lo..=r.y_start].iter().rev() {
+                ay.push(complement_base(by.to_ascii_uppercase()));
+            }
+            prev_y_next = y_lo;
+        } else {
+            let y_hi = r.y_start + r.len;
+            for &by in &seq_y[r.y_start..y_hi] {
+                ay.push(by.to_ascii_uppercase());
+            }
+            prev_y_next = y_hi;
+        }
+        prev_x_end = r.x_start + r.len;
+    }
+
+    let (y_start, y_span, y_strand) = if is_rev {
+        let y_lo = last.y_start + 1 - last.len;
+        let y_hi = grp[0].y_start + 1;
+        let iv = crate::coord::Interval::new(y_lo, y_hi, '-', len_y);
+        (iv.ucsc_start(), y_hi - y_lo, '-')
+    } else {
+        let y_lo = grp[0].y_start;
+        let y_hi = last.y_start + last.len;
+        (y_lo, y_hi - y_lo, '+')
+    };
+
+    Some(MaterializedRunGroup {
+        x0,
+        x_end,
+        y_start,
+        y_span,
+        y_strand,
+        score_bp,
+        ax,
+        ay,
+    })
+}
+
 /// Group run-encoded alignments into colinear MAF blocks and emit standard MAF v1 text.
 #[must_use]
 #[allow(clippy::too_many_arguments)]
@@ -213,80 +323,17 @@ pub fn format_maf_blocks_runs(
         return out;
     }
     for (grp, is_rev) in partition_colinear_run_groups(&aln.aligned_runs) {
-        let valid = grp.iter().all(|r| {
-            r.len > 0
-                && r.x_start + r.len <= seq_x.len()
-                && if r.is_rc {
-                    r.y_start < seq_y.len() && r.y_start + 1 >= r.len
-                } else {
-                    r.y_start + r.len <= seq_y.len()
-                }
-        });
-        if !valid {
+        let Some(m) = materialize_run_group(len_x, len_y, seq_x, seq_y, &grp, is_rev) else {
             continue;
-        }
-        let x0 = grp[0].x_start;
-        let last = grp[grp.len() - 1];
-        let x_end = last.x_start + last.len;
-        let score_bp: usize = grp.iter().map(|r| r.len).sum();
-        let mut ax = String::with_capacity(x_end - x0 + 16);
-        let mut ay = String::with_capacity(x_end - x0 + 16);
-
-        let mut prev_x_end = x0;
-        let mut prev_y_next = grp[0].y_start;
-        for (ri, r) in grp.iter().enumerate() {
-            if ri > 0 {
-                for &bx in &seq_x[prev_x_end..r.x_start] {
-                    ax.push(bx.to_ascii_uppercase() as char);
-                    ay.push('-');
-                }
-                if is_rev {
-                    for &by in seq_y[(r.y_start + 1)..prev_y_next].iter().rev() {
-                        ax.push('-');
-                        ay.push(complement_base(by.to_ascii_uppercase()) as char);
-                    }
-                } else {
-                    for &by in &seq_y[prev_y_next..r.y_start] {
-                        ax.push('-');
-                        ay.push(by.to_ascii_uppercase() as char);
-                    }
-                }
-            }
-            for &bx in &seq_x[r.x_start..(r.x_start + r.len)] {
-                ax.push(bx.to_ascii_uppercase() as char);
-            }
-            if is_rev {
-                let y_lo = r.y_start + 1 - r.len;
-                for &by in seq_y[y_lo..=r.y_start].iter().rev() {
-                    ay.push(complement_base(by.to_ascii_uppercase()) as char);
-                }
-                prev_y_next = y_lo;
-            } else {
-                let y_hi = r.y_start + r.len;
-                for &by in &seq_y[r.y_start..y_hi] {
-                    ay.push(by.to_ascii_uppercase() as char);
-                }
-                prev_y_next = y_hi;
-            }
-            prev_x_end = r.x_start + r.len;
-        }
-
-        let (y_start, y_span, y_strand) = if is_rev {
-            let y_lo = last.y_start + 1 - last.len;
-            let y_hi = grp[0].y_start + 1;
-            let iv = crate::coord::Interval::new(y_lo, y_hi, '-', len_y);
-            (iv.ucsc_start(), y_hi - y_lo, '-')
-        } else {
-            let y_lo = grp[0].y_start;
-            let y_hi = last.y_start + last.len;
-            (y_lo, y_hi - y_lo, '+')
         };
-
-        let _ = writeln!(out, "a score={score_bp}.0");
-        let _ = writeln!(out, "s {name_x} {x0} {} + {len_x} {ax}", x_end - x0);
+        let ax = String::from_utf8_lossy(&m.ax);
+        let ay = String::from_utf8_lossy(&m.ay);
+        let _ = writeln!(out, "a score={}.0", m.score_bp);
+        let _ = writeln!(out, "s {name_x} {} {} + {len_x} {ax}", m.x0, m.x_end - m.x0);
         let _ = writeln!(
             out,
-            "s {name_y} {y_start} {y_span} {y_strand} {len_y} {ay}\n"
+            "s {name_y} {} {} {} {len_y} {ay}\n",
+            m.y_start, m.y_span, m.y_strand
         );
     }
     out
@@ -305,7 +352,7 @@ pub fn format_maf_blocks(
     aln: &ContigAlignment,
 ) -> String {
     let mut out = String::from("##maf version=1 scoring=horizon_mdl\n");
-    if aln.aligned_pairs.is_empty() {
+    if aln.aligned_pairs.is_empty() || len_x < seq_x.len() || len_y < seq_y.len() {
         return out;
     }
 
@@ -500,6 +547,12 @@ pub fn parse_maf_s_line(trimmed: &str) -> Option<(MafRow, usize)> {
         "-" => '-',
         _ => return None,
     };
+    if start.checked_add(size).is_none_or(|end| end > src_size) {
+        return None;
+    }
+    if seq.bytes().filter(|&b| b != b'-').count() != size {
+        return None;
+    }
     Some((
         MafRow {
             src: src.to_owned(),
@@ -512,39 +565,85 @@ pub fn parse_maf_s_line(trimmed: &str) -> Option<(MafRow, usize)> {
     ))
 }
 
-/// Parse two-row pairwise alignment blocks from a MAF v1 text stream.
-#[must_use]
-pub fn parse_two_row_maf_blocks(maf_text: &str) -> Vec<(MafRow, MafRow)> {
-    let mut blocks = Vec::new();
-    let mut rows: Vec<MafRow> = Vec::new();
-    for line in maf_text.lines() {
+/// Maximum single-line byte length accepted by [`for_each_maf_stanza_reader`] (256 MiB).
+const MAX_MAF_LINE_BYTES: usize = 256 * 1024 * 1024;
+
+/// Iterate over `a`-stanzas in a buffered MAF v1 reader, invoking `on_stanza` with parsed `(MafRow, ungapped_size)` rows.
+pub(crate) fn for_each_maf_stanza_reader<R: std::io::BufRead>(
+    mut reader: R,
+    mut on_stanza: impl FnMut(&mut Vec<(MafRow, usize)>),
+) -> anyhow::Result<()> {
+    let mut rows: Vec<(MafRow, usize)> = Vec::new();
+    let mut stanza_valid = true;
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = std::io::BufRead::read_line(
+            &mut std::io::Read::take(&mut reader, MAX_MAF_LINE_BYTES as u64 + 1),
+            &mut line,
+        )?;
+        if n == 0 {
+            break;
+        }
+        if line.len() > MAX_MAF_LINE_BYTES {
+            anyhow::bail!("MAF line exceeds 256 MiB safety limit");
+        }
         let trimmed = line.trim();
+        if trimmed.starts_with('#') {
+            continue;
+        }
         if trimmed.is_empty()
             || trimmed == "a"
             || trimmed
                 .strip_prefix('a')
                 .is_some_and(|r| r.starts_with(char::is_whitespace))
         {
-            if rows.len() >= 2 {
-                let mut drain = rows.drain(..);
-                if let (Some(r1), Some(r2)) = (drain.next(), drain.next()) {
-                    blocks.push((r1, r2));
-                }
-            } else {
-                rows.clear();
+            if stanza_valid && !rows.is_empty() {
+                on_stanza(&mut rows);
             }
+            rows.clear();
+            stanza_valid = true;
             continue;
         }
-        if let Some((row, _)) = parse_maf_s_line(trimmed) {
-            rows.push(row);
+        if trimmed
+            .strip_prefix('s')
+            .is_some_and(|r| r.starts_with(char::is_whitespace))
+        {
+            if let Some(parsed) = parse_maf_s_line(trimmed) {
+                if stanza_valid {
+                    rows.push(parsed);
+                }
+            } else {
+                stanza_valid = false;
+            }
         }
     }
-    if rows.len() >= 2 {
-        let mut drain = rows.drain(..);
-        if let (Some(r1), Some(r2)) = (drain.next(), drain.next()) {
-            blocks.push((r1, r2));
-        }
+    if stanza_valid && !rows.is_empty() {
+        on_stanza(&mut rows);
     }
+    Ok(())
+}
+
+/// Iterate over `a`-stanzas in a MAF v1 text stream, invoking `on_stanza` with the parsed `(MafRow, ungapped_size)` rows.
+pub(crate) fn for_each_maf_stanza(
+    maf_text: &str,
+    on_stanza: impl FnMut(&mut Vec<(MafRow, usize)>),
+) {
+    let _ = for_each_maf_stanza_reader(std::io::Cursor::new(maf_text.as_bytes()), on_stanza);
+}
+
+/// Parse two-row pairwise alignment blocks from a MAF v1 text stream.
+#[must_use]
+pub fn parse_two_row_maf_blocks(maf_text: &str) -> Vec<(MafRow, MafRow)> {
+    let mut blocks = Vec::new();
+    for_each_maf_stanza(maf_text, |rows| {
+        if rows.len() >= 2 {
+            let mut drain = rows.drain(..);
+            if let (Some((r1, _)), Some((r2, _))) = (drain.next(), drain.next()) {
+                blocks.push((r1, r2));
+            }
+        }
+    });
     blocks
 }
 

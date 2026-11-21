@@ -14,10 +14,48 @@ pub struct Interval {
 }
 
 impl Interval {
+    /// Construct and validate a new interval (bounds on forward strand).
+    ///
+    /// # Errors
+    /// Returns an error if `start > end`, `end > src_size`, or `strand` is not `'+'` or `'-'`.
+    pub fn try_new(
+        start: usize,
+        end: usize,
+        strand: char,
+        src_size: usize,
+    ) -> anyhow::Result<Self> {
+        anyhow::ensure!(start <= end, "Interval start ({start}) > end ({end})");
+        anyhow::ensure!(
+            end <= src_size,
+            "Interval end ({end}) > src_size ({src_size})"
+        );
+        anyhow::ensure!(
+            strand == '+' || strand == '-',
+            "Interval strand must be '+' or '-', got {strand:?}"
+        );
+        Ok(Self {
+            start,
+            end,
+            strand,
+            src_size,
+        })
+    }
+
     /// Construct a new interval (bounds on forward strand).
+    ///
+    /// # Panics
+    /// Panics if `start > end`, `end > src_size`, or `strand` is not `'+'` or `'-'`.
     #[must_use]
     pub fn new(start: usize, end: usize, strand: char, src_size: usize) -> Self {
-        debug_assert!(start <= end, "Interval start ({start}) > end ({end})");
+        assert!(start <= end, "Interval start ({start}) > end ({end})");
+        assert!(
+            end <= src_size,
+            "Interval end ({end}) > src_size ({src_size})"
+        );
+        assert!(
+            strand == '+' || strand == '-',
+            "Interval strand must be '+' or '-', got {strand:?}"
+        );
         Self {
             start,
             end,
@@ -29,14 +67,14 @@ impl Interval {
     /// The span length of the interval.
     #[must_use]
     pub fn span(&self) -> usize {
-        self.end.saturating_sub(self.start)
+        self.end - self.start
     }
 
     /// The 0-based start coordinate relative to the recorded strand (UCSC/MAF format).
     #[must_use]
     pub fn ucsc_start(&self) -> usize {
         if self.strand == '-' {
-            self.src_size.saturating_sub(self.end)
+            self.src_size - self.end
         } else {
             self.start
         }
@@ -56,5 +94,13 @@ mod tests {
         let rev = Interval::new(10, 35, '-', 100);
         assert_eq!(rev.span(), 25);
         assert_eq!(rev.ucsc_start(), 65);
+    }
+
+    #[test]
+    fn try_new_rejects_invalid_bounds_and_strand() {
+        assert!(Interval::try_new(40, 35, '+', 100).is_err());
+        assert!(Interval::try_new(10, 105, '+', 100).is_err());
+        assert!(Interval::try_new(10, 35, '?', 100).is_err());
+        assert!(Interval::try_new(10, 35, '-', 100).is_ok());
     }
 }

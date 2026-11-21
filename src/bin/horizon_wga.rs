@@ -12,8 +12,7 @@ use horizon_aligner::{
 use rayon::prelude::*;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Write as _;
-use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::io::Write;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -60,7 +59,7 @@ fn parse_args() -> Result<Option<CliArgs>> {
         match args[i].as_str() {
             "-h" | "--help" => {
                 println!(
-                    "usage: horizon_wga <target.fa> <query.fa> [max_contigs] [--maf out.maf] [--gfa out.gfa] [--min-shared-seeds N] [--min-top-lcb N] [--top-k K | --rbest] [--resolve-dups] [--one-to-one] [--respect-softmask] [--ry-seeds | --no-ry-seeds] [--min-fallback-cov F] [--hsp-threshold N]\n       (max_contigs defaults to 1; pass 0 to align all contigs)\n       horizon_wga --hal-info <file.hal>\n       horizon_wga --graph <graph.gfa> <query.fa> [max_contigs]"
+                    "usage: horizon_wga <target.fa> <query.fa> [max_contigs] [--maf out.maf] [--gfa out.gfa] [--graph target.gfa] [--hal-info file.hal] [--min-shared-seeds N] [--min-top-lcb N] [--top-k K | --rbest] [--resolve-dups] [--one-to-one] [--respect-softmask] [--ry-seeds | --no-ry-seeds] [--min-fallback-cov F] [--hsp-threshold N]\n       (max_contigs defaults to 1; pass 0 to align all contigs)"
                 );
                 return Ok(None);
             }
@@ -163,11 +162,6 @@ fn parse_args() -> Result<Option<CliArgs>> {
     if hal_info.is_some() && graph_path.is_some() {
         bail!("--hal-info and --graph cannot be combined");
     }
-    if pos.len() < 2 && hal_info.is_none() && (graph_path.is_none() || pos.is_empty()) {
-        bail!(
-            "usage: horizon_wga <target.fa> <query.fa> [max_contigs] [--maf out.maf] [--gfa out.gfa] [--graph target.gfa] [--hal-info file.hal] [--min-shared-seeds N] [--min-top-lcb N] [--top-k K | --rbest] [--resolve-dups] [--one-to-one] [--respect-softmask] [--ry-seeds | --no-ry-seeds] [--min-fallback-cov F] [--hsp-threshold N]"
-        );
-    }
     let (fa_x, fa_y, max_contigs) = if hal_info.is_some() {
         if !pos.is_empty() {
             bail!("--hal-info does not accept positional arguments");
@@ -177,7 +171,7 @@ fn parse_args() -> Result<Option<CliArgs>> {
         }
         (PathBuf::new(), PathBuf::new(), 1)
     } else if graph_path.is_some() {
-        if pos.len() > 2 {
+        if pos.is_empty() || pos.len() > 2 {
             bail!(
                 "--graph mode accepts <query.fa> [max_contigs], got {} positional args",
                 pos.len()
@@ -192,21 +186,16 @@ fn parse_args() -> Result<Option<CliArgs>> {
         };
         (PathBuf::new(), PathBuf::from(&pos[0]), mc)
     } else {
-        if pos.len() > 3 {
+        if pos.len() < 2 || pos.len() > 3 {
             bail!(
-                "expected <target.fa> <query.fa> [max_contigs], got {} positional args",
-                pos.len()
+                "usage: horizon_wga <target.fa> <query.fa> [max_contigs] [--maf out.maf] [--gfa out.gfa] [--graph target.gfa] [--hal-info file.hal] [--min-shared-seeds N] [--min-top-lcb N] [--top-k K | --rbest] [--resolve-dups] [--one-to-one] [--respect-softmask] [--ry-seeds | --no-ry-seeds] [--min-fallback-cov F] [--hsp-threshold N]"
             );
         }
         let mc = match pos.get(2) {
             Some(s) => s.parse().context("parsing max_contigs")?,
             None => 1,
         };
-        (
-            pos.first().map_or_default(PathBuf::from),
-            pos.get(1).map_or_default(PathBuf::from),
-            mc,
-        )
+        (PathBuf::from(&pos[0]), PathBuf::from(&pos[1]), mc)
     };
 
     Ok(Some(CliArgs {
@@ -340,8 +329,8 @@ fn run_pairwise_wga(cli: &CliArgs) -> Result<()> {
     let mut summary_out = String::new();
     let mut maf_writer = cli
         .maf_out
-        .as_ref()
-        .map(|p| File::create(p).map(BufWriter::new))
+        .as_deref()
+        .map(|p| horizon_aligner::io_util::open_text_writer(Some(p.to_string_lossy().as_ref())))
         .transpose()
         .context("creating MAF output")?;
     if let Some(w) = maf_writer.as_mut() {
@@ -349,8 +338,8 @@ fn run_pairwise_wga(cli: &CliArgs) -> Result<()> {
     }
     let mut gfa_writer = cli
         .gfa_out
-        .as_ref()
-        .map(|p| File::create(p).map(BufWriter::new))
+        .as_deref()
+        .map(|p| horizon_aligner::io_util::open_text_writer(Some(p.to_string_lossy().as_ref())))
         .transpose()
         .context("creating GFA output")?;
     if let Some(w) = gfa_writer.as_mut() {
@@ -467,11 +456,11 @@ fn run_pairwise_wga(cli: &CliArgs) -> Result<()> {
         }
     }
 
-    if let Some(w) = maf_writer.as_mut() {
-        w.flush()?;
+    if let Some(w) = maf_writer {
+        w.finish()?;
     }
-    if let Some(w) = gfa_writer.as_mut() {
-        w.flush()?;
+    if let Some(w) = gfa_writer {
+        w.finish()?;
     }
 
     let total_unique_x: usize = target_cov_by_contig
@@ -632,6 +621,11 @@ fn load_gfa_dag(path: &std::path::Path) -> Result<Vec<GraphNode>> {
     stream_gfa_records(path, |rec| {
         match rec {
             GfaRecord::Segment(s) if s.sequence != b"*" => {
+                anyhow::ensure!(
+                    !name_to_raw.contains_key(&s.name),
+                    "duplicate GFA segment '{}'",
+                    s.name
+                );
                 let idx = segs.len();
                 name_to_raw.insert(s.name.clone(), idx);
                 segs.push((s.name, s.sequence));
@@ -663,6 +657,7 @@ fn load_gfa_dag(path: &std::path::Path) -> Result<Vec<GraphNode>> {
         };
         let flip = |o: u8| -> u8 { if o == b'-' { b'+' } else { b'-' } };
         let mut d_edges = Vec::with_capacity(raw_edges.len() * 2);
+        let mut skipped_links = 0usize;
         for (u_name, uo, v_name, vo) in &raw_edges {
             if let (Some(&u_raw), Some(&v_raw)) = (name_to_raw.get(u_name), name_to_raw.get(v_name))
             {
@@ -676,17 +671,32 @@ fn load_gfa_dag(path: &std::path::Path) -> Result<Vec<GraphNode>> {
                 if rv != ru {
                     d_edges.push((rv, ru));
                 }
+            } else {
+                skipped_links += 1;
             }
+        }
+        if skipped_links > 0 {
+            eprintln!(
+                "horizon_wga: warning: skipped {skipped_links} GFA link(s) referencing missing or `*`-sequence segments"
+            );
         }
         (o_segs, d_edges)
     } else {
         let mut d_edges = Vec::with_capacity(raw_edges.len());
+        let mut skipped_links = 0usize;
         for (u_name, _, v_name, _) in &raw_edges {
-            if let (Some(&u), Some(&v)) = (name_to_raw.get(u_name), name_to_raw.get(v_name))
-                && u != v
-            {
-                d_edges.push((u, v));
+            if let (Some(&u), Some(&v)) = (name_to_raw.get(u_name), name_to_raw.get(v_name)) {
+                if u != v {
+                    d_edges.push((u, v));
+                }
+            } else {
+                skipped_links += 1;
             }
+        }
+        if skipped_links > 0 {
+            eprintln!(
+                "horizon_wga: warning: skipped {skipped_links} GFA link(s) referencing missing or `*`-sequence segments"
+            );
         }
         (segs, d_edges)
     };

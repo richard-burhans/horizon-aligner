@@ -2,7 +2,23 @@
 
 #[cfg(test)]
 use super::append_two_hit_diagonal_lcbs;
-use super::{AnchorPairs, LcbList, cluster_strand_lcbs, codon_to_aa};
+use super::{AnchorPairs, LcbList, base_to_idx, cluster_strand_lcbs};
+
+fn codon_to_aa(b0: u8, b1: u8, b2: u8) -> Option<u8> {
+    // Standard genetic code indexed by (A=0, C=1, G=2, T=3): 0..20 = amino acids, 255 = stop.
+    const TABLE: [u8; 64] = [
+        // AAA..ATT
+        8, 11, 8, 11, 16, 16, 16, 16, 14, 15, 14, 15, 7, 7, 10, 7, // CAA..CTT
+        13, 6, 13, 6, 12, 12, 12, 12, 14, 14, 14, 14, 9, 9, 9, 9, // GAA..GTT
+        3, 2, 3, 2, 0, 0, 0, 0, 5, 5, 5, 5, 17, 17, 17, 17, // TAA..TTT
+        255, 19, 255, 19, 15, 15, 15, 15, 255, 1, 18, 1, 9, 4, 9, 4,
+    ];
+    let (Some(i0), Some(i1), Some(i2)) = (base_to_idx(b0), base_to_idx(b1), base_to_idx(b2)) else {
+        return None;
+    };
+    let aa = TABLE[(i0 << 4) | (i1 << 2) | i2];
+    if aa == 255 { None } else { Some(aa) }
+}
 
 const AA5_KEY_SPACE: usize = 59_049; // 9^5
 
@@ -262,7 +278,9 @@ fn extend_aa_ungapped_hsp_oriented(
     rev_coding: bool,
 ) -> Option<(usize, usize, usize, usize, i32)> {
     const AA_XDROP: i32 = 30;
-    if px + 18 > seq_x.len() || py + 18 > seq_y.len() {
+    if px.checked_add(18).is_none_or(|e| e > seq_x.len())
+        || py.checked_add(18).is_none_or(|e| e > seq_y.len())
+    {
         return None;
     }
     let (req_offsets, wildcard_off): ([usize; 5], usize) = if rev_coding {

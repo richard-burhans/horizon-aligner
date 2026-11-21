@@ -60,19 +60,19 @@ fn intern_seg(map: &mut HashMap<String, u32>, next_id: &mut u32, name: &str) -> 
     id
 }
 
-fn oriented_3p_flank(flank: &SegFlank, is_fwd: bool) -> Vec<u8> {
+fn oriented_3p_flank(flank: &SegFlank, is_fwd: bool) -> std::borrow::Cow<'_, [u8]> {
     if is_fwd {
-        flank.suffix.clone()
+        std::borrow::Cow::Borrowed(&flank.suffix)
     } else {
-        revcomp(&flank.prefix)
+        std::borrow::Cow::Owned(revcomp(&flank.prefix))
     }
 }
 
-fn oriented_5p_flank(flank: &SegFlank, is_fwd: bool) -> Vec<u8> {
+fn oriented_5p_flank(flank: &SegFlank, is_fwd: bool) -> std::borrow::Cow<'_, [u8]> {
     if is_fwd {
-        flank.prefix.clone()
+        std::borrow::Cow::Borrowed(&flank.prefix)
     } else {
-        revcomp(&flank.suffix)
+        std::borrow::Cow::Owned(revcomp(&flank.suffix))
     }
 }
 
@@ -561,6 +561,10 @@ fn main() -> Result<()> {
             "--flank" => {
                 let val = args.get(i + 1).context("missing value for --flank")?;
                 flank_bp = val.parse().context("parsing --flank")?;
+                anyhow::ensure!(
+                    flank_bp >= 12,
+                    "--flank must be at least 12 bp (got {flank_bp})"
+                );
                 i += 2;
             }
             "--min-cp-bits" => {
@@ -598,7 +602,7 @@ fn main() -> Result<()> {
 
     let mut w = open_output_writer(out_path.as_deref())?;
     let stats = clean_gfa(effective_gfa, &cfg, &mut w)?;
-    w.flush()?;
+    w.finish()?;
 
     #[allow(clippy::cast_precision_loss)]
     let hwm_mb = horizon_aligner::read_vm_hwm_kb().map_or(0.0, |kb| kb as f64 / 1024.0);

@@ -92,8 +92,10 @@ fn try_small_or_invalid_dag(
         });
     }
     let total_bp: usize = nodes.iter().map(|n| n.seq.len()).sum();
-    (nodes.len() <= 8 && total_bp <= 50_000)
-        .then(|| align_seq_to_dag_mdl(nodes, seq_y, params, min_block_bits))
+    if seq_y.is_empty() || (nodes.len() <= 8 && total_bp <= 50_000) {
+        return Some(align_seq_to_dag_mdl(nodes, seq_y, params, min_block_bits));
+    }
+    None
 }
 
 /// Seeded DAG alignment: builds a [`DagSeedIndex`] and delegates to [`align_seq_to_dag_seeded_indexed`].

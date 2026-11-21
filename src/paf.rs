@@ -245,6 +245,39 @@ impl PafRecord {
         }
         out
     }
+
+    /// Write a single PAF line directly to `out` (with trailing newline) plus `md:f:` and `hb:i:` tags,
+    /// avoiding per-record `String` and `Vec` heap allocations.
+    ///
+    /// # Errors
+    /// Returns an `std::io::Error` if writing to `out` fails.
+    pub fn write_line_with_mdl(
+        &self,
+        out: &mut impl std::io::Write,
+        mdl_bits: f64,
+        hb: u8,
+    ) -> std::io::Result<()> {
+        write!(
+            out,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            self.qname,
+            self.qlen,
+            self.qstart,
+            self.qend,
+            self.strand,
+            self.tname,
+            self.tlen,
+            self.tstart,
+            self.tend,
+            self.matches,
+            self.aln_len,
+            self.mapq
+        )?;
+        for tag in &self.tags {
+            write!(out, "\t{tag}")?;
+        }
+        writeln!(out, "\tmd:f:{mdl_bits:.2}\thb:i:{hb}")
+    }
 }
 
 const MAX_PAF_LINE_BYTES: usize = 256 * 1024 * 1024;

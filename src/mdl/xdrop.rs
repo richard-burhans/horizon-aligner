@@ -1,6 +1,6 @@
 //! Banded MDL + BOCPD X-drop flank extension.
 
-use super::dp::{HmmParams, NormalizedHmmParams, prepare_grid_f64};
+use super::dp::{HmmParams, NormalizedHmmParams, prepare_grid};
 use crate::bocpd::{BocpdScratch, NEG_INF, base_probs, bocpd_gc_profile_into, joint_pair_bits};
 
 /// Reusable per-worker scratch buffers for [`mdl_xdrop_extend_with_scratch`].
@@ -152,7 +152,7 @@ pub(crate) fn mdl_xdrop_extend_with_scratch(
     let Some(total) = n.checked_add(1).and_then(|r| r.checked_mul(stride)) else {
         return Vec::new();
     };
-    if !prepare_grid_f64(&mut scratch.dp, total, NEG_INF) {
+    if !prepare_grid(&mut scratch.dp, total, NEG_INF) {
         return Vec::new();
     }
     scratch.bt.clear();

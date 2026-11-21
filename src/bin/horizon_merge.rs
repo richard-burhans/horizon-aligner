@@ -1,8 +1,8 @@
 //! Multi-species MAF + GFA merger with e-graph duplication resolution.
 
 use anyhow::{Context, Result, bail};
-use horizon_aligner::merge_pairwise_mafs;
-use std::fs;
+use horizon_aligner::io_util::open_text_writer;
+use horizon_aligner::merge_pairwise_maf_paths_to_writers;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -21,25 +21,44 @@ fn main() -> Result<()> {
     let ref_species = &args[0];
     let bin_bp: usize = args[1].parse().context("parsing bin_bp")?;
     anyhow::ensure!(bin_bp > 0, "bin_bp must be > 0");
-    let maf_out_path = PathBuf::from(&args[2]);
-    let gfa_out_path = PathBuf::from(&args[3]);
+    let maf_out_path = &args[2];
+    let gfa_out_path = &args[3];
 
-    let mut inputs: Vec<(String, String)> = Vec::new();
+    let mut inputs: Vec<(String, PathBuf)> = Vec::new();
+    let mut seen_species = std::collections::HashSet::new();
     for spec in &args[4..] {
         let Some((sp, path)) = spec.split_once('=') else {
             bail!("expected <species>=<maf_path>, got {spec}");
         };
-        let text = fs::read_to_string(path).with_context(|| format!("reading {path}"))?;
-        inputs.push((sp.to_owned(), text));
+        anyhow::ensure!(
+            !sp.is_empty() && !path.is_empty(),
+            "expected <species>=<maf_path>, got {spec}"
+        );
+        anyhow::ensure!(
+            sp != ref_species,
+            "query species `{sp}` cannot match reference species `{ref_species}`"
+        );
+        anyhow::ensure!(
+            seen_species.insert(sp.to_owned()),
+            "duplicate species name: {sp}"
+        );
+        inputs.push((sp.to_owned(), PathBuf::from(path)));
     }
 
     let t0 = Instant::now();
-    let (maf_out, gfa_out, total_blocks, multi_blocks) =
-        merge_pairwise_mafs(ref_species, &inputs, bin_bp);
-    fs::write(&maf_out_path, maf_out)
-        .with_context(|| format!("writing {}", maf_out_path.display()))?;
-    fs::write(&gfa_out_path, gfa_out)
-        .with_context(|| format!("writing {}", gfa_out_path.display()))?;
+    let mut maf_writer =
+        open_text_writer(Some(maf_out_path)).with_context(|| format!("creating {maf_out_path}"))?;
+    let mut gfa_writer =
+        open_text_writer(Some(gfa_out_path)).with_context(|| format!("creating {gfa_out_path}"))?;
+    let (total_blocks, multi_blocks) = merge_pairwise_maf_paths_to_writers(
+        ref_species,
+        &inputs,
+        bin_bp,
+        &mut maf_writer,
+        &mut gfa_writer,
+    )?;
+    maf_writer.finish()?;
+    gfa_writer.finish()?;
 
     println!(
         "ref={} species={} total_blocks={} multi_species_blocks={} elapsed_s={:.4}",
@@ -54,7 +73,7 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use horizon_aligner::merge_pairwise_mafs;
 
     #[test]
     fn merge_pairwise_mafs_merges_two_species() {

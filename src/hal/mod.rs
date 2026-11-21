@@ -497,42 +497,65 @@ impl HalAlignment {
 
 fn infer_ancestral_dnas(star: &HalAlignment, n_q: usize) -> Vec<Vec<u8>> {
     let ref_genome = &star.genomes[0];
+    let add_base = |counts: &mut [u16; 4], base: u8| match base.to_ascii_uppercase() {
+        b'A' => counts[0] += 1,
+        b'C' => counts[1] += 1,
+        b'G' => counts[2] += 1,
+        b'T' => counts[3] += 1,
+        _ => {}
+    };
+    let mut running_counts: Vec<Vec<[u16; 4]>> = ref_genome
+        .bottom_segments
+        .iter()
+        .map(|bseg| {
+            let r_end = bseg
+                .start
+                .saturating_add(bseg.length)
+                .min(ref_genome.dna.len());
+            ref_genome.dna[bseg.start..r_end]
+                .iter()
+                .map(|&rb| {
+                    let mut c = [0u16; 4];
+                    add_base(&mut c, rb);
+                    c
+                })
+                .collect()
+        })
+        .collect();
+
     let mut anc_dnas = Vec::with_capacity(n_q);
     for level in 0..n_q {
         let mut dna = ref_genome.dna.clone();
-        for bseg in &ref_genome.bottom_segments {
+        for (bseg, seg_counts) in ref_genome
+            .bottom_segments
+            .iter()
+            .zip(running_counts.iter_mut())
+        {
             let r_end = bseg.start.saturating_add(bseg.length).min(dna.len());
-            for (off, dst) in dna[bseg.start..r_end].iter_mut().enumerate() {
-                let ref_b = ref_genome.dna[bseg.start + off].to_ascii_uppercase();
-                let mut counts = [0u16; 4];
-                let add_base = |counts: &mut [u16; 4], base: u8| match base.to_ascii_uppercase() {
-                    b'A' => counts[0] += 1,
-                    b'C' => counts[1] += 1,
-                    b'G' => counts[2] += 1,
-                    b'T' => counts[3] += 1,
-                    _ => {}
-                };
-                add_base(&mut counts, ref_b);
-                for j in 0..=level {
-                    if let Some((t_idx, _)) = bseg.child_tops[j]
-                        && let Some(q_gen) = star.genomes.get(1 + j)
-                        && let Some(tseg) = q_gen.top_segments.get(t_idx)
-                    {
-                        let q_pos = if tseg.parent_reversed {
-                            tseg.start + bseg.length - 1 - off
+            for (off, (dst, counts)) in dna[bseg.start..r_end]
+                .iter_mut()
+                .zip(seg_counts.iter_mut())
+                .enumerate()
+            {
+                if let Some((t_idx, _)) = bseg.child_tops[level]
+                    && let Some(q_gen) = star.genomes.get(1 + level)
+                    && let Some(tseg) = q_gen.top_segments.get(t_idx)
+                {
+                    let q_pos = if tseg.parent_reversed {
+                        tseg.start + bseg.length - 1 - off
+                    } else {
+                        tseg.start + off
+                    };
+                    if let Some(&qb) = q_gen.dna.get(q_pos) {
+                        let oriented = if tseg.parent_reversed {
+                            crate::seeding::complement_base(qb)
                         } else {
-                            tseg.start + off
+                            qb
                         };
-                        if let Some(&qb) = q_gen.dna.get(q_pos) {
-                            let oriented = if tseg.parent_reversed {
-                                crate::seeding::complement_base(qb)
-                            } else {
-                                qb
-                            };
-                            add_base(&mut counts, oriented);
-                        }
+                        add_base(counts, oriented);
                     }
                 }
+                let ref_b = ref_genome.dna[bseg.start + off].to_ascii_uppercase();
                 let mut best_b = ref_b;
                 let mut best_cnt = 0u16;
                 for (&b, &c) in b"ACGT".iter().zip(counts.iter()) {
@@ -679,4 +702,6 @@ pub fn decode_hal_dna(packed: &[u8], length: usize) -> Vec<u8> {
 }
 
 #[cfg(test)]
-mod tests;
+mod tests_hdf5;
+#[cfg(test)]
+mod tests_model;

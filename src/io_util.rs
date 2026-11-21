@@ -81,6 +81,95 @@ impl Drop for ZstdWriteChild {
     }
 }
 
+enum TextSink {
+    Stdout(io::StdoutLock<'static>),
+    File(File),
+    Gz(Box<GzEncoder<File>>),
+    Zstd(Box<ZstdWriteChild>),
+}
+
+impl Write for TextSink {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match self {
+            Self::Stdout(w) => w.write(buf),
+            Self::File(w) => w.write(buf),
+            Self::Gz(w) => w.write(buf),
+            Self::Zstd(w) => w.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            Self::Stdout(w) => w.flush(),
+            Self::File(w) => w.flush(),
+            Self::Gz(w) => w.flush(),
+            Self::Zstd(w) => w.flush(),
+        }
+    }
+}
+
+/// Buffered text writer that propagates compression/subprocess finalization errors via [`Self::finish`].
+pub struct TextWriter {
+    inner: Option<BufWriter<TextSink>>,
+}
+
+impl TextWriter {
+    fn new(sink: TextSink) -> Self {
+        Self {
+            inner: Some(BufWriter::new(sink)),
+        }
+    }
+
+    /// Flush buffered bytes and finalize any `.gz`/`.zst` encoder or child process.
+    ///
+    /// # Errors
+    /// Returns an error if flushing, `GzEncoder::finish()`, or `zstd -c` exit status fails.
+    pub fn finish(mut self) -> Result<()> {
+        let Some(bw) = self.inner.take() else {
+            return Ok(());
+        };
+        let sink = bw
+            .into_inner()
+            .map_err(std::io::IntoInnerError::into_error)?;
+        match sink {
+            TextSink::Stdout(mut w) => w.flush()?,
+            TextSink::File(mut w) => w.flush()?,
+            TextSink::Gz(gz) => {
+                let mut f = gz.finish()?;
+                f.flush()?;
+            }
+            TextSink::Zstd(mut zstd) => {
+                if let Some(mut stdin) = zstd.stdin.take() {
+                    stdin.flush()?;
+                    drop(stdin);
+                }
+                let status = zstd.child.wait()?;
+                anyhow::ensure!(
+                    status.success(),
+                    "`zstd -c` failed with exit status {status}"
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Write for TextWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.inner
+            .as_mut()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "writer already finished"))?
+            .write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        if let Some(ref mut bw) = self.inner {
+            bw.flush()?;
+        }
+        Ok(())
+    }
+}
+
 /// Open a buffered text reader for plain, `.gz`/`.bgz`, `.zst`/`.zstd`, or `"-"` (`stdin`).
 ///
 /// # Errors
@@ -127,9 +216,9 @@ pub fn open_text_reader(path: &Path) -> Result<Box<dyn BufRead>> {
 ///
 /// # Errors
 /// Returns an error if `out_path` cannot be created or `zstd` cannot be spawned for `.zst` outputs.
-pub fn open_text_writer(out_path: Option<&str>) -> Result<BufWriter<Box<dyn Write>>> {
+pub fn open_text_writer(out_path: Option<&str>) -> Result<TextWriter> {
     let Some(raw) = out_path.filter(|&p| p != "-") else {
-        return Ok(BufWriter::new(Box::new(io::stdout().lock())));
+        return Ok(TextWriter::new(TextSink::Stdout(io::stdout().lock())));
     };
     let path = Path::new(raw);
     let file = File::create(path).with_context(|| format!("creating '{}'", path.display()))?;
@@ -153,18 +242,18 @@ pub fn open_text_writer(out_path: Option<&str>) -> Result<BufWriter<Box<dyn Writ
             .stdin
             .take()
             .context("capturing `zstd -c` stdin pipe")?;
-        return Ok(BufWriter::new(Box::new(ZstdWriteChild {
+        return Ok(TextWriter::new(TextSink::Zstd(Box::new(ZstdWriteChild {
             child,
             stdin: Some(stdin),
-        })));
+        }))));
     }
     if has_ext(path, &["gz", "bgz"]) {
-        return Ok(BufWriter::new(Box::new(GzEncoder::new(
+        return Ok(TextWriter::new(TextSink::Gz(Box::new(GzEncoder::new(
             file,
             Compression::default(),
-        ))));
+        )))));
     }
-    Ok(BufWriter::new(Box::new(file)))
+    Ok(TextWriter::new(TextSink::File(file)))
 }
 
 #[cfg(test)]
@@ -181,7 +270,7 @@ mod tests {
             {
                 let mut w = open_text_writer(Some(&path_str)).expect("open writer");
                 writeln!(w, "line1\nline2").expect("write");
-                w.flush().expect("flush");
+                w.finish().expect("finish");
             }
             let mut r = open_text_reader(&path).expect("open reader");
             let mut got = String::new();
@@ -211,7 +300,7 @@ mod tests {
             for i in 0..20_000 {
                 writeln!(w, "record_{i:06}\tpayload_0123456789abcdef").expect("write");
             }
-            w.flush().expect("flush");
+            w.finish().expect("finish");
         }
         // Read just 1 line and drop early to verify ZstdReadChild::drop does not deadlock.
         {

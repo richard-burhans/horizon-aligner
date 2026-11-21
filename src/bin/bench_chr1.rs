@@ -20,7 +20,7 @@ fn main() -> Result<()> {
         println!("usage: bench_chr1 <target.fa> <query.fa>");
         return Ok(());
     }
-    if args.len() < 3 {
+    if args.len() != 3 || args[1].starts_with('-') || args[2].starts_with('-') {
         anyhow::bail!("usage: bench_chr1 <target.fa> <query.fa>");
     }
     let (fa_x, fa_y) = (PathBuf::from(&args[1]), PathBuf::from(&args[2]));

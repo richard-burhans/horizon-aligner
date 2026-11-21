@@ -4,20 +4,28 @@ use crate::{ContigList, IndexedSpecies, align_species_pair};
 use anyhow::Result;
 use horizon_aligner::{
     AlignConfig, ContigIndex, complement_base, parse_two_row_maf_blocks, prepare_contig_index_opts,
-    shared_seed_count,
+    shared_sketch_count,
 };
 use rayon::prelude::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Write as _;
 
-type MidToHingeMap = HashMap<(usize, usize), (usize, usize, u8, bool)>;
+#[derive(Clone, Copy)]
+struct MidHingeRun {
+    m_start: usize,
+    m_end: usize,
+    h_cidx: usize,
+    h_start: usize,
+    mid_rev: bool,
+}
 
-fn build_mid_to_hinge_map(
+fn build_mid_to_hinge_runs(
     hinge_idx_by_name: &HashMap<&str, usize>,
     mid_idx_by_name: &HashMap<&str, usize>,
+    n_mid_contigs: usize,
     hinge_to_mid_maf: &str,
-) -> MidToHingeMap {
-    let mut mid_to_hinge: MidToHingeMap = HashMap::new();
+) -> Vec<Vec<MidHingeRun>> {
+    let mut by_mid: Vec<Vec<MidHingeRun>> = vec![Vec::new(); n_mid_contigs];
     for (h_row, m_row) in parse_two_row_maf_blocks(hinge_to_mid_maf) {
         let Some(&h_cidx) = hinge_idx_by_name.get(h_row.src.as_str()) else {
             continue;
@@ -26,18 +34,58 @@ fn build_mid_to_hinge_map(
             continue;
         };
         let mid_rev = (h_row.strand == '-') ^ (m_row.strand == '-');
+        let m_is_rev = m_row.strand == '-';
         let mut hk = 0usize;
         let mut mk = 0usize;
+        let mut run: Option<(usize, usize, usize)> = None; // (m_start_pos, h_start_pos, len)
+        let flush_run = |run: Option<(usize, usize, usize)>, out: &mut Vec<MidHingeRun>| {
+            if let Some((ms, hs, len)) = run {
+                if m_is_rev {
+                    let m_lo = ms + 1 - len;
+                    let h_at_m_lo = if mid_rev { hs + len - 1 } else { hs + 1 - len };
+                    out.push(MidHingeRun {
+                        m_start: m_lo,
+                        m_end: ms + 1,
+                        h_cidx,
+                        h_start: h_at_m_lo,
+                        mid_rev,
+                    });
+                } else {
+                    out.push(MidHingeRun {
+                        m_start: ms,
+                        m_end: ms + len,
+                        h_cidx,
+                        h_start: hs,
+                        mid_rev,
+                    });
+                }
+            }
+        };
         for (hb, mb) in h_row.seq.bytes().zip(m_row.seq.bytes()) {
             if hb != b'-' && mb != b'-' {
                 let hp = h_row.fwd_pos(hk);
                 let mp = m_row.fwd_pos(mk);
-                let hb_fwd = if h_row.strand == '-' {
-                    complement_base(hb)
-                } else {
-                    hb
-                };
-                mid_to_hinge.insert((m_cidx, mp), (h_cidx, hp, hb_fwd, mid_rev));
+                match run {
+                    Some((ms, hs, len))
+                        if (if m_is_rev {
+                            ms.checked_sub(len) == Some(mp)
+                        } else {
+                            ms + len == mp
+                        }) && (if h_row.strand == '-' {
+                            hs.checked_sub(len) == Some(hp)
+                        } else {
+                            hs + len == hp
+                        }) =>
+                    {
+                        run = Some((ms, hs, len + 1));
+                    }
+                    other => {
+                        flush_run(other, &mut by_mid[m_cidx]);
+                        run = Some((mp, hp, 1));
+                    }
+                }
+            } else if let Some(prev) = run.take() {
+                flush_run(Some(prev), &mut by_mid[m_cidx]);
             }
             if hb != b'-' {
                 hk += 1;
@@ -46,8 +94,72 @@ fn build_mid_to_hinge_map(
                 mk += 1;
             }
         }
+        flush_run(run, &mut by_mid[m_cidx]);
     }
-    mid_to_hinge
+    for runs in &mut by_mid {
+        runs.sort_by_key(|r| r.m_start);
+    }
+    by_mid
+}
+
+fn lookup_mid_to_hinge(
+    runs: &[MidHingeRun],
+    mp: usize,
+    hinge_contigs: &ContigList,
+) -> Option<(usize, usize, u8, bool)> {
+    let idx = runs.partition_point(|r| r.m_start <= mp);
+    for r in runs[..idx].iter().rev() {
+        if mp < r.m_end {
+            let d = mp - r.m_start;
+            let hp = if r.mid_rev {
+                r.h_start - d
+            } else {
+                r.h_start + d
+            };
+            let hb = hinge_contigs
+                .get(r.h_cidx)
+                .and_then(|(_, seq)| seq.get(hp))
+                .copied()
+                .unwrap_or(b'N')
+                .to_ascii_uppercase();
+            return Some((r.h_cidx, hp, hb, r.mid_rev));
+        }
+    }
+    None
+}
+
+fn build_covered_dst(
+    hinge_contigs: &ContigList,
+    hinge_idx_by_name: &HashMap<&str, usize>,
+    dst_direct_maf: &str,
+) -> Vec<Vec<u64>> {
+    let mut covered_dst: Vec<Vec<u64>> = hinge_contigs
+        .iter()
+        .map(|(_, seq)| vec![0u64; seq.len().div_ceil(64)])
+        .collect();
+    for (h_row, _) in parse_two_row_maf_blocks(dst_direct_maf) {
+        let Some(&h_cidx) = hinge_idx_by_name.get(h_row.src.as_str()) else {
+            continue;
+        };
+        let ctg_len = hinge_contigs[h_cidx].1.len();
+        let mut hk = 0usize;
+        for hb in h_row.seq.bytes() {
+            if hb != b'-' {
+                let hp = h_row.fwd_pos(hk);
+                if hp < ctg_len {
+                    covered_dst[h_cidx][hp >> 6] |= 1u64 << (hp & 63);
+                }
+                hk += 1;
+            }
+        }
+    }
+    covered_dst
+}
+
+#[inline]
+fn is_bitset_covered(bits: &[u64], pos: usize) -> bool {
+    bits.get(pos >> 6)
+        .is_some_and(|&word| (word & (1u64 << (pos & 63))) != 0)
 }
 
 /// Project `src -> mid -> dst` via `hinge_to_mid_maf` and `mid_to_dst_maf`, emitting rescued
@@ -74,26 +186,18 @@ pub(crate) fn rescue_transitive_maf(
         .map(|(idx, (name, _))| (name.as_str(), idx))
         .collect();
 
-    let mid_to_hinge =
-        build_mid_to_hinge_map(&hinge_idx_by_name, &mid_idx_by_name, hinge_to_mid_maf);
-    if mid_to_hinge.is_empty() {
+    let mid_to_hinge = build_mid_to_hinge_runs(
+        &hinge_idx_by_name,
+        &mid_idx_by_name,
+        mid_contigs.len(),
+        hinge_to_mid_maf,
+    );
+    if mid_to_hinge.iter().all(Vec::is_empty) {
         return String::new();
     }
 
     // Track hinge positions already covered by direct hinge <-> dst alignment.
-    let mut covered_dst: HashSet<(usize, usize)> = HashSet::new();
-    for (h_row, _) in parse_two_row_maf_blocks(dst_direct_maf) {
-        let Some(&h_cidx) = hinge_idx_by_name.get(h_row.src.as_str()) else {
-            continue;
-        };
-        let mut hk = 0usize;
-        for hb in h_row.seq.bytes() {
-            if hb != b'-' {
-                covered_dst.insert((h_cidx, h_row.fwd_pos(hk)));
-                hk += 1;
-            }
-        }
-    }
+    let covered_dst = build_covered_dst(hinge_contigs, &hinge_idx_by_name, dst_direct_maf);
 
     // Collect projected (hinge_pos, dst_pos, h_base, dst_base_oriented) points grouped by
     // (h_cidx, dst_src, dst_src_size, dst_rel_rev).
@@ -115,8 +219,9 @@ pub(crate) fn rescue_transitive_maf(
             if mb != b'-' && db != b'-' {
                 let mp = m_row.fwd_pos(mk);
                 let dp = d_row.fwd_pos(dk);
-                if let Some(&(h_cidx, hp, hb, mid_rev)) = mid_to_hinge.get(&(m_cidx, mp))
-                    && !covered_dst.contains(&(h_cidx, hp))
+                if let Some((h_cidx, hp, hb, mid_rev)) =
+                    lookup_mid_to_hinge(&mid_to_hinge[m_cidx], mp, hinge_contigs)
+                    && !is_bitset_covered(&covered_dst[h_cidx], hp)
                 {
                     let dst_rel_rev = mid_rev ^ (m_row.strand == '-') ^ (d_row.strand == '-');
                     let db_oriented = if (d_row.strand == '-') == dst_rel_rev {
@@ -175,7 +280,7 @@ fn emit_rescued_runs(
     min_run_len: usize,
     min_ident_pct: usize,
 ) {
-    pts.sort_unstable_by_key(|p| p.0);
+    pts.sort_unstable_by_key(|p| (p.0, p.1));
     pts.dedup_by_key(|p| p.0);
 
     let mut run_start = 0usize;
@@ -239,25 +344,40 @@ fn maf_ref_coverage(hinge_contigs: &ContigList, maf_text: &str) -> f64 {
         .enumerate()
         .map(|(i, (n, _))| (n.as_str(), i))
         .collect();
-    let mut covered: Vec<Vec<bool>> = hinge_contigs
-        .iter()
-        .map(|(_, s)| vec![false; s.len()])
-        .collect();
+    let mut intervals: Vec<Vec<(usize, usize)>> = vec![Vec::new(); hinge_contigs.len()];
     for (r0, _) in parse_two_row_maf_blocks(maf_text) {
         if r0.strand != '+' {
             continue;
         }
         if let Some(&ci) = ctg_map.get(r0.src.as_str()) {
             let r0_size = r0.seq.bytes().filter(|&b| b != b'-').count();
-            let end = (r0.start + r0_size).min(covered[ci].len());
-            for flag in &mut covered[ci][r0.start.min(end)..end] {
-                *flag = true;
+            let s = r0.start;
+            let e = (r0.start + r0_size).min(hinge_contigs[ci].1.len());
+            if s < e {
+                intervals[ci].push((s, e));
             }
         }
     }
-    let cov_bp: usize = covered
-        .iter()
-        .map(|v| v.iter().filter(|&&b| b).count())
+    let cov_bp: usize = intervals
+        .iter_mut()
+        .map(|ivs| {
+            if ivs.is_empty() {
+                return 0;
+            }
+            ivs.sort_unstable();
+            let mut sum = 0usize;
+            let (mut cur_s, mut cur_e) = ivs[0];
+            for &(s, e) in &ivs[1..] {
+                if s <= cur_e {
+                    cur_e = cur_e.max(e);
+                } else {
+                    sum += cur_e - cur_s;
+                    cur_s = s;
+                    cur_e = e;
+                }
+            }
+            sum + (cur_e - cur_s)
+        })
         .sum();
     #[allow(clippy::cast_precision_loss)]
     let frac = (cov_bp as f64) / (total_bp as f64);
@@ -449,8 +569,114 @@ pub(crate) fn remap_consensus_maf_to_hinge(
     out
 }
 
+/// Build a bottom-up UPGMA guide-tree ordering of rescue pairs `(rep_a, rep_b)` over non-hinge
+/// species using `MinHash` sketch Jaccard similarity, skipping pairs where both clades already
+/// have high hinge coverage.
+fn build_upgma_rescue_pairs(
+    n_species: usize,
+    hinge_idx: usize,
+    sketches: &[Vec<u64>],
+    high_cov: &[bool],
+) -> Vec<(usize, usize)> {
+    let mut clades: Vec<(usize, Vec<usize>, bool)> = (0..n_species)
+        .filter(|&i| i != hinge_idx)
+        .map(|i| (i, vec![i], high_cov[i]))
+        .collect();
+    let mut pairs = Vec::new();
+    while clades.len() >= 2 {
+        let mut best: Option<(f64, usize, usize)> = None;
+        for a in 0..clades.len() {
+            for b in (a + 1)..clades.len() {
+                let rep_a = clades[a].0;
+                let rep_b = clades[b].0;
+                let shared = shared_sketch_count(&sketches[rep_a], &sketches[rep_b]);
+                let union_est =
+                    (sketches[rep_a].len() + sketches[rep_b].len()).saturating_sub(shared);
+                #[allow(clippy::cast_precision_loss)]
+                let sim = if union_est == 0 {
+                    0.0
+                } else {
+                    (shared as f64) / (union_est as f64)
+                };
+                if best.is_none_or(|(best_sim, _, _)| sim > best_sim) {
+                    best = Some((sim, a, b));
+                }
+            }
+        }
+        let Some((_, a, b)) = best else {
+            break;
+        };
+        let (ca, cb) = (clades.swap_remove(b), clades.swap_remove(a));
+        if !(ca.2 && cb.2) {
+            pairs.push((ca.0, cb.0));
+        }
+        let merged_high = ca.2 && cb.2;
+        let mut members = ca.1;
+        members.extend(cb.1);
+        // Prefer a low-coverage representative so it isn't stranded by a high-coverage sibling,
+        // breaking ties by larger sketch coverage (or lower index).
+        let rep = match (ca.2, cb.2) {
+            (false, true) => ca.0,
+            (true, false) => cb.0,
+            _ => {
+                if sketches[ca.0].len() >= sketches[cb.0].len() {
+                    ca.0
+                } else {
+                    cb.0
+                }
+            }
+        };
+        clades.push((rep, members, merged_high));
+    }
+    pairs
+}
+
+fn append_nonoverlapping_rescued_maf(
+    hinge_idx_by_name: &HashMap<&str, usize>,
+    covered: &mut [Vec<(usize, usize)>],
+    target_maf: &mut String,
+    rescued_maf: &str,
+) {
+    if rescued_maf.is_empty() {
+        return;
+    }
+    for (h_row, d_row) in parse_two_row_maf_blocks(rescued_maf) {
+        let Some(&h_cidx) = hinge_idx_by_name.get(h_row.src.as_str()) else {
+            continue;
+        };
+        let size = h_row.seq.bytes().filter(|&b| b != b'-').count();
+        if size == 0 {
+            continue;
+        }
+        let s = h_row.start;
+        let e = s + size;
+        let ivs = &mut covered[h_cidx];
+        // `ivs` is kept sorted by start; check the preceding and next intervals in O(log B).
+        let pos = ivs.partition_point(|&(cs, _)| cs < e);
+        let overlaps = pos > 0 && ivs[pos - 1].1 > s;
+        if overlaps {
+            continue;
+        }
+        let ins = ivs.partition_point(|&(cs, _)| cs < s);
+        ivs.insert(ins, (s, e));
+        let _ = writeln!(target_maf, "a score={size}.0");
+        let _ = writeln!(
+            target_maf,
+            "s {} {} {size} {} {} {}",
+            h_row.src, h_row.start, h_row.strand, h_row.src_size, h_row.seq
+        );
+        let d_size = d_row.seq.bytes().filter(|&b| b != b'-').count();
+        let _ = writeln!(
+            target_maf,
+            "s {} {} {d_size} {} {} {}\n",
+            d_row.src, d_row.start, d_row.strand, d_row.src_size, d_row.seq
+        );
+    }
+}
+
 pub(crate) fn run_progressive_sister_rescue(
     indexed: &[IndexedSpecies],
+    sketches: &[Vec<u64>],
     hinge_idx: usize,
     sp_to_pw_idx: &HashMap<usize, usize>,
     pairwise_mafs: &mut [(String, String)],
@@ -458,35 +684,27 @@ pub(crate) fn run_progressive_sister_rescue(
     top_k: usize,
 ) -> Result<()> {
     let hinge_contigs = &indexed[hinge_idx].1;
-    let mut aligned_pairs: HashSet<(usize, usize)> = HashSet::new();
-    for i in 0..indexed.len() {
-        if i == hinge_idx {
-            continue;
-        }
-        let best_j = (0..indexed.len())
-            .into_par_iter()
-            .filter(|&j| j != i && j != hinge_idx)
-            .map(|j| {
-                let sc: usize = indexed[i]
-                    .2
-                    .iter()
-                    .map(|(_, ix)| {
-                        indexed[j]
-                            .2
-                            .iter()
-                            .map(|(_, iy)| shared_seed_count(ix, iy))
-                            .sum::<usize>()
-                    })
-                    .sum();
-                (sc, std::cmp::Reverse(j))
-            })
-            .max()
-            .map(|(_, std::cmp::Reverse(j))| j);
-        if let Some(j) = best_j {
-            let pair_key = (i.min(j), i.max(j));
-            if !aligned_pairs.insert(pair_key) {
-                continue;
+    let hinge_idx_by_name: HashMap<&str, usize> = hinge_contigs
+        .iter()
+        .enumerate()
+        .map(|(idx, (name, _))| (name.as_str(), idx))
+        .collect();
+    let high_cov: Vec<bool> = (0..indexed.len())
+        .into_par_iter()
+        .map(|i| {
+            if i == hinge_idx {
+                false
+            } else {
+                let pw = sp_to_pw_idx[&i];
+                maf_ref_coverage(hinge_contigs, &pairwise_mafs[pw].1) >= 0.85
             }
+        })
+        .collect();
+    let sister_pairs = build_upgma_rescue_pairs(indexed.len(), hinge_idx, sketches, &high_cov);
+
+    let rescued_chunks: Vec<(usize, String, usize, String)> = sister_pairs
+        .par_iter()
+        .map(|&(i, j)| {
             let (sister_maf, _) = align_species_pair(
                 &indexed[i].1,
                 &indexed[i].2,
@@ -497,33 +715,51 @@ pub(crate) fn run_progressive_sister_rescue(
             )?;
             let pw_i = sp_to_pw_idx[&i];
             let pw_j = sp_to_pw_idx[&j];
-            let rescued_j = rescue_transitive_maf(
-                hinge_contigs,
-                &indexed[i].1,
-                &pairwise_mafs[pw_i].1,
-                &sister_maf,
-                &pairwise_mafs[pw_j].1,
-                true,
-                12,
-                75,
+            let (rescued_j, rescued_i) = rayon::join(
+                || {
+                    rescue_transitive_maf(
+                        hinge_contigs,
+                        &indexed[i].1,
+                        &pairwise_mafs[pw_i].1,
+                        &sister_maf,
+                        &pairwise_mafs[pw_j].1,
+                        true,
+                        12,
+                        75,
+                    )
+                },
+                || {
+                    rescue_transitive_maf(
+                        hinge_contigs,
+                        &indexed[j].1,
+                        &pairwise_mafs[pw_j].1,
+                        &sister_maf,
+                        &pairwise_mafs[pw_i].1,
+                        false,
+                        12,
+                        75,
+                    )
+                },
             );
-            if !rescued_j.is_empty() {
-                pairwise_mafs[pw_j].1.push_str(&rescued_j);
-            }
-            let rescued_i = rescue_transitive_maf(
-                hinge_contigs,
-                &indexed[j].1,
-                &pairwise_mafs[pw_j].1,
-                &sister_maf,
-                &pairwise_mafs[pw_i].1,
-                false,
-                12,
-                75,
-            );
-            if !rescued_i.is_empty() {
-                pairwise_mafs[pw_i].1.push_str(&rescued_i);
-            }
-        }
+            Ok((pw_j, rescued_j, pw_i, rescued_i))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut covered_by_pw: Vec<Vec<Vec<(usize, usize)>>> =
+        vec![vec![Vec::new(); hinge_contigs.len()]; pairwise_mafs.len()];
+    for (pw_j, rescued_j, pw_i, rescued_i) in rescued_chunks {
+        append_nonoverlapping_rescued_maf(
+            &hinge_idx_by_name,
+            &mut covered_by_pw[pw_j],
+            &mut pairwise_mafs[pw_j].1,
+            &rescued_j,
+        );
+        append_nonoverlapping_rescued_maf(
+            &hinge_idx_by_name,
+            &mut covered_by_pw[pw_i],
+            &mut pairwise_mafs[pw_i].1,
+            &rescued_i,
+        );
     }
     Ok(())
 }
@@ -585,6 +821,7 @@ pub(crate) fn run_ancestral_consensus_rescue(
     let rescue_top_k = if top_k == 0 { 0 } else { top_k.max(3) };
     for round in 0..2 {
         let covs: Vec<(usize, f64)> = (0..indexed.len())
+            .into_par_iter()
             .filter(|&i| i != hinge_idx)
             .map(|i| {
                 let pw = sp_to_pw_idx[&i];
@@ -624,19 +861,29 @@ pub(crate) fn run_ancestral_consensus_rescue(
             .par_iter()
             .map(|(n, s)| Ok((n.clone(), prepare_contig_index_opts(s, respect_softmask)?)))
             .collect::<Result<Vec<_>>>()?;
+        let remapped_list: Vec<(usize, String)> = low_cov_species
+            .par_iter()
+            .map(|&k| {
+                let (cons_maf, _) = align_species_pair(
+                    &cons_contigs,
+                    &cons_indices,
+                    &indexed[k].1,
+                    &indexed[k].2,
+                    cfg,
+                    rescue_top_k,
+                )?;
+                let pw_idx = sp_to_pw_idx[&k];
+                let remapped = remap_consensus_maf_to_hinge(
+                    hinge_contigs,
+                    &cons_maf,
+                    &pairwise_mafs[pw_idx].1,
+                );
+                Ok((pw_idx, remapped))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
         let mut any_added = false;
-        for k in low_cov_species {
-            let (cons_maf, _) = align_species_pair(
-                &cons_contigs,
-                &cons_indices,
-                &indexed[k].1,
-                &indexed[k].2,
-                cfg,
-                rescue_top_k,
-            )?;
-            let pw_idx = sp_to_pw_idx[&k];
-            let remapped =
-                remap_consensus_maf_to_hinge(hinge_contigs, &cons_maf, &pairwise_mafs[pw_idx].1);
+        for (pw_idx, remapped) in remapped_list {
             if !remapped.is_empty() {
                 pairwise_mafs[pw_idx].1.push_str(&remapped);
                 any_added = true;
@@ -647,4 +894,39 @@ pub(crate) fn run_ancestral_consensus_rescue(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn upgma_prefers_low_coverage_representative_and_dedups_rescued_maf() {
+        let sketches = vec![
+            vec![1, 2, 3],
+            vec![10, 11, 12, 13, 14],
+            vec![10, 11, 12, 13],
+            vec![20, 21, 22, 23, 24, 25],
+        ];
+        let high_cov = vec![false, true, false, true];
+        let pairs = build_upgma_rescue_pairs(4, 0, &sketches, &high_cov);
+        assert_eq!(pairs.len(), 2);
+        assert!(
+            pairs.iter().all(|&(a, b)| a == 2 || b == 2),
+            "low-coverage species 2 should remain the representative across UPGMA levels: {pairs:?}"
+        );
+
+        let mut hinge_idx = HashMap::new();
+        hinge_idx.insert("hg38.chr1", 0usize);
+        let mut covered = vec![Vec::new()];
+        let mut target = String::new();
+        let rescued_a = "a score=20.0\ns hg38.chr1 0 20 + 100 ACGTACGTACGTACGTACGT\ns dog.chr1 0 20 + 100 ACGTACGTACGTACGTACGT\n\n";
+        let rescued_b = "a score=20.0\ns hg38.chr1 10 20 + 100 ACGTACGTACGTACGTACGT\ns dog.chr1 10 20 + 100 ACGTACGTACGTACGTACGT\n\n";
+        append_nonoverlapping_rescued_maf(&hinge_idx, &mut covered, &mut target, rescued_a);
+        append_nonoverlapping_rescued_maf(&hinge_idx, &mut covered, &mut target, rescued_b);
+        assert_eq!(
+            target.matches("\na score=").count() + usize::from(target.starts_with("a score=")),
+            1
+        );
+    }
 }

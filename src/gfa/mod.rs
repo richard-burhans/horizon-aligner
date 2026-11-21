@@ -82,7 +82,7 @@ impl Drop for SpoolableGfaInput {
 ///
 /// # Errors
 /// Returns an error if `out_path` cannot be created.
-pub fn open_output_writer(out_path: Option<&str>) -> io::Result<io::BufWriter<Box<dyn io::Write>>> {
+pub fn open_output_writer(out_path: Option<&str>) -> io::Result<crate::io_util::TextWriter> {
     open_text_writer(out_path).map_err(io::Error::other)
 }
 
@@ -108,10 +108,6 @@ impl GfaSegment {
             .find_map(|tag| tag.strip_prefix("LN:i:")?.parse::<usize>().ok())
             .unwrap_or(0)
     }
-}
-
-fn open_reader_path(path: &Path) -> Result<Box<dyn BufRead>> {
-    open_text_reader(path)
 }
 
 /// Represents a GFA Link (L line)
@@ -206,7 +202,7 @@ where
     FP: FnMut(GfaPath) -> Result<()>,
     FW: FnMut(GfaWalk) -> Result<()>,
 {
-    let reader = open_reader_path(path.as_ref())?;
+    let reader = open_text_reader(path.as_ref())?;
     stream_gfa_reader(reader, on_segment, on_link, on_path, on_walk)
 }
 
@@ -221,6 +217,14 @@ pub enum GfaRecord {
 
 const MAX_GFA_LINE_BYTES: usize = 256 * 1024 * 1024;
 
+/// Options controlling streaming GFA record parsing.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct GfaStreamOptions {
+    /// When `true`, skip copying `S`-line sequences (storing `b"*"` and synthesizing `LN:i:<len>`
+    /// in `tags` if absent) so metadata/length-only passes avoid allocating sequence buffers.
+    pub skip_segment_seq: bool,
+}
+
 /// Stream GFA records from a path with a single callback that may stop early via `ControlFlow::Break(())`.
 ///
 /// # Errors
@@ -230,14 +234,47 @@ where
     P: AsRef<Path>,
     F: FnMut(GfaRecord) -> Result<std::ops::ControlFlow<()>>,
 {
-    let reader = open_reader_path(path.as_ref())?;
-    stream_gfa_records_reader(reader, on_record)
+    stream_gfa_records_with_opts(path, GfaStreamOptions::default(), on_record)
+}
+
+/// Stream GFA records from a path with explicit [`GfaStreamOptions`].
+///
+/// # Errors
+/// Returns an error if the file cannot be opened, reading fails, a line exceeds 256 MiB, or the callback errors.
+pub fn stream_gfa_records_with_opts<P, F>(
+    path: P,
+    opts: GfaStreamOptions,
+    on_record: F,
+) -> Result<()>
+where
+    P: AsRef<Path>,
+    F: FnMut(GfaRecord) -> Result<std::ops::ControlFlow<()>>,
+{
+    let reader = open_text_reader(path.as_ref())?;
+    stream_gfa_records_reader_with_opts(reader, opts, on_record)
+}
+
+fn req_gfa_field<'a>(
+    tok: Option<&'a str>,
+    rec_type: &str,
+    field: &str,
+) -> std::io::Result<&'a str> {
+    tok.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("truncated GFA {rec_type} record: missing {field}"),
+        )
+    })
 }
 
 fn parse_walk_record<'a>(mut parts: impl Iterator<Item = &'a str>) -> std::io::Result<GfaWalk> {
     let parse_coord = |tok: Option<&str>, field: &str| -> std::io::Result<usize> {
         match tok {
-            Some("*") | None => Ok(0),
+            Some("*") => Ok(0),
+            None => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("truncated GFA W record: missing {field} coordinate"),
+            )),
             Some(s) => s.parse::<usize>().map_err(|_| {
                 std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
@@ -246,12 +283,12 @@ fn parse_walk_record<'a>(mut parts: impl Iterator<Item = &'a str>) -> std::io::R
             }),
         }
     };
-    let sample = parts.next().unwrap_or("").to_string();
-    let haplotype = parts.next().unwrap_or("").to_string();
-    let seq_id = parts.next().unwrap_or("").to_string();
+    let sample = req_gfa_field(parts.next(), "W", "sample")?.to_string();
+    let haplotype = req_gfa_field(parts.next(), "W", "haplotype")?.to_string();
+    let seq_id = req_gfa_field(parts.next(), "W", "seq_id")?.to_string();
     let start = parse_coord(parts.next(), "start")?;
     let end = parse_coord(parts.next(), "end")?;
-    let walk = parts.next().unwrap_or("").to_string();
+    let walk = req_gfa_field(parts.next(), "W", "walk")?.to_string();
     let tags = parts.next().and_then(|rest| {
         if rest.is_empty() {
             None
@@ -270,11 +307,38 @@ fn parse_walk_record<'a>(mut parts: impl Iterator<Item = &'a str>) -> std::io::R
     })
 }
 
+fn parse_link_orient(tok: Option<&str>) -> std::io::Result<u8> {
+    match tok {
+        None | Some("" | "+") => Ok(b'+'),
+        Some("-") => Ok(b'-'),
+        Some(other) => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("invalid GFA link orientation: `{other}`"),
+        )),
+    }
+}
+
 /// Stream GFA records from a buffered reader with a single callback that may stop early.
 ///
 /// # Errors
 /// Returns an error if reading fails, a line exceeds 256 MiB, or the callback errors.
-pub fn stream_gfa_records_reader<R, F>(mut reader: R, mut on_record: F) -> Result<()>
+pub fn stream_gfa_records_reader<R, F>(reader: R, on_record: F) -> Result<()>
+where
+    R: BufRead,
+    F: FnMut(GfaRecord) -> Result<std::ops::ControlFlow<()>>,
+{
+    stream_gfa_records_reader_with_opts(reader, GfaStreamOptions::default(), on_record)
+}
+
+/// Stream GFA records from a buffered reader with explicit [`GfaStreamOptions`].
+///
+/// # Errors
+/// Returns an error if reading fails, a line exceeds 256 MiB, or the callback errors.
+pub fn stream_gfa_records_reader_with_opts<R, F>(
+    mut reader: R,
+    opts: GfaStreamOptions,
+    mut on_record: F,
+) -> Result<()>
 where
     R: BufRead,
     F: FnMut(GfaRecord) -> Result<std::ops::ControlFlow<()>>,
@@ -310,11 +374,23 @@ where
             "S" => {
                 let mut s_parts = trimmed.splitn(4, '\t');
                 let _ = s_parts.next();
-                let name = s_parts.next().unwrap_or("").to_string();
-                let sequence = s_parts.next().unwrap_or("").as_bytes().to_vec();
-                let tags = s_parts
-                    .next()
-                    .and_then(|t| (!t.is_empty()).then(|| t.to_string()));
+                let name = req_gfa_field(s_parts.next(), "S", "name")?.to_string();
+                let raw_seq = req_gfa_field(s_parts.next(), "S", "sequence")?;
+                let raw_tags = s_parts.next().filter(|t| !t.is_empty());
+                let (sequence, tags) = if opts.skip_segment_seq && raw_seq != "*" {
+                    let has_ln =
+                        raw_tags.is_some_and(|t| t.split('\t').any(|tag| tag.starts_with("LN:i:")));
+                    let tags = if has_ln {
+                        raw_tags.map(str::to_string)
+                    } else if let Some(t) = raw_tags {
+                        Some(format!("LN:i:{}\t{t}", raw_seq.len()))
+                    } else {
+                        Some(format!("LN:i:{}", raw_seq.len()))
+                    };
+                    (b"*".to_vec(), tags)
+                } else {
+                    (raw_seq.as_bytes().to_vec(), raw_tags.map(str::to_string))
+                };
                 on_record(GfaRecord::Segment(GfaSegment {
                     name,
                     sequence,
@@ -322,17 +398,13 @@ where
                 }))?
             }
             "L" => {
-                let from = parts.next().unwrap_or("").to_string();
-                let from_orient = parts
-                    .next()
-                    .and_then(|s| s.as_bytes().first().copied())
-                    .unwrap_or(b'+');
-                let to = parts.next().unwrap_or("").to_string();
-                let to_orient = parts
-                    .next()
-                    .and_then(|s| s.as_bytes().first().copied())
-                    .unwrap_or(b'+');
-                let overlap = parts.next().unwrap_or("").to_string();
+                let from = req_gfa_field(parts.next(), "L", "from")?.to_string();
+                let from_orient =
+                    parse_link_orient(Some(req_gfa_field(parts.next(), "L", "from_orient")?))?;
+                let to = req_gfa_field(parts.next(), "L", "to")?.to_string();
+                let to_orient =
+                    parse_link_orient(Some(req_gfa_field(parts.next(), "L", "to_orient")?))?;
+                let overlap = req_gfa_field(parts.next(), "L", "overlap")?.to_string();
                 on_record(GfaRecord::Link(GfaLink {
                     from,
                     from_orient,
@@ -342,9 +414,9 @@ where
                 }))?
             }
             "P" => on_record(GfaRecord::Path(GfaPath {
-                name: parts.next().unwrap_or("").to_string(),
-                segment_names: parts.next().unwrap_or("").to_string(),
-                overlaps: parts.next().unwrap_or("").to_string(),
+                name: req_gfa_field(parts.next(), "P", "name")?.to_string(),
+                segment_names: req_gfa_field(parts.next(), "P", "segment_names")?.to_string(),
+                overlaps: req_gfa_field(parts.next(), "P", "overlaps")?.to_string(),
             }))?,
             "W" => {
                 let mut w_parts = trimmed.splitn(8, '\t');

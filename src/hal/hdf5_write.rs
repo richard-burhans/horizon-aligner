@@ -771,7 +771,7 @@ impl HalAlignment {
         // Store VLS attribute strings in a single Global Heap collection:
         // idx 1 = tree_newick, idx 2 = "2.2", idx 3 = "0", idx 4 = "1"
         let gcol_addr = w.write_gcol(&[self.tree_newick.as_str(), "2.2", "0", "1"]);
-        let tree_len = u32::try_from(self.tree_newick.len()).unwrap_or(0);
+        let tree_len = u32::try_from(self.tree_newick.len()).unwrap_or(u32::MAX);
 
         let (meta_hdr, _, _) = w.write_group(&[]);
         let (genomes_hdr, _, _) = w.write_group(&[]);

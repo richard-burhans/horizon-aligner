@@ -1,6 +1,6 @@
 //! Compact flat sorted spaced-seed index with optional 16-bit prefix bucketing.
 
-use super::{AnchorPairs, is_low_complexity_window};
+use super::AnchorPairs;
 use crate::AlignError;
 
 /// Compact flat sorted spaced-seed index (`12 bytes/entry` vs `~100 bytes/entry` for `HashMap<u64, Vec<usize>>`).
@@ -55,15 +55,10 @@ impl FlatSeedIndex {
         let mut pairs: Vec<(u64, u32)> = Vec::with_capacity((seq.len() - span + 1).min(1 << 24));
 
         for i in 0..=(seq.len() - span) {
-            if let Some(m) = sdust
-                && (m[i] || m[i + span / 2] || m[i + span - 1])
-            {
+            if super::is_masked_window(seq, sdust, i, span) {
                 continue;
             }
             let sub = &seq[i..i + span];
-            if sdust.is_none() && span >= 12 && is_low_complexity_window(sub) {
-                continue;
-            }
             let Some((fwd, rc)) =
                 super::encode_spaced_pair(sub, &offsets, &rev_offsets, skip_softmasked, ry_mode)
             else {
@@ -171,7 +166,7 @@ impl FlatSeedIndex {
             let mut i = 0;
             while i < small.keys.len() {
                 let k = small.keys[i];
-                if large.keys.binary_search(&k).is_ok() {
+                if !large.get(k).is_empty() {
                     count += 1;
                 }
                 while i < small.keys.len() && small.keys[i] == k {

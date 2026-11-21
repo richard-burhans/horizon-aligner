@@ -2,7 +2,8 @@
 
 use anyhow::{Context, Result, bail};
 use horizon_aligner::gfa::{
-    GfaRecord, parse_path_steps, parse_walk_steps, stream_gfa, stream_gfa_records,
+    GfaRecord, GfaStreamOptions, parse_path_steps, parse_walk_steps, stream_gfa,
+    stream_gfa_records, stream_gfa_records_with_opts,
 };
 use std::collections::{HashMap, HashSet};
 use std::env;
@@ -25,24 +26,22 @@ fn cmd_stats(gfa_path: &str) -> Result<()> {
     let mut p_count: u64 = 0;
     let mut w_count: u64 = 0;
 
-    stream_gfa(
+    stream_gfa_records_with_opts(
         gfa_path,
-        |s| {
-            s_count += 1;
-            s_bases += s.seq_len() as u64;
-            Ok(())
+        GfaStreamOptions {
+            skip_segment_seq: true,
         },
-        |_| {
-            l_count += 1;
-            Ok(())
-        },
-        |_| {
-            p_count += 1;
-            Ok(())
-        },
-        |_| {
-            w_count += 1;
-            Ok(())
+        |rec| {
+            match rec {
+                GfaRecord::Segment(s) => {
+                    s_count += 1;
+                    s_bases += s.seq_len() as u64;
+                }
+                GfaRecord::Link(_) => l_count += 1,
+                GfaRecord::Path(_) => p_count += 1,
+                GfaRecord::Walk(_) => w_count += 1,
+            }
+            Ok(std::ops::ControlFlow::Continue(()))
         },
     )?;
 
@@ -76,7 +75,7 @@ fn cmd_list_walks(gfa_path: &str, filter: Option<&str>, limit: usize) -> Result<
             }
             _ => {}
         }
-        if shown_p >= limit && shown_w >= limit {
+        if shown_p + shown_w >= limit {
             Ok(std::ops::ControlFlow::Break(()))
         } else {
             Ok(std::ops::ControlFlow::Continue(()))
@@ -271,10 +270,10 @@ fn main() -> Result<()> {
             cmd_list_walks(&args[2], filter, limit)
         }
         "extract" => {
-            let gfa_path = &args[2];
+            let mut gfa_path: Option<&str> = None;
             let mut max_bp = None;
             let mut specs = Vec::new();
-            let mut i = 3;
+            let mut i = 2;
             while i < args.len() {
                 if args[i] == "--max-bp" {
                     let val = args
@@ -282,6 +281,14 @@ fn main() -> Result<()> {
                         .ok_or_else(|| anyhow::anyhow!("missing value for --max-bp"))?;
                     max_bp = Some(val.parse().context("parsing --max-bp")?);
                     i += 2;
+                    continue;
+                }
+                if args[i].starts_with('-') && args[i] != "-" {
+                    bail!("unknown flag in extract: {}", args[i]);
+                }
+                if gfa_path.is_none() && !args[i].contains(':') {
+                    gfa_path = Some(&args[i]);
+                    i += 1;
                     continue;
                 }
                 let Some((sample_prefix, rest)) = args[i].split_once(':') else {
@@ -303,6 +310,8 @@ fn main() -> Result<()> {
                 });
                 i += 1;
             }
+            let gfa_path = gfa_path
+                .ok_or_else(|| anyhow::anyhow!("missing <file.gfa> argument for extract"))?;
             if specs.is_empty() {
                 bail!("extract requires at least one sample_prefix:seq_id:out.fa spec");
             }

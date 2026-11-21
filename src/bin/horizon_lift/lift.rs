@@ -3,7 +3,10 @@
 use crate::features::InputFeature;
 use anyhow::{Result, bail};
 use horizon_aligner::coord::Interval;
-use horizon_aligner::gfa::{GfaRecord, parse_path_steps, parse_walk_steps, stream_gfa_records};
+use horizon_aligner::gfa::{
+    GfaRecord, GfaStreamOptions, parse_path_steps, parse_walk_steps, stream_gfa_records,
+    stream_gfa_records_with_opts,
+};
 use horizon_aligner::strip_sample_prefix;
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
@@ -27,7 +30,6 @@ struct StepSpan {
 
 #[derive(Debug, Clone)]
 struct TargetOcc {
-    target_chrom: String,
     target_start: usize,
     target_end: usize,
     is_fwd: bool,
@@ -116,6 +118,7 @@ fn lift_feature(
     src_steps: &[StepSpan],
     seg_lens: &HashMap<String, usize>,
     target_index: &HashMap<String, Vec<TargetOcc>>,
+    target_chroms: &[String],
     target_step_names: &[Vec<String>],
     bridge_bp: usize,
 ) -> Vec<LiftedPiece> {
@@ -126,7 +129,7 @@ fn lift_feature(
     // Binary search for first StepSpan with path_end > feat.start
     let first_idx = src_steps.partition_point(|s| s.path_end <= feat.start);
     let mut raw_pieces: Vec<LiftedPiece> = Vec::new();
-    let mut last_target: Option<(String, usize, usize, char)> = None;
+    let mut last_target: Option<(String, usize, usize)> = None;
 
     for (rel_idx, step) in src_steps[first_idx..].iter().enumerate() {
         let src_pos = first_idx + rel_idx;
@@ -169,8 +172,8 @@ fn lift_feature(
             &occs[0]
         } else {
             let dist = |occ: &TargetOcc| -> usize {
-                if let Some((ref prev_chr, prev_s, prev_e, _)) = last_target {
-                    if &occ.target_chrom != prev_chr {
+                if let Some((ref prev_chr, prev_s, prev_e)) = last_target {
+                    if &target_chroms[occ.path_idx] != prev_chr {
                         usize::MAX
                     } else if occ.target_start >= prev_e {
                         occ.target_start - prev_e
@@ -210,7 +213,7 @@ fn lift_feature(
             flip_strand(feat.strand)
         };
         let piece = LiftedPiece {
-            chrom: chosen.target_chrom.clone(),
+            chrom: target_chroms[chosen.path_idx].clone(),
             start: t_s,
             end: t_e,
             strand: out_strand,
@@ -219,7 +222,7 @@ fn lift_feature(
             src_end: ov_e,
             duplicated,
         };
-        last_target = Some((piece.chrom.clone(), piece.start, piece.end, piece.strand));
+        last_target = Some((piece.chrom.clone(), piece.start, piece.end));
 
         // Coalesce contiguous (or within bridge_bp on the same chrom, strand, and relative orientation) pieces.
         if let Some(prev) = raw_pieces.last_mut() {
@@ -427,6 +430,7 @@ struct LiftTables {
     source_walks: Vec<(Vec<StepSpan>, usize, usize)>,
     source_tables: HashMap<String, Vec<usize>>,
     target_index: HashMap<String, Vec<TargetOcc>>,
+    target_chroms: Vec<String>,
     target_step_names: Vec<Vec<String>>,
 }
 
@@ -440,14 +444,20 @@ fn build_lift_tables(gfa_path: &str, paths: LiftPaths) -> Result<LiftTables> {
 
     // Pass 2: collect segment lengths only for needed segments (keeps RSS small on 12 GB HPRC).
     let mut seg_lens: HashMap<String, usize> = HashMap::with_capacity(needed_segs.len());
-    stream_gfa_records(gfa_path, |rec| {
-        if let GfaRecord::Segment(s) = rec
-            && needed_segs.contains(&s.name)
-        {
-            seg_lens.insert(s.name.clone(), s.seq_len());
-        }
-        Ok(ControlFlow::Continue(()))
-    })?;
+    stream_gfa_records_with_opts(
+        gfa_path,
+        GfaStreamOptions {
+            skip_segment_seq: true,
+        },
+        |rec| {
+            if let GfaRecord::Segment(s) = rec
+                && needed_segs.contains(&s.name)
+            {
+                seg_lens.insert(s.name.clone(), s.seq_len());
+            }
+            Ok(ControlFlow::Continue(()))
+        },
+    )?;
 
     let mut source_walks: Vec<(Vec<StepSpan>, usize, usize)> =
         Vec::with_capacity(paths.source_paths.len());
@@ -476,8 +486,10 @@ fn build_lift_tables(gfa_path: &str, paths: LiftPaths) -> Result<LiftTables> {
 
     let mut target_index: HashMap<String, Vec<TargetOcc>> =
         HashMap::with_capacity(needed_segs.len());
+    let mut target_chroms: Vec<String> = Vec::with_capacity(paths.target_paths.len());
     let mut target_step_names: Vec<Vec<String>> = Vec::with_capacity(paths.target_paths.len());
     for (path_idx, p) in paths.target_paths.into_iter().enumerate() {
+        target_chroms.push(p.display_chrom);
         let mut cur = p.start_offset;
         let mut names = Vec::with_capacity(p.steps.len());
         for (step_idx, (seg, is_fwd)) in p.steps.into_iter().enumerate() {
@@ -485,7 +497,6 @@ fn build_lift_tables(gfa_path: &str, paths: LiftPaths) -> Result<LiftTables> {
             let next_cur = cur.saturating_add(slen);
             names.push(seg.clone());
             target_index.entry(seg).or_default().push(TargetOcc {
-                target_chrom: p.display_chrom.clone(),
                 target_start: cur,
                 target_end: next_cur,
                 is_fwd,
@@ -502,6 +513,7 @@ fn build_lift_tables(gfa_path: &str, paths: LiftPaths) -> Result<LiftTables> {
         source_walks,
         source_tables,
         target_index,
+        target_chroms,
         target_step_names,
     })
 }
@@ -573,6 +585,7 @@ pub(crate) fn run_lift<W1: Write, W2: Write>(
                 src_steps,
                 &tables.seg_lens,
                 &tables.target_index,
+                &tables.target_chroms,
                 &tables.target_step_names,
                 cfg.bridge_bp,
             );

@@ -11,7 +11,6 @@ use horizon_aligner::paf::{CigarOp, PafRecord, stream_paf_records};
 use horizon_aligner::seeding::{complement_base, sdust_mask};
 use std::collections::HashMap;
 use std::env;
-use std::io::Write;
 use std::ops::ControlFlow;
 use std::time::Instant;
 
@@ -194,7 +193,7 @@ fn score_paf_record(
     q_map: Option<&HashMap<String, IndexedSeq>>,
     t_map: Option<&HashMap<String, IndexedSeq>>,
     min_bits_override: Option<f64>,
-    crc_cache: &mut HashMap<(String, String), f64>,
+    crc_cache: &mut HashMap<String, HashMap<String, f64>>,
 ) -> ScoreResult {
     #[allow(clippy::cast_precision_loss)]
     let search_space_bits = ((rec.qlen.max(1) as f64) * (rec.tlen.max(1) as f64))
@@ -211,19 +210,33 @@ fn score_paf_record(
         return score_from_counts_only(rec, threshold_bits);
     };
     if min_bits_override.is_none() {
-        let key = (rec.qname.clone(), rec.tname.clone());
-        let crc_floor = *crc_cache.entry(key).or_insert_with(|| {
-            calibrate_null_crc_from_seqs(
+        let crc_floor = if let Some(&cached) = crc_cache
+            .get(rec.qname.as_str())
+            .and_then(|m| m.get(rec.tname.as_str()))
+        {
+            cached
+        } else {
+            let val = calibrate_null_crc_from_seqs(
                 &qs.seq,
                 &ts.seq,
                 15,
                 0.07,
                 base_floor,
                 &HmmParams::default(),
-            )
-        });
+            );
+            crc_cache
+                .entry(rec.qname.clone())
+                .or_default()
+                .insert(rec.tname.clone(), val);
+            val
+        };
         threshold_bits = threshold_bits.max(crc_floor);
     }
+    let reject_corrupt_cigar = ScoreResult {
+        mdl_bits: 0.0,
+        nonrepeat_bp: 0,
+        threshold_bits,
+    };
     let Some(cigar_iter) = rec.cigar_ops() else {
         return score_from_counts_only(rec, threshold_bits);
     };
@@ -232,7 +245,7 @@ fn score_paf_record(
         || rec.qstart > rec.qend
         || rec.tstart > rec.tend
     {
-        return score_from_counts_only(rec, threshold_bits);
+        return reject_corrupt_cigar;
     }
 
     let pi_q = base_probs(qs.gc);
@@ -245,7 +258,7 @@ fn score_paf_record(
 
     for op_res in cigar_iter {
         let Ok(op) = op_res else {
-            return score_from_counts_only(rec, threshold_bits);
+            return reject_corrupt_cigar;
         };
         match op {
             CigarOp::Match(n) | CigarOp::Equal(n) | CigarOp::Diff(n) => {
@@ -261,18 +274,18 @@ fn score_paf_record(
                     &mut mdl_bits,
                     &mut nonrepeat_bp,
                 ) {
-                    return score_from_counts_only(rec, threshold_bits);
+                    return reject_corrupt_cigar;
                 }
             }
             CigarOp::Ins(n) | CigarOp::SoftClip(n) => {
                 if is_rc {
                     let Some(next_q) = q_pos.checked_sub(n) else {
-                        return score_from_counts_only(rec, threshold_bits);
+                        return reject_corrupt_cigar;
                     };
                     q_pos = next_q;
                 } else {
                     let Some(next_q) = q_pos.checked_add(n).filter(|&p| p <= qs.seq.len()) else {
-                        return score_from_counts_only(rec, threshold_bits);
+                        return reject_corrupt_cigar;
                     };
                     q_pos = next_q;
                 }
@@ -285,7 +298,7 @@ fn score_paf_record(
             }
             CigarOp::Del(n) | CigarOp::RefSkip(n) => {
                 let Some(next_t) = t_pos.checked_add(n).filter(|&p| p <= ts.seq.len()) else {
-                    return score_from_counts_only(rec, threshold_bits);
+                    return reject_corrupt_cigar;
                 };
                 t_pos = next_t;
                 if matches!(op, CigarOp::Del(_)) && n > 0 {
@@ -320,7 +333,10 @@ fn net_top_k_records(
         if len == 0 {
             return usize::MAX;
         }
-        ivs.iter()
+        // `ivs` is sorted by interval end (`oe`), so any interval with `oe <= s` cannot overlap.
+        let start_idx = ivs.partition_point(|&(_, oe)| oe <= s);
+        ivs[start_idx..]
+            .iter()
             .filter(|&&(os, oe)| {
                 let ov = os.max(s);
                 let oe_min = oe.min(e);
@@ -337,14 +353,12 @@ fn net_top_k_records(
         {
             continue;
         }
-        occ_q
-            .entry(rec.qname.clone())
-            .or_default()
-            .push((rec.qstart, rec.qend));
-        occ_t
-            .entry(rec.tname.clone())
-            .or_default()
-            .push((rec.tstart, rec.tend));
+        let q_vec = occ_q.entry(rec.qname.clone()).or_default();
+        let q_pos = q_vec.partition_point(|&(_, oe)| oe < rec.qend);
+        q_vec.insert(q_pos, (rec.qstart, rec.qend));
+        let t_vec = occ_t.entry(rec.tname.clone()).or_default();
+        let t_pos = t_vec.partition_point(|&(_, oe)| oe < rec.tend);
+        t_vec.insert(t_pos, (rec.tstart, rec.tend));
         kept.push((rec, res));
     }
     kept.sort_unstable_by(|a, b| {
@@ -377,7 +391,7 @@ fn run_filter(cfg: &FilterConfig) -> Result<()> {
     let mut filtered_mdl = 0usize;
     let mut filtered_len = 0usize;
     let mut net_buf: Vec<(PafRecord, ScoreResult)> = Vec::new();
-    let mut crc_cache: HashMap<(String, String), f64> = HashMap::new();
+    let mut crc_cache: HashMap<String, HashMap<String, f64>> = HashMap::new();
 
     stream_paf_records(&cfg.paf_path, |rec| {
         total += 1;
@@ -392,13 +406,17 @@ fn run_filter(cfg: &FilterConfig) -> Result<()> {
         let pass_mdl = res.mdl_bits >= res.threshold_bits;
         let pass = pass_len && pass_mdl;
 
+        if !pass {
+            if pass_len {
+                filtered_mdl += 1;
+            } else {
+                filtered_len += 1;
+            }
+        }
+
         if cfg.max_occ.is_some() {
             if pass {
                 net_buf.push((rec, res));
-            } else if !pass_len {
-                filtered_len += 1;
-            } else {
-                filtered_mdl += 1;
             }
             return Ok(ControlFlow::Continue(()));
         }
@@ -406,18 +424,9 @@ fn run_filter(cfg: &FilterConfig) -> Result<()> {
         if pass || cfg.keep_all {
             if pass {
                 kept += 1;
-            } else if !pass_len {
-                filtered_len += 1;
-            } else {
-                filtered_mdl += 1;
             }
-            let hb_tag = if pass { "hb:i:0" } else { "hb:i:1" };
-            let extra = vec![format!("md:f:{:.2}", res.mdl_bits), hb_tag.to_owned()];
-            writeln!(out, "{}", rec.format_line(&extra))?;
-        } else if !pass_len {
-            filtered_len += 1;
-        } else {
-            filtered_mdl += 1;
+            let hb = u8::from(!pass);
+            rec.write_line_with_mdl(&mut out, res.mdl_bits, hb)?;
         }
         Ok(ControlFlow::Continue(()))
     })?;
@@ -426,12 +435,11 @@ fn run_filter(cfg: &FilterConfig) -> Result<()> {
         let netted = net_top_k_records(net_buf, k);
         kept = netted.len();
         for (rec, res) in netted {
-            let extra = vec![format!("md:f:{:.2}", res.mdl_bits), "hb:i:0".to_owned()];
-            writeln!(out, "{}", rec.format_line(&extra))?;
+            rec.write_line_with_mdl(&mut out, res.mdl_bits, 0)?;
         }
     }
 
-    out.flush()?;
+    out.finish()?;
     eprintln!(
         "[horizon_filter] total={} kept={} filtered_mdl={} filtered_len={} elapsed={:.2}s",
         total,
@@ -613,5 +621,28 @@ mod tests {
             res_m.mdl_bits < res_eq.mdl_bits,
             "100M with 50/100 matches must score strictly lower than 100="
         );
+    }
+
+    #[test]
+    fn corrupt_or_oob_cigar_with_fasta_is_rejected_not_counted() {
+        let complex =
+            b"ACGTAGTGCTAGCATCGATCGTAGCTAGCTGATCGATCGATCGATCGTAGCTAGCTAGCATCGATCGTAGCTAGCTAGCA";
+        let mut q_map = HashMap::new();
+        q_map.insert("q".to_owned(), IndexedSeq::from_dna(complex.to_vec()));
+        let mut t_map = HashMap::new();
+        t_map.insert("t".to_owned(), IndexedSeq::from_dna(complex.to_vec()));
+
+        let paf_oob = PafRecord::parse_line("q\t80\t0\t80\t+\tt\t80\t0\t80\t80\t80\t60\tcg:Z:200=")
+            .expect("paf");
+        let mut crc_cache = HashMap::new();
+        let res = score_paf_record(
+            &paf_oob,
+            Some(&q_map),
+            Some(&t_map),
+            Some(10.0),
+            &mut crc_cache,
+        );
+        assert_eq!(res.mdl_bits, 0.0);
+        assert_eq!(res.nonrepeat_bp, 0);
     }
 }

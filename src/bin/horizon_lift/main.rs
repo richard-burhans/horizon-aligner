@@ -9,8 +9,6 @@ use horizon_aligner::gfa::{SpoolableGfaInput, open_output_writer};
 use lift::{LiftConfig, run_lift};
 use std::collections::HashSet;
 use std::env;
-use std::fs::File;
-use std::io::{BufWriter, Write};
 use std::path::Path;
 use std::time::Instant;
 
@@ -153,16 +151,16 @@ fn main() -> Result<()> {
     };
 
     let mut unmapped_writer = if let Some(ref up) = cli.unmapped_path {
-        Some(BufWriter::new(File::create(up)?))
+        Some(open_output_writer(Some(up.as_str()))?)
     } else {
         None
     };
 
     let mut w = open_output_writer(cli.out_path.as_deref())?;
     let summary = run_lift(&cfg, &mut w, unmapped_writer.as_mut())?;
-    w.flush()?;
-    if let Some(mut uw) = unmapped_writer {
-        uw.flush()?;
+    w.finish()?;
+    if let Some(uw) = unmapped_writer {
+        uw.finish()?;
     }
 
     #[allow(clippy::cast_precision_loss)]

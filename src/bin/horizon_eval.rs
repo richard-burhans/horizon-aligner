@@ -14,7 +14,7 @@ use std::time::Instant;
 const USAGE: &str = "usage: horizon_eval <ref_name> <target_name> <ref.fa> <target.fa> <truth.maf> [--min-fallback-cov F] [--hsp-threshold N]";
 
 fn read_named_contigs(path: &Path, target: &str) -> Result<HashMap<String, Vec<u8>>> {
-    let all = horizon_aligner::read_fasta_contigs(path, usize::MAX)?;
+    let all = horizon_aligner::read_fasta_contigs(path, 0)?;
     let has_match = all
         .iter()
         .any(|(id, _)| horizon_aligner::matches_sample_prefix(id, target));

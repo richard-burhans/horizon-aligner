@@ -92,8 +92,12 @@ impl EGraph {
         let eid = self.parent.len();
         self.parent.push(eid);
         self.parents.push(Vec::new());
+        let mut seen_children = Vec::with_capacity(cnode.children.len());
         for &child in &cnode.children {
-            self.parents[child].push((cnode.clone(), eid));
+            if !seen_children.contains(&child) {
+                seen_children.push(child);
+                self.parents[child].push((cnode.clone(), eid));
+            }
         }
         let mut set = HashSet::new();
         set.insert(cnode.clone());
@@ -220,14 +224,17 @@ pub fn saturate_synteny(eg: &mut EGraph, max_iters: usize, max_nodes: usize) {
             break;
         }
         let mut merges: Vec<(usize, usize)> = Vec::new();
-        let mut snapshot: Vec<(usize, Vec<ENode>)> = eg
-            .classes
-            .keys()
+        let mut class_ids: Vec<usize> = eg.classes.keys().copied().collect();
+        class_ids.sort_unstable();
+        let snapshot_map: HashMap<usize, Vec<ENode>> = class_ids
+            .iter()
             .map(|&id| (id, sorted_class_nodes(eg, id)))
             .collect();
-        snapshot.sort_unstable_by_key(|(id, _)| *id);
 
-        for (eid, nodes) in snapshot {
+        for &eid in &class_ids {
+            let Some(nodes) = snapshot_map.get(&eid) else {
+                continue;
+            };
             if eg.memo.len() >= max_nodes {
                 break;
             }
@@ -237,7 +244,8 @@ pub fn saturate_synteny(eg: &mut EGraph, max_iters: usize, max_nodes: usize) {
                 }
                 if node.op == "inv" && node.children.len() == 1 {
                     let child = eg.find(node.children[0]);
-                    for cnode in sorted_class_nodes(eg, child) {
+                    let empty = Vec::new();
+                    for cnode in snapshot_map.get(&child).unwrap_or(&empty) {
                         if eg.memo.len() >= max_nodes {
                             break;
                         }
@@ -270,7 +278,8 @@ pub fn saturate_synteny(eg: &mut EGraph, max_iters: usize, max_nodes: usize) {
                         });
                         merges.push((eid, dup_x));
                     }
-                    for anode in sorted_class_nodes(eg, a) {
+                    let empty = Vec::new();
+                    for anode in snapshot_map.get(&a).unwrap_or(&empty) {
                         if eg.memo.len() >= max_nodes {
                             break;
                         }
@@ -287,7 +296,7 @@ pub fn saturate_synteny(eg: &mut EGraph, max_iters: usize, max_nodes: usize) {
                             merges.push((eid, rhs));
                         }
                     }
-                    for bnode in sorted_class_nodes(eg, b) {
+                    for bnode in snapshot_map.get(&b).unwrap_or(&empty) {
                         if eg.memo.len() >= max_nodes {
                             break;
                         }
@@ -456,18 +465,23 @@ pub fn extract_min_mdl_cost(eg: &EGraph, root: usize, model: &MdlCostModel) -> O
     let max_rounds = eg.classes.len() + 2;
     let mut class_ids: Vec<usize> = eg.classes.keys().copied().collect();
     class_ids.sort_unstable();
-
-    for _ in 0..max_rounds {
-        let mut updated = false;
-        for raw_id in &class_ids {
-            let eid = eg.find_imm(*raw_id);
-            let Some(node_set) = eg.classes.get(&eid) else {
-                continue;
-            };
+    let sorted_classes: Vec<(usize, Vec<&ENode>)> = class_ids
+        .iter()
+        .filter_map(|&raw_id| {
+            let eid = eg.find_imm(raw_id);
+            let node_set = eg.classes.get(&eid)?;
             let mut nodes: Vec<&ENode> = node_set.iter().collect();
             nodes
                 .sort_unstable_by(|a, b| a.op.cmp(&b.op).then_with(|| a.children.cmp(&b.children)));
-            for node in nodes {
+            Some((eid, nodes))
+        })
+        .collect();
+
+    for _ in 0..max_rounds {
+        let mut updated = false;
+        for (eid, nodes) in &sorted_classes {
+            let eid = *eid;
+            for &node in nodes {
                 if let Some(lbl) = node.op.strip_prefix("blk:") {
                     let cost = model.block_bits(lbl);
                     let res = model.block_residual_bits(lbl);

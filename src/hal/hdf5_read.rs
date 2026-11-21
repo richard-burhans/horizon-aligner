@@ -631,6 +631,10 @@ fn parse_filter_pipeline(body: &[u8]) -> FilterSummary {
             let name_len = usize::from(u16::from_le_bytes([body[fpos + 2], body[fpos + 3]]));
             let n_client = usize::from(u16::from_le_bytes([body[fpos + 6], body[fpos + 7]]));
             fpos += 8 + ((name_len + 7) & !7) + (((n_client * 4) + 7) & !7);
+            if fpos > body.len() {
+                summary.has_unsupported = true;
+                break;
+            }
         } else if ver == 2 && fpos + 6 <= body.len() {
             let (name_len, n_client, hdr_len) = if filter_id >= 256 {
                 if fpos + 8 > body.len() {
@@ -650,6 +654,10 @@ fn parse_filter_pipeline(body: &[u8]) -> FilterSummary {
                 )
             };
             fpos += hdr_len + name_len + n_client * 4;
+            if fpos > body.len() {
+                summary.has_unsupported = true;
+                break;
+            }
         } else {
             summary.has_unsupported = true;
             break;
