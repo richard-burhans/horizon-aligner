@@ -55,7 +55,10 @@ These sets were completely locked away during algorithm development to prevent o
 | Stage | Binary | Scope | Result | Peak RSS | Wall Time |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | 92-Species Netting Merge | `horizon_merge` | `hg38` + `91` vertebrate targets (`chrM.maf`) | `460` total / `460` multi-species blocks | **26.6 MB** | 21.78s |
-| 5-Species Progressive + HAL | `horizon_guide --progressive --hal --rbest` | `hg38`, `Macaca`, `HLcalPym1`, `Equus`, `Canis`; UCSC `chrM.maf` | `1,109` MAF blocks (`2896229`; `657–707` at `5cb83fb`); `2,103` HAL bottom segs on `chrM.maf` (`5cb83fb`, `0.258s`) | — | 0.859s / 0.258s |
+| 5-Species Progressive + HAL | `horizon_guide --progressive --hal --rbest` | `hg38`, `Macaca`, `HLcalPym1`, `Equus`, `Canis`; UCSC `chrM.maf` | `1,109` MAF blocks (`2896229`); `2,109` HAL bottom segs, `270` total / `259` multi-sp blocks on `chrM.maf` (`panTro4` `95.5%/99.8%`, `rheMac3` `89.2%/97.1%`, `mm10` `71.9%/97.5%`, `canFam3` `74.1%/98.2%`) | — | 0.859s / **0.265s** |
+| 77-Species Mammalian Slice | `horizon_guide` (Star / `--progressive --hal`) | `cactus447way_chr22_random.maf` (`77` species, `≥25 kb/sp`) | MinHash-hinge star vs. parallel UPGMA progressive HAL | **778.5 MB** / **802.7 MB** | **1.72s** / **3.01s** |
+| 444-Species Mammalian Slice | `horizon_guide` (Star) | `cactus447way_chr22_random.maf` (`444` species, `≥1 kb/sp`) | Full-panel central-hinge star alignment | **1,116.6 MB** | **12.87s** |
+| 14-Species `1 Mbp` Slice | `horizon_guide` (Star / `--progressive --hal`) | `cactus241way_chr22_1MB.maf` (`14` largest species, `13.21 Mbp` total FASTA) | Large-contig multi-species star vs. progressive HAL | **1,803.4 MB** / **3,672.1 MB** | **48.00s** / **84.82s** |
 
 ## Pangenome Graph Benchmarks (12 GB `hprc-v1.0-mc-grch38.gfa.gz` & Subgraphs)
 

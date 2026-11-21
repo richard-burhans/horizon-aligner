@@ -14,7 +14,7 @@ A pure-Rust **information-theoretic genome alignment and pangenome suite** combi
   - `horizon_resolve`: Standalone MDL-calibrated e-graph resolution (`MdlCostModel`) over `u32` `PackedGraph` + `O(V+E)` Tarjan biedged snarl decomposition with topological window-divergence estimation (`[0.02, 0.15]` heuristic unless `--divergence` is passed; `--collapse-dups`, `--tag-walks`), updating `W`-line `end` bounds and pruning/synthesizing `L` links (assuming `0M` overlaps).
   - `horizon_filter`: Streaming SDUST + Pair-HMM MDL filter (using contig-global or fixed `0.5` GC `base_probs`) and `--net`/`--max-occ` interval netter for `FastGA`/`wfmash` PAF alignments (`md:f:` and `hb:i:` tags).
   - `horizon_locus`: Regional `impg`-style multi-FASTA all-pairs locus aligner (`SDUST + BOCPD/MDL + Aa5Index`), emitting `<out>.similarity.tsv`, `<out>.maf`, and `<out>.gfa`.
-- **Multi-species merging & progressive guide-tree WGA (`horizon_merge`, `horizon_guide`):** `O(N log N)` coordinate sweep-line MAF/rGFA merging with best-score interval netting (`src/merge.rs`) and iterative ancestral consensus rescue.
+- **Multi-species merging & progressive guide-tree WGA (`horizon_merge`, `horizon_guide`):** `O(N log N)` coordinate sweep-line MAF/rGFA merging with best-score interval netting (`src/merge.rs`, streaming via `merge_pairwise_maf_paths_to_writers`), MinHash-sketch hinge selection (`minhash_sketch`), parallel UPGMA guide-tree construction, zero-MAF star fast path, and two-pass iterative ancestral consensus rescue (`src/bin/horizon_guide/`).
 - **Pure-Rust HDF5 / HAL reader & writer (`src/hal/`):** Streaming `Read + Seek` HDF5 `v0`/`v1` parser (`hdf5_read.rs`) and `libhdf5`-compatible HDF5 `v0` writer (`hdf5_write.rs`) with zero `libhdf5` dependency.
 
 ## Repository Structure
@@ -38,22 +38,26 @@ src/
 │   └── translated.rs   # 6-frame biochemical AA5 seeding & HSP-gated LASTZ12
 ├── mdl/
 │   ├── mod.rs          # Contig-pair alignment pipeline & adaptive HmmParams shrinkage
+│   ├── crc.rs          # Conformal Risk Control (CRC) null bit-savings calibration
 │   ├── dp.rs           # Flat BandLayout Pair-HMM Forward-Backward & X-drop extension
+│   ├── dp_fast.rs      # Diagonal, narrow-banded Viterbi, & exact flank trimming fast paths
 │   ├── dag.rs          # Seeded topological DAG/POA MDL alignment (--graph)
 │   └── dag_seed.rs     # MASK_W10, MASK_RY20 & compact aa5_keys DAG seeding
 ├── hal/
 │   ├── mod.rs          # In-memory HalAlignment model, paralog chaining, MAF export
 │   ├── hdf5_read.rs    # Streaming Read+Seek HDF5 v0/v1 & HAL binary array decoder
-│   └── hdf5_write.rs   # Pure-Rust HDF5 v0 writer (multi-level B-trees)
+│   ├── hdf5_write.rs   # Pure-Rust HDF5 v0 writer (multi-level B-trees)
+│   ├── tests_hdf5.rs   # HDF5 container & HAL binary decoding tests
+│   └── tests_model.rs  # HalAlignment model & ancestral consensus tests
 └── bin/
     ├── horizon.rs          # Unified `horizon <subcommand>` dispatcher
     ├── horizon_wga.rs      # Pairwise WGA, DAG/POA (--graph), and --hal-info CLI
-    ├── horizon_merge.rs    # Multi-species pairwise MAF -> MAF + rGFA merger
-    ├── horizon_guide/      # Progressive guide-tree / central-hinge WGA + HAL export
+    ├── horizon_merge.rs    # Streaming multi-species pairwise MAF -> MAF + rGFA merger
+    ├── horizon_guide/      # MinHash-hinge & parallel UPGMA progressive WGA + HAL export
     ├── horizon_gfa.rs      # Streaming GFA stats & two-pass chromosome extract
     ├── horizon_lift/       # Graph-aware BED/GFF3 coordinate liftover
     ├── horizon_clean.rs    # BOCPD+MDL GFA junction scorer & bubble cutter
-    ├── horizon_resolve.rs  # Standalone GFA snarl/walk e-graph duplication resolver
+    ├── horizon_resolve/    # Modular GFA snarl/walk e-graph duplication resolver
     ├── horizon_filter.rs   # Streaming SDUST+BOCPD+MDL PAF filter & netter
     ├── horizon_locus.rs    # Regional multi-FASTA locus aligner & similarity matrix
     ├── horizon_eval.rs     # Pairwise MAF recall/precision evaluator
@@ -107,6 +111,11 @@ target/release/horizon_guide --progressive --rbest --hal out.hal tree.nwk genome
 
 ## Performance Highlights
 
+- **Multi-species `horizon_guide` & `horizon_merge` scaling (post-review release build):**
+  - `horizon_merge` across `92` vertebrate `chrM` species: **21.78s** (`26.6 MB` RSS, `460` multi-species blocks).
+  - `horizon_guide --progressive --hal` on 5-mammal UCSC `chrM.maf` (`verify_merge_guide_maf.py`): **0.265s** (`2,109` HAL bottom segments, `270` total / `259` multi-species blocks; `hg38` × `panTro4` `95.5%`/`99.8%`, `rheMac3` `89.2%`/`97.1%`, `mm10` `71.9%`/`97.5%`, `canFam3` `74.1%`/`98.2%` recall/precision).
+  - `horizon_guide` on `cactus447way_chr22_random.maf`: `77` species (`≥25 kb/sp`) in **1.72s** (`778.5 MB` RSS, Star) and **3.01s** (`802.7 MB` RSS, `--progressive --hal`); `444` species (`≥1 kb/sp`) in **12.87s** (`1,116.6 MB` RSS, Star).
+  - `horizon_guide` on `cactus241way_chr22_1MB.maf` (`14` largest species, `13.21 Mbp` total FASTA): **48.00s** (`1,803.4 MB` RSS, Star) and **84.82s** (`3,672.1 MB` RSS, `--progressive --hal`).
 - **Pairwise WGA benchmarks (`scripts/benchmarks/run_all_evals.py` on `8cd5db0`):**
   - `multiz100way` (`hg38` vs `panTro4` chrM): **95.6%** recall / **97.4%** precision (`0.058s`).
   - `multiz100way` (`hg38` vs `mm10` chrM): **76.5%** recall / **93.7%** precision (`0.064s`).

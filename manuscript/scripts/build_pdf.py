@@ -145,11 +145,7 @@ def parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
     return meta, body
 
 
-def main() -> None:
-    manuscript_dir = Path(__file__).resolve().parents[1]
-    md_path = manuscript_dir / "horizon_paper.md"
-    pdf_path = manuscript_dir / "horizon_paper.pdf"
-
+def render_md_to_pdf(md_path: Path, pdf_path: Path, manuscript_dir: Path) -> None:
     raw = md_path.read_text(encoding="utf-8")
     meta, body = parse_frontmatter(raw)
     # Strip pandoc-style {.unnumbered} attributes
@@ -182,6 +178,16 @@ def main() -> None:
 """
     weasyprint.HTML(string=html_doc, base_url=str(manuscript_dir)).write_pdf(str(pdf_path))
     print(f"Wrote {pdf_path} ({pdf_path.stat().st_size} bytes)")
+
+
+def main() -> None:
+    manuscript_dir = Path(__file__).resolve().parents[1]
+    for stem in ("horizon_paper", "horizon_companion"):
+        render_md_to_pdf(
+            manuscript_dir / f"{stem}.md",
+            manuscript_dir / f"{stem}.pdf",
+            manuscript_dir,
+        )
 
 
 if __name__ == "__main__":

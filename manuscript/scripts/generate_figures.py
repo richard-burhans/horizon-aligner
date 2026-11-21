@@ -929,6 +929,122 @@ def make_fig7_chr6_hprc_comparison() -> None:
     save_both(fig, "fig7_chr6_hprc_comparison")
 
 
+def make_fig8_multispecies_scaling() -> None:
+    """Two-panel BioVis figure: horizon_guide multi-species scaling & 5-mammal chrM HAL accuracy."""
+    fig, (ax1, ax2) = plt.subplots(
+        1, 2, figsize=(10.8, 4.2), gridspec_kw={"width_ratios": [1.15, 1.0], "wspace": 0.34}
+    )
+
+    # Panel A: Multi-species horizon_guide Star vs --progressive --hal runtime & RSS
+    regimes = [
+        "5-sp chrM\n(16.5 kb/sp)",
+        "77-sp cactus447way\n(chr22_random, ≥25 kb)",
+        "444-sp cactus447way\n(chr22_random, ≥1 kb)",
+        "14-sp cactus241way\n(chr22 1MB, 13.2 Mbp)",
+    ]
+    star_s = [None, 1.7182, 12.8684, 48.0048]
+    prog_s = [0.2653, 3.0102, None, 84.8240]
+    star_rss = [None, "778 MB", "1.12 GB", "1.80 GB"]
+    prog_rss = ["2,109 segs", "803 MB", None, "3.67 GB"]
+
+    y = np.arange(len(regimes))
+    h = 0.35
+    for i in range(len(regimes)):
+        if star_s[i] is not None:
+            b = ax1.barh(
+                y[i] - h / 2,
+                star_s[i],
+                height=h,
+                color=OI_BLUE,
+                edgecolor="white",
+                label="Star mode" if i == 1 else None,
+            )
+            ax1.text(
+                star_s[i] * 1.15,
+                y[i] - h / 2,
+                f"{star_s[i]:.2f} s ({star_rss[i]})",
+                va="center",
+                ha="left",
+                fontsize=6.8,
+                color=OI_BLUE,
+                fontweight="bold",
+            )
+        if prog_s[i] is not None:
+            pos_y = y[i] if star_s[i] is None else y[i] + h / 2
+            b = ax1.barh(
+                pos_y,
+                prog_s[i],
+                height=h,
+                color=OI_GREEN,
+                edgecolor="white",
+                label="--progressive --hal" if i == 0 else None,
+            )
+            ax1.text(
+                prog_s[i] * 1.15,
+                pos_y,
+                f"{prog_s[i]:.2f} s ({prog_rss[i]})",
+                va="center",
+                ha="left",
+                fontsize=6.8,
+                color=OI_GREEN,
+                fontweight="bold",
+            )
+
+    ax1.set_xscale("log")
+    ax1.set_xlim(0.1, 1400)
+    ax1.set_yticks(y)
+    ax1.set_yticklabels(regimes, fontsize=7.6)
+    ax1.invert_yaxis()
+    ax1.set_xlabel("Wall-Clock Runtime (s, log scale)", fontsize=9.0)
+    ax1.set_title("horizon_guide Scaling (Star vs. Progressive HAL)", loc="left", fontsize=9.2)
+    ax1.legend(frameon=False, fontsize=7.5, loc="upper right")
+    ax1.grid(True, axis="x", which="major", linestyle=":", linewidth=0.5, color="#D1D5DB", alpha=0.7)
+    despine(ax1)
+    ax1.text(-0.24, 1.07, "A", transform=ax1.transAxes, fontsize=11.5, fontweight="bold", va="top")
+
+    # Panel B: 5-mammal UCSC chrM.maf hg38-projected progressive HAL accuracy
+    taxa = ["panTro4\n(Chimp)", "rheMac3\n(Macaque)", "mm10\n(Mouse)", "canFam3\n(Dog)"]
+    recalls = [95.5, 89.2, 71.9, 74.1]
+    precs = [99.8, 97.1, 97.5, 98.2]
+    x = np.arange(len(taxa))
+    w = 0.36
+    b1 = ax2.bar(x - w / 2, recalls, width=w, color=OI_SKY, edgecolor="white", label="Recall (%)")
+    b2 = ax2.bar(x + w / 2, precs, width=w, color=OI_BLUE, edgecolor="white", label="Precision (%)")
+
+    for bar, val in zip(b1, recalls):
+        ax2.text(
+            bar.get_x() + bar.get_width() / 2,
+            val + 1.5,
+            f"{val:.1f}%",
+            ha="center",
+            va="bottom",
+            fontsize=6.9,
+            color=OI_BLACK,
+        )
+    for bar, val in zip(b2, precs):
+        ax2.text(
+            bar.get_x() + bar.get_width() / 2,
+            val + 1.5,
+            f"{val:.1f}%",
+            ha="center",
+            va="bottom",
+            fontsize=6.9,
+            fontweight="bold",
+            color=OI_BLUE,
+        )
+
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(taxa, fontsize=7.8)
+    ax2.set_ylim(0, 115)
+    ax2.set_ylabel("Pairwise Base-Pair Accuracy (%)", fontsize=9.0)
+    ax2.set_title("5-Mammal chrM Progressive HAL (0.265 s, 2,109 segs)", loc="left", fontsize=9.5)
+    ax2.legend(frameon=False, fontsize=7.5, loc="lower left")
+    despine(ax2)
+    ax2.text(-0.15, 1.07, "B", transform=ax2.transAxes, fontsize=11.5, fontweight="bold", va="top")
+
+    save_both(fig, "fig8_multispecies_scaling")
+
+
 if __name__ == "__main__":
     make_fig1_architecture()
     make_fig2_benchmarks()
@@ -937,10 +1053,11 @@ if __name__ == "__main__":
     make_fig5_pangenome_suite()
     make_fig6_suite_and_vg()
     make_fig7_chr6_hprc_comparison()
+    make_fig8_multispecies_scaling()
     make_fig_c1_bocpd_mdl_trace()
     make_fig_c2_bandgrid_egraph()
     make_fig_c3_hdf5_hal_seek()
     make_fig_g1_hoxd70_vs_mdl_gc()
     make_fig_g2_hal_binary_layouts()
     make_fig_g3_horizon_bubble_anatomy()
-    print(f"Generated 13 figures (.png + .svg + .pdf) in {OUT_DIR}")
+    print(f"Generated 14 figures (.png + .svg + .pdf) in {OUT_DIR}")

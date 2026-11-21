@@ -104,7 +104,7 @@ horizon_wga <target.fa> <query.fa> [max_contigs] [OPTIONS]
 * `--min-top-lcb <N>`: Set the minimum length of the top LCB block.
 
 ### `horizon_merge`
-Executes an $O(N \log N)$ sweep-line exact-coordinate algorithm to merge multiple pairwise MAFs against a common reference into a single multi-species MAF/rGFA.
+Executes an $O(N \log N)$ sweep-line exact-coordinate algorithm to merge multiple pairwise MAFs against a common reference, streaming multi-species MAF and rGFA directly to disk via `merge_pairwise_maf_paths_to_writers`.
 
 ```bash
 horizon_merge <ref_species> <bin_bp> <maf_out> <gfa_out> <sp1=path1.maf> [<sp2=path2.maf> ...]
@@ -112,7 +112,7 @@ horizon_merge <ref_species> <bin_bp> <maf_out> <gfa_out> <sp1=path1.maf> [<sp2=p
 * `bin_bp`: Window size for the exact-coordinate projection (e.g. 1000).
 
 ### `horizon_guide`
-Orchestrates a progressive alignment across a guide tree using Nyström low-rank Gram approximations.
+Orchestrates star or progressive multi-species alignment using MinHash-sketch central-hinge selection (`minhash_sketch`), Rayon-parallel pairwise alignment, parallel UPGMA sister-clade transitive rescue, and two-pass iterative ancestral consensus bridging.
 
 ```bash
 horizon_guide [--progressive] [--respect-softmask] [--hal] [--rbest | --top-k K | --all-pairs] <out_prefix> <max_contigs> <sp1=fa1> <sp2=fa2>...
@@ -141,7 +141,7 @@ horizon_clean --gfa <in.gfa[.gz|.zst]|-> [--flank 128] [--min-cp-bits 12.0] [--p
 ```
 
 ### `horizon_resolve`
-Runs standalone MDL-calibrated e-graph resolution (`MdlCostModel`) over a `u32`-interned `PackedGraph` with $O(V + E)$ Tarjan biedged snarl decomposition and topological window-divergence estimation (`[0.02, 0.15]` heuristic unless `--divergence` is passed), canceling double inversions, collapsing adjacent tandem duplications, updating `W`-line `end` bounds, and pruning/synthesizing `L` links (assuming `0M` overlaps).
+Runs standalone MDL-calibrated e-graph resolution (`MdlCostModel`) over a `u32`-interned `PackedGraph` (`src/bin/horizon_resolve/{main.rs,snarl.rs,resolve.rs}`) with $O(V + E)$ Tarjan biedged snarl decomposition and topological window-divergence estimation (`[0.02, 0.15]` heuristic unless `--divergence` is passed), canceling double inversions, collapsing adjacent tandem duplications, streaming `S`-line sequences intact, updating `W`-line `end` bounds, and pruning/synthesizing `L` links (assuming `0M` overlaps).
 
 ```bash
 horizon_resolve <in.gfa[.gz|.zst]|-> [--max-bubble-steps 16] [--min-anchor-bp 200] [--divergence 0.02] [--collapse-dups] [--tag-walks] > resolved.gfa
