@@ -596,7 +596,7 @@ fn walk_chunk_btree_v1_seek<R: std::io::Read + std::io::Seek>(
 
 #[derive(Default)]
 struct FilterSummary {
-    deflated: bool,
+    deflate_layers: usize,
     has_unsupported: bool,
 }
 
@@ -623,7 +623,7 @@ fn parse_filter_pipeline(body: &[u8]) -> FilterSummary {
         }
         let filter_id = u16::from_le_bytes([body[fpos], body[fpos + 1]]);
         if filter_id == 1 {
-            summary.deflated = true;
+            summary.deflate_layers += 1;
         } else {
             summary.has_unsupported = true;
         }
@@ -666,7 +666,7 @@ pub fn is_hdf5_deflated(bytes: &[u8], obj_addr: usize) -> bool {
     let _ = iter_v1_header_messages_seek(&mut cursor, obj_addr as u64, |mtype, body| {
         if mtype == 0x000B {
             let fs = parse_filter_pipeline(body);
-            if fs.deflated && !fs.has_unsupported {
+            if fs.deflate_layers > 0 && !fs.has_unsupported {
                 deflated = true;
                 return std::ops::ControlFlow::Break(());
             }
@@ -710,7 +710,7 @@ pub fn read_hdf5_v0_dataset_bytes_seek<R: std::io::Read + std::io::Seek>(
             }
         } else if mtype == 0x000B {
             let fs = parse_filter_pipeline(body);
-            filters.deflated |= fs.deflated;
+            filters.deflate_layers = filters.deflate_layers.saturating_add(fs.deflate_layers);
             filters.has_unsupported |= fs.has_unsupported;
         }
         std::ops::ControlFlow::Continue(())
@@ -760,6 +760,7 @@ pub fn read_hdf5_v0_dataset_bytes_seek<R: std::io::Read + std::io::Seek>(
         .min(usize::try_from(MAX_CHUNK_DECOMPRESSED_BYTES).unwrap_or(usize::MAX));
     let mut out = Vec::with_capacity(prealloc);
     let mut raw_chunk = Vec::new();
+    let mut tmp_chunk = Vec::new();
     for ch in chunks {
         let Ok(len) = usize::try_from(ch.size) else {
             return Ok(None);
@@ -773,8 +774,21 @@ pub fn read_hdf5_v0_dataset_bytes_seek<R: std::io::Read + std::io::Seek>(
         if raw_chunk.len() != len {
             return Ok(None);
         }
-        if filters.deflated && (ch.filter_mask & 1 == 0) {
+        let active_layers: usize = (0..filters.deflate_layers.min(32))
+            .filter(|&layer| (ch.filter_mask & (1u32 << layer)) == 0)
+            .count();
+        if active_layers > 0 {
             use std::io::Read as _;
+            for _ in 1..active_layers {
+                tmp_chunk.clear();
+                let dec = flate2::read::ZlibDecoder::new(raw_chunk.as_slice());
+                let mut bounded = dec.take(MAX_CHUNK_DECOMPRESSED_BYTES + 1);
+                let n = bounded.read_to_end(&mut tmp_chunk)?;
+                if u64::try_from(n).unwrap_or(u64::MAX) > MAX_CHUNK_DECOMPRESSED_BYTES {
+                    return Ok(None);
+                }
+                std::mem::swap(&mut raw_chunk, &mut tmp_chunk);
+            }
             let rem = MAX_CHUNK_DECOMPRESSED_BYTES
                 .saturating_sub(u64::try_from(out.len()).unwrap_or(u64::MAX));
             let dec = flate2::read::ZlibDecoder::new(raw_chunk.as_slice());
