@@ -867,5 +867,9 @@
     "by": "aeebc041-88f7-4b19-bdbe-5031442991ff",
     "date": "2026-11-21",
     "evidence": "reports/rounds/round-6/cold-audit.md: cargo test --all-features (120 passed, 1 ignored), cargo clippy --all-targets --all-features -- -D warnings (0 warnings); all 3 cold-audit doc-sync defects (VGP_INTEGRATION_PLAN.md 0.50s, ARCHITECTURE.md, STRATEGIC_PLAN.md) fixed; round balance reconciles and scripts/round check 6 --full exits 0."
+  },
+  "closed": "2026-11-21",
+  "closed_at_code": {
+    "horizon-aligner": "bada791c8b88e6731f429cfb297a752b57c726da"
   }
 }
