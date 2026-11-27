@@ -711,3 +711,93 @@ fn vcf_export_annotates_inversion_alleles_with_svtype_end_svlen() -> Result<()> 
     );
     Ok(())
 }
+
+#[test]
+fn vcf_inversion_detection_handles_internal_indel_and_rejects_unbalanced_repeated_seg() -> Result<()>
+{
+    let dir = std::env::temp_dir().join(format!(
+        "horizon_resolve_inv_indel_{}_{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    std::fs::create_dir_all(&dir)?;
+
+    // 100 bp non-palindromic block; delete 1 base at index 30 of the RC copy (breaks lockstep phase).
+    let inv100 = "ACGTCTAGGAATTCGGATCCATCGATCGTTAGGCCTAGCATGCTAGCTAACGTTAGGCCTTAGCATGCTAGCTAGGCCTAAACCTTGGCCAATTGGCCAA";
+    let inv100_rc: String = inv100
+        .bytes()
+        .rev()
+        .map(|b| horizon_aligner::dna::complement_base(b) as char)
+        .collect();
+    let mut rc_del = inv100_rc.as_bytes().to_vec();
+    rc_del.remove(30);
+    let rc_del_str = String::from_utf8(rc_del)?;
+
+    // 200 bp REF = sub60 + filler140; ALT repeats <sub60 twice (only 30% of REF is inverted,
+    // must NOT be falsely promoted to SVTYPE=INV via un-deduplicated counting or rlen.min(alen)).
+    let sub60 = "ACGTTGCAACTGGTCCAGTCGAATCGTAGCTAACCGTTAGGCATCCGTAAGTCCTAGCTA";
+    let filler140 = "TTTAAAGGCCCAAATTTGGGCCCAAATTTGGGCCCAAATTTGGGCCCAAATTTGGGCCCAAATTTGGGCCCAAATTTGGGCCCAAATTTGGGCCCAAATTTGGGCCCAAATTTGGGCCCAAATTTGGGCCCAAATTTG";
+
+    let gfa_in = dir.join("inv_indel.gfa");
+    std::fs::write(
+        &gfa_in,
+        format!(
+            "H\tVN:Z:1.1\n\
+             S\ta\tACGTACGTAC\n\
+             S\tinv100\t{inv100}\n\
+             S\tinv100_rc_del\t{rc_del_str}\n\
+             S\tb\tGTGTGTGTGT\n\
+             S\tsub60\t{sub60}\n\
+             S\tfiller140\t{filler140}\n\
+             S\tc\tACACACACAC\n\
+             W\tREF\t0\tchr1\t0\t330\t>a>inv100>b>sub60>filler140>c\n\
+             W\tHAP\t0\tchr1\t0\t249\t>a>inv100_rc_del>b<sub60<sub60>c\n"
+        ),
+    )?;
+    let cli = CliArgs {
+        gfa_in: gfa_in.to_string_lossy().to_string(),
+        out_path: None,
+        vcf_path: Some("out.vcf".to_owned()),
+        vcf_ref: Some("REF".to_owned()),
+        nested_snarls: false,
+        collapse_dups: false,
+        tag_walks: false,
+        max_bubble_steps: 16,
+        min_anchor_bp: 100,
+        divergence: None,
+        threads: None,
+    };
+    let graph = pass1_index(&cli.gfa_in, cli.min_anchor_bp)?;
+    let mut gfa_buf = Vec::new();
+    let mut cap = resolve::VcfCapture::with_segments(graph.num_segs());
+    let _ = pass2_rewrite(&cli.gfa_in, &mut gfa_buf, &graph, &cli, Some(&mut cap))?;
+    let mut vcf_buf = Vec::new();
+    let _ = export_snarl_vcf(
+        &graph,
+        &cap.seg_seqs,
+        &cap.walks,
+        Some("REF"),
+        false,
+        64,
+        &mut vcf_buf,
+    )?;
+    let _ = std::fs::remove_dir_all(&dir);
+    let text = String::from_utf8(vcf_buf)?;
+    let rows: Vec<Vec<&str>> = text
+        .lines()
+        .filter(|l| !l.starts_with('#'))
+        .map(|l| l.split('\t').collect())
+        .collect();
+    assert_eq!(rows.len(), 2, "expected 2 snarl records:\n{text}");
+    assert!(
+        rows[0][7].contains("SVTYPE=INV"),
+        "1-bp-deleted RC inversion MUST be labeled SVTYPE=INV:\n{}",
+        rows[0][7]
+    );
+    assert!(
+        !rows[1][7].contains("SVTYPE=INV"),
+        "repeated <sub60<sub60 covering only 30% of 200 bp REF must NOT be SVTYPE=INV:\n{}",
+        rows[1][7]
+    );
+    Ok(())
+}

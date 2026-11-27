@@ -277,9 +277,9 @@ impl VcfRecord {
 const MIN_SV_INV_BP: usize = 50;
 
 /// Return `true` when an ALT allele represents a structural inversion (`>= MIN_SV_INV_BP` bp) of
-/// `ref_seq`: either a reverse-oriented graph traversal covering `>= 50%` of the allele length
-/// (tolerant of small breakpoint-padding segments) or a sequence-resolved reverse complement
-/// (`>= 85%` RC identity, `< 70%` forward identity).
+/// `ref_seq`: either a deduplicated reverse-oriented graph traversal covering `>= 50%` of
+/// `max(|REF|, |ALT|)` or an indel-tolerant 9-mer reverse-complement match (`>= 70%` RC k-mer
+/// containment, `< 35%` forward containment).
 fn is_inversion_allele(
     seg_seqs: &SegSeqArena,
     ref_seq: &[u8],
@@ -287,44 +287,87 @@ fn is_inversion_allele(
     ref_interior: &[PackedStep],
     alt_interior: &[PackedStep],
 ) -> bool {
+    const K: usize = 9;
     let rlen = ref_seq.len();
     let alen = alt_seq.len();
     if rlen < MIN_SV_INV_BP || alen < MIN_SV_INV_BP {
         return false;
     }
+    let max_len = rlen.max(alen);
     if !ref_interior.is_empty() && !alt_interior.is_empty() {
+        let mut ref_counts: HashMap<PackedStep, usize> = HashMap::new();
+        for &r in ref_interior {
+            *ref_counts.entry(r).or_insert(0) += 1;
+        }
         let mut inverted_shared_bp = 0usize;
         for &a in alt_interior {
-            let rev_a = a.rev();
-            if ref_interior.contains(&rev_a) {
+            if let Some(cnt) = ref_counts.get_mut(&a.rev())
+                && *cnt > 0
+            {
+                *cnt -= 1;
                 inverted_shared_bp = inverted_shared_bp.saturating_add(seg_seqs.seq_len(a.id()));
             }
         }
-        if inverted_shared_bp >= MIN_SV_INV_BP
-            && inverted_shared_bp.saturating_mul(2) >= rlen.min(alen)
-        {
+        if inverted_shared_bp >= MIN_SV_INV_BP && inverted_shared_bp.saturating_mul(2) >= max_len {
             return true;
         }
     }
-    let len_diff = rlen.abs_diff(alen);
-    if len_diff > (rlen / 10).max(5) {
+    if rlen.abs_diff(alen) > (rlen / 5).max(50) || rlen < K || alen < K {
         return false;
     }
-    let cmp_len = rlen.min(alen);
-    let mut rc_matches = 0usize;
-    let mut fwd_matches = 0usize;
-    for i in 0..cmp_len {
-        let rb = ref_seq[i];
-        if alt_seq[i] == rb {
-            fwd_matches += 1;
+    let enc = |b: u8| -> Option<u32> {
+        match b.to_ascii_uppercase() {
+            b'A' => Some(0),
+            b'C' => Some(1),
+            b'G' => Some(2),
+            b'T' => Some(3),
+            _ => None,
         }
-        if alt_seq[alen - 1 - i] == sanitize_vcf_base(complement_base(rb)) {
-            rc_matches += 1;
+    };
+    let mask = (1u32 << (2 * K)) - 1;
+    let mut ref_kmers: HashSet<u32> = HashSet::with_capacity(rlen);
+    let (mut code, mut valid) = (0u32, 0usize);
+    for &b in ref_seq {
+        if let Some(v) = enc(b) {
+            code = ((code << 2) | v) & mask;
+            valid += 1;
+            if valid >= K {
+                ref_kmers.insert(code);
+            }
+        } else {
+            code = 0;
+            valid = 0;
         }
     }
-    // Require >= 85% RC identity and < 70% forward identity (avoids palindromic false positives).
-    rc_matches.saturating_mul(100) >= cmp_len.saturating_mul(85)
-        && fwd_matches.saturating_mul(100) < cmp_len.saturating_mul(70)
+    if ref_kmers.len() < 16 {
+        return false;
+    }
+    let (mut fwd_code, mut rc_code, mut a_valid) = (0u32, 0u32, 0usize);
+    let (mut total, mut fwd_hits, mut rc_hits) = (0usize, 0usize, 0usize);
+    let shift = 2 * (K - 1);
+    for &b in alt_seq {
+        if let Some(v) = enc(b) {
+            fwd_code = ((fwd_code << 2) | v) & mask;
+            rc_code = (rc_code >> 2) | ((3 - v) << shift);
+            a_valid += 1;
+            if a_valid >= K {
+                total += 1;
+                if ref_kmers.contains(&fwd_code) {
+                    fwd_hits += 1;
+                }
+                if ref_kmers.contains(&rc_code) {
+                    rc_hits += 1;
+                }
+            }
+        } else {
+            fwd_code = 0;
+            rc_code = 0;
+            a_valid = 0;
+        }
+    }
+    total >= 16
+        && rc_hits.saturating_mul(100) >= total.saturating_mul(70)
+        && fwd_hits.saturating_mul(100) < total.saturating_mul(35)
 }
 
 /// Build a single polymorphic VCF record for anchor pair `(u, v)` on the current reference contig.

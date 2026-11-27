@@ -410,17 +410,26 @@ impl RgfaGraph {
         if runs.len() < 3 {
             return 0;
         }
-        // Group consecutive same-strand runs (sorted by `x_start`) into maximal strand blocks.
-        let mut blocks: Vec<(usize, usize, bool)> = Vec::new();
+        // Group consecutive same-strand runs (ignoring tiny < min_sv_bp repeat noise blips) into
+        // maximal strand blocks tracking both reference `(x_start, x_end)` and query `(y_min, y_max)`.
+        let mut blocks: Vec<(usize, usize, usize, usize, bool)> = Vec::new();
         for r in runs {
+            if r.len < self.min_sv_bp {
+                continue;
+            }
             let r_end = r.x_start.saturating_add(r.len);
+            let y_end = r.y_start.saturating_add(r.len);
             if let Some(last) = blocks.last_mut()
-                && last.2 == r.is_rc
+                && last.4 == r.is_rc
                 && r.x_start <= last.1.saturating_add(max_sv)
+                && r.y_start <= last.3.saturating_add(max_sv)
+                && y_end.saturating_add(max_sv) >= last.2
             {
                 last.1 = last.1.max(r_end);
+                last.2 = last.2.min(r.y_start);
+                last.3 = last.3.max(y_end);
             } else {
-                blocks.push((r.x_start, r_end, r.is_rc));
+                blocks.push((r.x_start, r_end, r.y_start, y_end, r.is_rc));
             }
         }
 
@@ -437,10 +446,25 @@ impl RgfaGraph {
 
         let mut grafted = 0usize;
         for win in blocks.windows(3) {
-            let (_, left_end, left_rc) = win[0];
-            let (raw_inv_start, raw_inv_end, inv_rc) = win[1];
-            let (right_start, _, right_rc) = win[2];
+            let (_, left_end, left_y_min, left_y_max, left_rc) = win[0];
+            let (raw_inv_start, raw_inv_end, inv_y_min, inv_y_max, inv_rc) = win[1];
+            let (right_start, _, right_y_min, right_y_max, right_rc) = win[2];
             if left_rc != majority_rc || right_rc != majority_rc || inv_rc == majority_rc {
+                continue;
+            }
+            // Enforce query-coordinate collinearity so distant translocated RC hits are rejected.
+            let (q_gap_l, q_gap_r) = if majority_rc {
+                (
+                    left_y_min.abs_diff(inv_y_max),
+                    inv_y_min.abs_diff(right_y_max),
+                )
+            } else {
+                (
+                    inv_y_min.abs_diff(left_y_max),
+                    right_y_min.abs_diff(inv_y_max),
+                )
+            };
+            if q_gap_l > max_sv || q_gap_r > max_sv {
                 continue;
             }
             let inv_start = raw_inv_start.max(left_end);
@@ -832,5 +856,79 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn rgfa_inversion_rejects_distant_translocated_rc_block_and_ignores_micro_noise_blip() {
+        let ref_seq = synth_dna(0xBEEF_4242, 4_000);
+        let mut g = RgfaGraph::from_reference(&[("chr1", &ref_seq)], 50);
+
+        // Case 1: Distant translocated RC block (query y_start=300_000 vs flanking y=0..1000 and 1800..2800)
+        // must NOT be grafted as a local balanced inversion.
+        let distant_runs = vec![
+            AlignedRun {
+                x_start: 0,
+                y_start: 0,
+                len: 1_000,
+                is_rc: false,
+            },
+            AlignedRun {
+                x_start: 1_000,
+                y_start: 300_000,
+                len: 800,
+                is_rc: true,
+            },
+            AlignedRun {
+                x_start: 1_800,
+                y_start: 1_800,
+                len: 1_000,
+                is_rc: false,
+            },
+        ];
+        assert_eq!(
+            g.graft_inversion_spans("chr1", &distant_runs, 100_000),
+            0,
+            "distant translocated RC block (y=300_000) must not be grafted as local inversion"
+        );
+
+        // Case 2: Local 800 bp inversion split by a tiny 15 bp forward noise blip MUST merge into
+        // exactly 1 balanced inversion instead of fracturing into 2 fragments.
+        let noisy_inv_runs = vec![
+            AlignedRun {
+                x_start: 0,
+                y_start: 0,
+                len: 1_000,
+                is_rc: false,
+            },
+            AlignedRun {
+                x_start: 1_000,
+                y_start: 1_400,
+                len: 390,
+                is_rc: true,
+            },
+            AlignedRun {
+                x_start: 1_395,
+                y_start: 1_395,
+                len: 15,
+                is_rc: false,
+            },
+            AlignedRun {
+                x_start: 1_410,
+                y_start: 1_000,
+                len: 390,
+                is_rc: true,
+            },
+            AlignedRun {
+                x_start: 1_800,
+                y_start: 1_800,
+                len: 1_000,
+                is_rc: false,
+            },
+        ];
+        assert_eq!(
+            g.graft_inversion_spans("chr1", &noisy_inv_runs, 100_000),
+            1,
+            "tiny 15 bp noise blip inside an 800 bp inversion must coalesce into 1 inversion"
+        );
     }
 }
