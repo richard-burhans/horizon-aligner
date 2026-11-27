@@ -1,0 +1,241 @@
+//! BED and GFF3 feature parsing for `horizon_lift`.
+
+use anyhow::{Context, Result};
+use std::io::BufRead as _;
+use std::path::Path;
+
+#[derive(Debug, Clone)]
+pub(crate) struct InputFeature {
+    pub chrom: String,
+    pub start: usize, // 0-based half-open
+    pub end: usize,
+    pub name: String,
+    pub score: String,
+    pub strand: char,
+}
+
+const MAX_FEATURE_LINE_BYTES: usize = 256 * 1024 * 1024;
+
+#[allow(clippy::too_many_lines)]
+pub(crate) fn parse_features(path: &Path, is_gff: bool) -> Result<Vec<InputFeature>> {
+    let mut reader = horizon_aligner::io_util::open_text_reader(path)?;
+    let mut out = Vec::new();
+    let mut line = String::new();
+    let mut idx = 0usize;
+    loop {
+        line.clear();
+        let n = std::io::Read::take(&mut reader, MAX_FEATURE_LINE_BYTES as u64 + 1)
+            .read_line(&mut line)?;
+        if n == 0 {
+            break;
+        }
+        anyhow::ensure!(
+            line.len() <= MAX_FEATURE_LINE_BYTES,
+            "feature line {} exceeds 256 MiB safety limit",
+            idx + 1
+        );
+        // Strip only line terminators so trailing empty tab-delimited columns are preserved.
+        let raw = line.trim_end_matches(['\r', '\n']);
+        let trimmed = raw.trim();
+        if is_gff && trimmed == "##FASTA" {
+            break;
+        }
+        if trimmed.is_empty()
+            || trimmed.starts_with('#')
+            || trimmed == "track"
+            || trimmed.starts_with("track ")
+            || trimmed.starts_with("track\t")
+            || (!is_gff
+                && (trimmed == "browser"
+                    || trimmed.starts_with("browser ")
+                    || trimmed.starts_with("browser\t")))
+        {
+            idx += 1;
+            continue;
+        }
+        let cols: Vec<&str> = raw.split('\t').collect();
+        if is_gff {
+            anyhow::ensure!(cols.len() >= 9, "malformed GFF3 line {}", idx + 1);
+            let chrom = cols[0].to_string();
+            let start_1: usize = cols[3]
+                .parse()
+                .with_context(|| format!("invalid GFF3 start at line {}", idx + 1))?;
+            let end_1: usize = cols[4]
+                .parse()
+                .with_context(|| format!("invalid GFF3 end at line {}", idx + 1))?;
+            anyhow::ensure!(
+                start_1 >= 1 && start_1 <= end_1,
+                "invalid GFF3 interval {start_1}..{end_1} at line {}",
+                idx + 1
+            );
+            let start = start_1 - 1;
+            let end = end_1;
+            let score = cols[5].to_string();
+            let strand = match cols[6].chars().next() {
+                Some('-') => '-',
+                Some('+') => '+',
+                _ => '.',
+            };
+            let id_attr = cols[8]
+                .split(';')
+                .find_map(|kv| kv.trim().strip_prefix("ID="))
+                .filter(|v| !v.is_empty());
+            let name_attr = cols[8]
+                .split(';')
+                .find_map(|kv| kv.trim().strip_prefix("Name="))
+                .filter(|v| !v.is_empty());
+            let name = id_attr.or(name_attr).unwrap_or(cols[2]).to_string();
+            out.push(InputFeature {
+                chrom,
+                start,
+                end,
+                name,
+                score,
+                strand,
+            });
+        } else {
+            anyhow::ensure!(cols.len() >= 3, "malformed BED line {}", idx + 1);
+            let chrom = cols[0].to_string();
+            let start: usize = cols[1]
+                .parse()
+                .with_context(|| format!("invalid BED start at line {}", idx + 1))?;
+            let end: usize = cols[2]
+                .parse()
+                .with_context(|| format!("invalid BED end at line {}", idx + 1))?;
+            anyhow::ensure!(
+                start <= end,
+                "invalid BED interval {start}..{end} at line {}",
+                idx + 1
+            );
+            let name = match cols.get(3).copied() {
+                Some(n) if !n.is_empty() => n.to_string(),
+                _ => ".".to_string(),
+            };
+            let score = cols.get(4).copied().unwrap_or("0").to_string();
+            let strand = match cols.get(5).and_then(|s| s.chars().next()) {
+                Some('-') => '-',
+                Some('+') => '+',
+                _ => '.',
+            };
+            out.push(InputFeature {
+                chrom,
+                start,
+                end,
+                name,
+                score,
+                strand,
+            });
+        }
+        idx += 1;
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    fn write_temp(name: &str, body: &str) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!("{name}_{}.txt", std::process::id()));
+        std::fs::write(&p, body).unwrap();
+        p
+    }
+
+    #[test]
+    fn parse_bed_fallbacks_track_header_and_unstranded() {
+        let p = write_temp(
+            "horizon_lift_bed_test",
+            "# comment\ntrack name=demo\nchr1\t10\t20\nchr1\t30\t40\t\t100\t.\nchr1\t50\t60\tf1\t0\t-\n",
+        );
+        let feats = parse_features(&p, false).unwrap();
+        let _ = std::fs::remove_file(&p);
+        assert_eq!(feats.len(), 3);
+        assert_eq!(feats[0].name, ".");
+        assert_eq!(feats[0].score, "0");
+        assert_eq!(feats[0].strand, '.');
+        assert_eq!(feats[1].name, ".");
+        assert_eq!(feats[1].score, "100");
+        assert_eq!(feats[1].strand, '.');
+        assert_eq!(feats[2].name, "f1");
+        assert_eq!(feats[2].strand, '-');
+    }
+
+    #[test]
+    fn parse_gff3_name_fallbacks_and_unstranded() {
+        let p = write_temp(
+            "horizon_lift_gff_test",
+            "##gff-version 3\ntrack\nchr1\t.\texon\t1\t10\t.\t.\t.\tName=ex1\nchr1\t.\tgene\t11\t20\t.\t+\t.\tnote=none\n",
+        );
+        let feats = parse_features(&p, true).unwrap();
+        let _ = std::fs::remove_file(&p);
+        assert_eq!(feats.len(), 2);
+        assert_eq!(feats[0].start, 0);
+        assert_eq!(feats[0].end, 10);
+        assert_eq!(feats[0].name, "ex1");
+        assert_eq!(feats[0].strand, '.');
+        assert_eq!(feats[1].name, "gene");
+        assert_eq!(feats[1].strand, '+');
+    }
+
+    #[test]
+    fn parse_features_rejects_inverted_interval() {
+        let p = write_temp("horizon_lift_bad_interval", "chr1\t25\t10\n");
+        let err = parse_features(&p, false).unwrap_err();
+        let _ = std::fs::remove_file(&p);
+        assert!(err.to_string().contains("invalid BED interval"));
+    }
+
+    #[test]
+    fn parse_gff3_rejects_zero_start_and_prefers_id_over_name() {
+        let p_zero = write_temp(
+            "horizon_lift_gff_zero",
+            "chr1\t.\texon\t0\t10\t.\t+\t.\tID=x\n",
+        );
+        let err = parse_features(&p_zero, true).unwrap_err();
+        let _ = std::fs::remove_file(&p_zero);
+        assert!(err.to_string().contains("invalid GFF3 interval"));
+
+        let p_attr = write_temp(
+            "horizon_lift_gff_attr",
+            "chr1\t.\tgene\t1\t10\t.\t+\t.\tName=foo;ID=bar\n",
+        );
+        let feats = parse_features(&p_attr, true).unwrap();
+        let _ = std::fs::remove_file(&p_attr);
+        assert_eq!(feats[0].name, "bar");
+    }
+
+    #[test]
+    fn parse_gff3_stops_at_fasta_directive() {
+        let p = write_temp(
+            "horizon_lift_gff_fasta",
+            "##gff-version 3\nchr1\t.\tgene\t1\t10\t.\t+\t.\tID=g1\n##FASTA\n>chr1\nACGTACGTAC\n",
+        );
+        let feats = parse_features(&p, true).unwrap();
+        let _ = std::fs::remove_file(&p);
+        assert_eq!(feats.len(), 1);
+        assert_eq!(feats[0].name, "g1");
+    }
+
+    #[test]
+    fn parse_features_skips_browser_lines_and_preserves_trailing_empty_tabs() {
+        let p_bed = write_temp(
+            "horizon_lift_bed_browser",
+            "browser position chr1:1-100\nchr1\t10\t20\tfeat1\t0\t+\n",
+        );
+        let feats_bed = parse_features(&p_bed, false).unwrap();
+        let _ = std::fs::remove_file(&p_bed);
+        assert_eq!(feats_bed.len(), 1);
+        assert_eq!(feats_bed[0].name, "feat1");
+
+        // GFF3 line with empty 9th attributes column (8 tabs -> 9 fields).
+        let p_gff = write_temp(
+            "horizon_lift_gff_empty_attr",
+            "chr1\t.\texon\t1\t10\t.\t+\t.\t\n",
+        );
+        let feats_gff = parse_features(&p_gff, true).unwrap();
+        let _ = std::fs::remove_file(&p_gff);
+        assert_eq!(feats_gff.len(), 1);
+        assert_eq!(feats_gff[0].name, "exon");
+    }
+}

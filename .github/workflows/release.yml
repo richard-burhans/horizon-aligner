@@ -1,0 +1,77 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build release binaries
+        run: cargo build --release --bins --locked --target ${{ matrix.target }}
+
+      - name: Package release tarball
+        env:
+          TARGET: ${{ matrix.target }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          stage="horizon-aligner-${TAG}-${TARGET}"
+          mkdir -p "$stage"
+          for bin in horizon horizon_wga horizon_merge horizon_guide horizon_tba horizon_gfa horizon_hal horizon_lift horizon_clean horizon_resolve horizon_filter horizon_locus horizon_eval; do
+            cp "target/${TARGET}/release/${bin}" "$stage/"
+          done
+          cp README.md ARCHITECTURE.md LICENSE CITATION.cff "$stage/"
+          tar -czf "${stage}.tar.gz" "$stage"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "${stage}.tar.gz" > "${stage}.tar.gz.sha256"
+          else
+            shasum -a 256 "${stage}.tar.gz" > "${stage}.tar.gz.sha256"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: |
+            horizon-aligner-*.tar.gz
+            horizon-aligner-*.tar.gz.sha256
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

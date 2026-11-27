@@ -1,0 +1,13 @@
+/target/
+*.rs.bk
+__pycache__/
+*.py[cod]
+*.1ano
+presentations/media/
+presentations/build/
+presentations/slides/
+/data/
+presentations/explainer_*/vo_tts/
+presentations/explainer_*/vo_manifest.json
+/slides/
+/data/

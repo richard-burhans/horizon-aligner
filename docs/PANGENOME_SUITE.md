@@ -1,0 +1,37 @@
+# Horizon Pangenome Suite
+
+The `horizon` suite extends beyond pairwise whole-genome alignment (WGA) by building on our zero-copy buffered GFA v1.0/v1.1 streaming reader (`src/gfa/mod.rs`, `SpoolableGfaInput`, `stream_gfa_record_refs`, transparent plain/`.gz`/`.bgz`/`.zst`/`stdin` I/O in `src/io_util.rs`), incremental rGFA builder (`src/rgfa.rs`), and UCSC coordinate primitives (`src/coord.rs`) to provide a composable toolkit grounded in Minimum Description Length (MDL) and congruence-closed E-graphs. All 7 multithreaded suite binaries (`horizon_wga`, `horizon_merge`, `horizon_guide`, `horizon_tba`, `horizon_filter`, `horizon_locus`, `horizon_eval`) support uniform `-t`/`--threads` (and `horizon` forwards flags to all 12 subcommands; the 5 streaming GFA/HAL utilities `horizon_gfa`, `horizon_hal`, `horizon_lift`, `horizon_clean`, and `horizon_resolve` are single-threaded). All binaries are verified via `cargo test --all-features`.
+
+*(Note: `stream_gfa_record_refs` parses `H`/`S`/`L`/`P`/`W` records while skipping `C`/`J` records and defaulting empty `L` orientations to `+`.)*
+
+## 1. Pangenome De-tangling and Polishing (`horizon_clean`)
+**The Problem:** Graph builders relying on static affine gap penalties can over-align repetitive or highly divergent regions, creating spurious edges and tangled "hairballs."  
+**The Implementation (`src/bin/horizon_clean/{main,engine}.rs`):**
+* Streams an external `.gfa[.gz|.zst]` using a two-pass `S`-flank-indexed reader (bounded by `--flank`, default `128` bp per segment end; preserves `S`-line optional tags on output).
+* Evaluates candidate `L`-line junctions symmetrically across both `u++v` and `rc(v)++rc(u)` orientations with `bocpd_gc_profile` and a Bernoulli two-regime MDL changepoint score (`--min-cp-bits`).
+* Severs low-support discordant edges (`walk_support <= 1` by default, or `0` with `--prune-unsupported`) and annotates severed junctions with `#HB` comment markers (carrying `CP:f:` scores without emitting zero-length `*` segments that break `odgi`/`vg`), accounts for `L`-line overlap CIGARs when computing split `W`-line `start`/`end` coordinates, and supports Minigraph-Cactus-style `--min-haplotypes` (PanSN `W`/`P` parsing) and `--clip-bubbles-bp` pruning.
+
+## 2. Sequence-to-Graph Alignment (`horizon_wga --graph`) & Incremental rGFA (`horizon_gfa rgfa`)
+**The Problem:** Aligning divergent genomes to an existing pangenome graph (e.g., HPRC) or building a reference-anchored SV graph without external C++ dependencies is difficult across deep evolutionary splits.  
+**The Implementation (`src/mdl/dag.rs`, `src/mdl/dag_seed.rs`, `src/rgfa.rs`, `src/bin/horizon_wga.rs`, `src/bin/horizon_gfa/`):**
+* `align_seq_to_dag_mdl` generalizes `BandLayout` (`src/mdl/dp.rs`) to topological DAG / partial-order Pair-HMM Forward-Backward MEA alignment across graph bifurcations (omitting `-log2(out_degree)` branching penalties), capped at `MAX_DAG_DP_CELLS = 32_000_000` before BOCPD allocation, with posterior gating and Horizon Bubble abstention.
+* `align_seq_to_dag_seeded_indexed` uses `MASK_W10` + `MASK_RY18` intra-node spaced seeds (requiring `>= 14` bp segments) plus compact 6-frame `aa5_keys` translated seeding fallback and strand-aware `estimate_dag_hmm_params` (`src/mdl/dag_seed.rs`), with $O(V + E)$ anchor chaining and reachability closure to isolate relevant DAG components.
+* `horizon_wga --graph <target.gfa[.gz|.zst]> <query.fa[.gz|.zst]>` loads the GFA into a bidirected topological DAG via Kahn's algorithm and aligns query contigs in parallel with Rayon.
+* `horizon_gfa rgfa` (`src/rgfa.rs`) constructs Minigraph-style incremental rGFA graphs (`SN`/`SO`/`SR` tags), grafting netted query SVs (`>= --min-sv-bp`, `<= 1 Mbp`) per assembly rank onto cached rank-0 reference contigs.
+
+## 3. Global Structural Paralog Resolution & Snarl VCF Export (`src/egraph.rs` + `horizon_resolve`)
+**The Problem:** Complex structural variants (nested inversions, multi-copy tandem duplications) produce cyclical or tangled graph topologies that complicate downstream variant calling and visualization.  
+**The Implementation (`src/egraph.rs`, `src/bin/horizon_resolve/{main,snarl,resolve,vcf,vcf_nested}.rs`):**
+* `src/egraph.rs` uses deterministic `BTreeMap`/`BTreeSet` e-classes with leaf-scaled `MdlCostModel` (`extract_min_mdl_cost`), calibrating leaf catalog pointer bits ($\log_2 K$), `seq` (`1.0` bit), `inv` (`1.0` bit), and `dup`/`repeat:k` copy-header + sequence residual bits ($H_2(d) + d \log_2 3$).
+* Active both inside `horizon_wga --resolve-dups` (overlap-clustered empirical MDL paralog pruning emitting `# EG:Z:` tags) and as standalone `horizon_resolve`, which streams GFA v1.0/v1.1 `P`/`W` lines into a `u32`-interned `PackedGraph`, decomposes graphs via $O(V + E)$ iterative Tarjan biedged bridge decomposition, estimates window divergence via a topological `[0.02, 0.15]` heuristic (with optional `--divergence` override), cancels double inversions, collapses `k`-copy tandem arrays (`--collapse-dups`, `--tag-walks`), updates `W`-line `end` bounds, prunes/synthesizes `L` links (assuming `0M` overlaps), and optionally projects Tarjan snarls to phased haplotype VCFv4.2 (`--vcf`, `--vcf-ref`).
+
+## 4. Graph-Aware Exact Liftover (`horizon_lift`)
+**The Problem:** Lifting genomic annotations between haplotypes in a pangenome is prone to coordinate-translation bugs and fragmentation.  
+**The Implementation (`src/bin/horizon_lift/{main,lift,features}.rs`):**
+* Uses `horizon_aligner::coord::Interval` (0-based half-open + UCSC reverse-strand arithmetic) and two-pass GFA `P`/`W` streaming (`wanted_chroms` filtered so peak RSS on the 12 GB HPRC `chr22` graph is `708.8 MB`).
+* Supports BED and GFF3 inputs, forward and inverted segments, flanking-context Jaccard paralog tie-breaking, `--bridge-bp` micro-bubble coalescing, `--min-frac` filtering, `--to-chrom` target filtering, and explicit `EXACT` / `PARTIAL` / `SPLIT_k/N` / `DUP` / `--unmapped` reporting.
+
+## 5. Streaming PAF Filtering & Regional Locus Alignment (`horizon_filter`, `horizon_locus`)
+* **`horizon_filter` (`src/bin/horizon_filter.rs`, `src/paf.rs`, `src/paf_filter/`):** Streams `.paf[.gz|.zst]` or `stdin`, evaluates alignments with SDUST repeat masking (`--min-nonrepeat-bp`), Pair-HMM MDL bit-savings (`score_paf_record_with_floor`), and nested `CrcCache` operator-matched biological decoy CRC (`--crc-alpha`, `--crc-n-cal`, `md:f:` / `hb:i:`), and optionally nets overlapping alignments (`--net` / `--max-occ`, `--net-score mdl|log-length-ani`, `--keep-all`).
+* **`horizon_locus` (`src/bin/horizon_locus.rs`, `src/mdl/consistency.rs`, `src/formats/hnex.rs`):** Aligns all pairs in a regional `impg`-style multi-FASTA (`.fa[.gz|.zst]`) using `SDUST + BOCPD/MDL + Aa5Index`, emitting `<out>.similarity.tsv` (`jaccard_cov`, `p_dist`, `jc69_dist`, Horizon Bubbles), `<out>.bionj.nwk` (Gascuel BioNJ), `<out>.maf`, `<out>.gfa`, optional lossless `<out>.hnex` (`--hnex`), optional banded ProbCons probabilistic consistency MSA (`--consistency`), and optional codon frameshift repair (`--repair-frameshifts`).
+* **`horizon_gfa qc` & `horizon_hal` (`src/bin/horizon_gfa/qc.rs`, `src/bin/horizon_hal.rs`, `src/hal/{hdf5_stream,stream_hal,stream_hal_maf}.rs`):** `horizon_gfa qc` audits `W`/`P` dialect consistency, per-`(sample, hap)` retained bp and placeholder segments, and budgeted Union-Find connected components (`--max-segments`); `horizon_hal` provides zero-`libhdf5` streaming multi-level HAL `stats [--chroms]`, `liftover`, `to-maf`, and `to-gfa`.

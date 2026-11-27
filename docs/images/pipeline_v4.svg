@@ -1,0 +1,69 @@
+<svg width="600" height="500" xmlns="http://www.w3.org/2000/svg">
+  <rect width="100%" height="100%" fill="white" />
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#333333"/>
+    </marker>
+  </defs>
+
+  <text x="10" y="20" font-weight="bold" font-size="12px" fill="#333333" font-family="Helvetica, Arial, sans-serif">Figure 1. The Horizon Alignment Pipeline</text>
+
+  <!-- Level 1: Inputs -->
+  <rect x="200" y="40" width="200" height="30" fill="#56B4E9" stroke="none" rx="4" />
+  <text x="300" y="59" text-anchor="middle" fill="white" font-weight="bold" font-family="Helvetica, Arial, sans-serif" font-size="10px">FASTA Inputs (Target &amp; Query)</text>
+  
+  <path d="M300,70 L300,90" stroke="#333333" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)" />
+
+  <!-- Level 2: Indexing -->
+  <rect x="200" y="90" width="200" height="30" fill="#E69F00" stroke="none" rx="4" />
+  <text x="300" y="109" text-anchor="middle" fill="white" font-weight="bold" font-family="Helvetica, Arial, sans-serif" font-size="10px">Target Indexing (Exact Spaced-Seed)</text>
+
+  <path d="M300,120 L300,140" stroke="#333333" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)" />
+
+  <!-- Level 3: Seeding -->
+  <rect x="200" y="140" width="200" height="30" fill="#009E73" stroke="none" rx="4" />
+  <text x="300" y="159" text-anchor="middle" fill="white" font-weight="bold" font-family="Helvetica, Arial, sans-serif" font-size="10px">Seeding (Query Intersection)</text>
+
+  <!-- Branches -->
+  <path d="M300,170 L300,210" stroke="#333333" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)" />
+  <text x="310" y="190" fill="#333333" font-size="9px" font-family="Helvetica, Arial, sans-serif">Primary 11-of-15 mask</text>
+
+  <path d="M400,155 L480,155 L480,195" stroke="#333333" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)" />
+  <text x="490" y="175" fill="#333333" font-size="9px" font-family="Helvetica, Arial, sans-serif">Fallback (RY20 / AA)</text>
+  <path d="M480,195 L480,225 L400,225" stroke="#333333" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)" />
+
+  <!-- Level 4: Ungapped Extension -->
+  <rect x="200" y="210" width="200" height="30" fill="#CC79A7" stroke="none" rx="4" />
+  <text x="300" y="229" text-anchor="middle" fill="white" font-weight="bold" font-family="Helvetica, Arial, sans-serif" font-size="10px">Ungapped Extension &amp; LCB Chaining</text>
+
+  <path d="M300,240 L300,280" stroke="#333333" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)" />
+
+  <!-- Level 5: Gapped Alignment -->
+  <rect x="200" y="280" width="200" height="30" fill="#D55E00" stroke="none" rx="4" />
+  <text x="300" y="299" text-anchor="middle" fill="white" font-weight="bold" font-family="Helvetica, Arial, sans-serif" font-size="10px">Banded MDL+BOCPD Gapped Alignment</text>
+
+  <path d="M300,310 L300,350" stroke="#333333" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)" />
+  <text x="310" y="335" fill="#333333" font-size="9px" font-family="Helvetica, Arial, sans-serif">Bit-savings &gt;= min_delta</text>
+
+  <!-- Explicit Abstention Path -->
+  <path d="M200,295 L90,295 L90,320" stroke="#333333" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)" />
+  <text x="180" y="290" fill="#333333" font-size="9px" font-family="Helvetica, Arial, sans-serif" text-anchor="end">Explicit Abstention</text>
+
+  <!-- Bubble Node -->
+  <rect x="20" y="320" width="140" height="35" fill="white" stroke="#D55E00" stroke-width="1.5" stroke-dasharray="4 2" rx="4" />
+  <text x="90" y="335" text-anchor="middle" fill="#333333" font-weight="bold" font-family="Helvetica, Arial, sans-serif" font-size="10px">Horizon Bubbles</text>
+  <text x="90" y="348" text-anchor="middle" fill="#555555" font-family="Helvetica, Arial, sans-serif" font-size="9px">(External / Macro &amp; Internal)</text>
+
+  <!-- Bubble to Output -->
+  <path d="M90,355 L90,435 L200,435" stroke="#333333" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)" />
+
+  <!-- Level 6: Resolution -->
+  <rect x="200" y="350" width="200" height="30" fill="#F0E442" stroke="none" rx="4" />
+  <text x="300" y="369" text-anchor="middle" fill="#333333" font-weight="bold" font-family="Helvetica, Arial, sans-serif" font-size="10px">Paralog Resolution (E-Graph)</text>
+
+  <path d="M300,380 L300,420" stroke="#333333" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)" />
+  
+  <!-- Level 7: Output -->
+  <rect x="200" y="420" width="200" height="30" fill="#0072B2" stroke="none" rx="4" />
+  <text x="300" y="439" text-anchor="middle" fill="white" font-weight="bold" font-family="Helvetica, Arial, sans-serif" font-size="10px">MAF / GFA Output</text>
+</svg>
