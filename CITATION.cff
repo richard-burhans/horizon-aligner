@@ -9,6 +9,9 @@ authors:
   - family-names: "Burhans"
     given-names: "Richard"
     orcid: "https://orcid.org/0009-0006-5949-0958"
+  - family-names: "Nekrutenko"
+    given-names: "Anton"
+    orcid: "https://orcid.org/0000-0002-5987-8032"
 keywords:
   - bioinformatics
   - whole-genome alignment
