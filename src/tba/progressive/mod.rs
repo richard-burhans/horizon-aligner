@@ -666,6 +666,46 @@ mod tests {
     }
 
     #[test]
+    fn build_progressive_hal_never_crosses_contig_boundaries() {
+        let mut all_ctgs: HashMap<String, GenomeContigs> = HashMap::new();
+        all_ctgs.insert("Anc0".to_owned(), vec![("a0".to_owned(), vec![b'A'; 20]), ("a1".to_owned(), vec![b'C'; 20])]);
+        all_ctgs.insert("L".to_owned(), vec![("l0".to_owned(), vec![b'A'; 20]), ("l1".to_owned(), vec![b'C'; 20])]);
+        all_ctgs.insert("R".to_owned(), vec![("r0".to_owned(), vec![b'G'; 20])]);
+        let mk_pb = |a_ctg: &str, l_ctg: &str, start: usize, base: u8| PairwiseTbaBlock {
+            score: 10.0,
+            row_a: TbaRow { species: "Anc0".to_owned(), contig: a_ctg.to_owned(), start, size: 10, strand: '+', src_size: 20, seq: vec![base; 10] },
+            row_b: TbaRow { species: "L".to_owned(), contig: l_ctg.to_owned(), start, size: 10, strand: '+', src_size: 20, seq: vec![base; 10] },
+        };
+        let edges = vec![HalEdgeRecord {
+            parent: "Anc0".to_owned(),
+            left_child: "L".to_owned(),
+            right_child: "R".to_owned(),
+            parent_to_left: vec![mk_pb("a0", "l0", 0, b'A'), mk_pb("a1", "l1", 10, b'C')],
+            parent_to_right: Vec::new(),
+        }];
+        let hal = build_progressive_hal("Anc0", "(L,R)Anc0", &all_ctgs, &[], &edges);
+        for g in &hal.genomes {
+            for seq in &g.sequences {
+                let s_end = seq.offset + seq.length;
+                if !g.top_segments.is_empty() {
+                    let sum: usize = g.top_segments.iter().filter(|t| t.start >= seq.offset && t.start < s_end).map(|t| {
+                        assert!(t.start + t.length <= s_end, "TopSegment crosses contig end");
+                        t.length
+                    }).sum();
+                    assert_eq!(sum, seq.length, "TopSegment sum mismatch for {}.{}", g.name, seq.name);
+                }
+                if !g.bottom_segments.is_empty() {
+                    let sum: usize = g.bottom_segments.iter().filter(|b| b.start >= seq.offset && b.start < s_end).map(|b| {
+                        assert!(b.start + b.length <= s_end, "BottomSegment crosses contig end");
+                        b.length
+                    }).sum();
+                    assert_eq!(sum, seq.length, "BottomSegment sum mismatch for {}.{}", g.name, seq.name);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn transducer_ml_excludes_unpolarized_root_insertion_and_zero_child_columns() {
         let mk = |sp: &str, seq: &[u8]| TbaRow {
             species: sp.to_owned(),

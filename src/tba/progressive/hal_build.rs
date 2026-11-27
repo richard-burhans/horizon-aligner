@@ -219,10 +219,19 @@ pub(super) fn build_progressive_hal<S: std::hash::BuildHasher>(
             &edge.parent_to_right,
         );
 
-        // Partition parent coordinate space at all run start/end breakpoints.
+        // Partition parent coordinate space at all contig boundaries and run start/end breakpoints.
         let mut breaks: BTreeSet<usize> = BTreeSet::new();
         breaks.insert(0);
         breaks.insert(p_len);
+        for seq in &genomes[p_idx].sequences {
+            if seq.offset <= p_len {
+                breaks.insert(seq.offset);
+            }
+            let s_end = seq.offset.saturating_add(seq.length);
+            if s_end <= p_len {
+                breaks.insert(s_end);
+            }
+        }
         for &(ps, _, len, _) in l_runs.iter().chain(&r_runs) {
             if ps <= p_len {
                 breaks.insert(ps);
@@ -297,8 +306,40 @@ pub(super) fn build_progressive_hal<S: std::hash::BuildHasher>(
         l_top_mapped.sort_unstable_by_key(|&(cs, _, _, _)| cs);
         r_top_mapped.sort_unstable_by_key(|&(cs, _, _, _)| cs);
 
+        // Emit unaligned child TopSegments split strictly at child contig boundaries so
+        // no TopSegment ever spans across two sequences (required by C++ halValidate).
+        let push_unaligned_split =
+            |tops: &mut Vec<HalTopSegment>, start: usize, end: usize, seqs: &[HalSequence]| {
+                if end <= start {
+                    return;
+                }
+                let mut pos = start;
+                // Binary search first sequence whose end > start
+                let mut idx = seqs.partition_point(|s| s.offset.saturating_add(s.length) <= start);
+                while pos < end {
+                    let next_cut = if let Some(seq) = seqs.get(idx) {
+                        let s_end = seq.offset.saturating_add(seq.length);
+                        idx += 1;
+                        s_end.min(end)
+                    } else {
+                        end
+                    };
+                    if next_cut > pos {
+                        tops.push(HalTopSegment {
+                            start: pos,
+                            length: next_cut - pos,
+                            parent_bottom_idx: None,
+                            parent_reversed: false,
+                            next_paralog: None,
+                        });
+                        pos = next_cut;
+                    }
+                }
+            };
+
         // Convert mapped child intervals into complete tiled TopSegments (filling unaligned insertions).
         let build_child_tops = |c_len: usize,
+                                child_seqs: &[HalSequence],
                                 mapped: &[(usize, usize, usize, bool)],
                                 b_segs: &mut [HalBottomSegment],
                                 child_slot: usize|
@@ -310,13 +351,7 @@ pub(super) fn build_progressive_hal<S: std::hash::BuildHasher>(
                     continue;
                 }
                 if cs > cur {
-                    tops.push(HalTopSegment {
-                        start: cur,
-                        length: cs - cur,
-                        parent_bottom_idx: None,
-                        parent_reversed: false,
-                        next_paralog: None,
-                    });
+                    push_unaligned_split(&mut tops, cur, cs, child_seqs);
                 }
                 let final_t_idx = tops.len();
                 tops.push(HalTopSegment {
@@ -330,19 +365,25 @@ pub(super) fn build_progressive_hal<S: std::hash::BuildHasher>(
                 cur = cs + sl;
             }
             if cur < c_len {
-                tops.push(HalTopSegment {
-                    start: cur,
-                    length: c_len - cur,
-                    parent_bottom_idx: None,
-                    parent_reversed: false,
-                    next_paralog: None,
-                });
+                push_unaligned_split(&mut tops, cur, c_len, child_seqs);
             }
             tops
         };
 
-        let l_tops = build_child_tops(l_len, &l_top_mapped, &mut bottom_segs, 0);
-        let r_tops = build_child_tops(r_len, &r_top_mapped, &mut bottom_segs, 1);
+        let l_tops = build_child_tops(
+            l_len,
+            &genomes[l_idx].sequences,
+            &l_top_mapped,
+            &mut bottom_segs,
+            0,
+        );
+        let r_tops = build_child_tops(
+            r_len,
+            &genomes[r_idx].sequences,
+            &r_top_mapped,
+            &mut bottom_segs,
+            1,
+        );
         genomes[l_idx].top_segments = l_tops;
         genomes[r_idx].top_segments = r_tops;
         genomes[p_idx].bottom_segments = bottom_segs;
