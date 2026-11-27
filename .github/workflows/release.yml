@@ -51,7 +51,7 @@ jobs:
             shasum -a 256 "${stage}.tar.gz" > "${stage}.tar.gz.sha256"
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.target }}
           path: |
