@@ -257,6 +257,15 @@ impl PafRecord {
 
 const MAX_PAF_LINE_BYTES: usize = 256 * 1024 * 1024;
 
+/// Empirical-Bayes pseudo-length prior (columns of zero bit-savings) used to regularize the
+/// per-column MDL bit-savings density tag `mb:f:` (`md:f: / (aln_len + MB_SHRINKAGE_COLS)`).
+///
+/// Without shrinkage, tiny spurious exact matches (e.g. 12–18 bp) obtain higher raw bits/col
+/// than multi-kilobase homologous blocks with realistic substitutions. A 32-column prior
+/// suppresses short-block density inflation while preserving per-column quality ranking across
+/// both conserved and divergent alignments.
+pub const MB_SHRINKAGE_COLS: f64 = 32.0;
+
 fn stream_paf_reader<R: BufRead, F>(mut reader: R, mut on_record: F) -> Result<()>
 where
     F: FnMut(PafRecord) -> Result<ControlFlow<()>>,
@@ -475,7 +484,7 @@ pub fn format_paf_records_runs_avoiding_gaps(
         let (matches, aln_len, mdl_bits) =
             build_cigar_and_mdl_bits(&m.ax, &m.ay, &gc_x, &gc_y, &mut cigar);
         #[allow(clippy::cast_precision_loss)]
-        let bits_per_col = mdl_bits / (aln_len.max(1) as f64);
+        let bits_per_col = mdl_bits / ((aln_len.max(1) as f64) + MB_SHRINKAGE_COLS);
         let _ = writeln!(
             out,
             "{query_name}\t{query_len}\t{qstart}\t{qend}\t{}\t{target_name}\t{target_len}\t{tstart}\t{tend}\t{matches}\t{aln_len}\t60\ttp:A:P\tmd:f:{mdl_bits:.2}\tmb:f:{bits_per_col:.4}\tcg:Z:{cigar}",
@@ -557,10 +566,82 @@ mod tests {
             score_bits > 10.0 && score_bits.is_finite(),
             "md:f:={score_bits}"
         );
-        let expected_density = score_bits / f64::from(u32::try_from(rec.aln_len).expect("u32"));
+        let expected_density =
+            score_bits / (f64::from(u32::try_from(rec.aln_len).expect("u32")) + MB_SHRINKAGE_COLS);
         assert!(
             (density_bits - expected_density).abs() < 1e-3,
-            "mb:f:={density_bits} vs md/aln={expected_density}"
+            "mb:f:={density_bits} vs md/(aln+L0)={expected_density}"
+        );
+
+        // Regularized `mb:f:` must rank a long 90%-identity block above a tiny 12 bp exact match.
+        let tiny_seq = b"ACGTACGTACGT";
+        let tiny_aln = RunAlignment {
+            aligned_runs: vec![AlignedRun {
+                x_start: 0,
+                y_start: 0,
+                len: tiny_seq.len(),
+                is_rc: false,
+            }],
+            total_pairs: tiny_seq.len(),
+            lcbs_fwd: 1,
+            lcbs_rc: 0,
+            macro_bubbles: 0,
+            internal_bubbles: 0,
+        };
+        let tiny_paf = format_paf_records_runs(
+            "t",
+            tiny_seq.len(),
+            "q",
+            tiny_seq.len(),
+            tiny_seq,
+            tiny_seq,
+            &tiny_aln,
+        );
+        let tiny_mb = PafRecord::parse_line(tiny_paf.trim())
+            .expect("tiny paf")
+            .tag_value("mb:f:")
+            .and_then(|v| v.parse::<f64>().ok())
+            .expect("tiny mb");
+        let long_x: Vec<u8> = b"ACGTACGTTGCATGCA"
+            .iter()
+            .copied()
+            .cycle()
+            .take(512)
+            .collect();
+        let mut long_y = long_x.clone();
+        for idx in (0..long_y.len()).step_by(10) {
+            long_y[idx] = if long_y[idx] == b'A' { b'C' } else { b'A' };
+        }
+        let long_aln = RunAlignment {
+            aligned_runs: vec![AlignedRun {
+                x_start: 0,
+                y_start: 0,
+                len: long_x.len(),
+                is_rc: false,
+            }],
+            total_pairs: long_x.len(),
+            lcbs_fwd: 1,
+            lcbs_rc: 0,
+            macro_bubbles: 0,
+            internal_bubbles: 0,
+        };
+        let long_paf = format_paf_records_runs(
+            "t",
+            long_x.len(),
+            "q",
+            long_y.len(),
+            &long_x,
+            &long_y,
+            &long_aln,
+        );
+        let long_mb = PafRecord::parse_line(long_paf.trim())
+            .expect("long paf")
+            .tag_value("mb:f:")
+            .and_then(|v| v.parse::<f64>().ok())
+            .expect("long mb");
+        assert!(
+            long_mb > tiny_mb,
+            "512 bp 90%-id block mb:f: ({long_mb}) must outrank 12 bp exact match ({tiny_mb})"
         );
         let mut rescore_buf = Vec::new();
         rec.write_line_with_mdl(&mut rescore_buf, 42.5, 0)

@@ -155,6 +155,77 @@ pub(super) fn filter_mea_pairs_and_count_bubbles<X: Copy>(
     (kept, bubbles)
 }
 
+/// Minimum net MDL bit-savings required beyond an outer mismatch abutting a Horizon Bubble
+/// boundary to retain a DP flank tip.
+const DP_BUBBLE_TIP_CONFIRM_BITS: f64 = 6.0;
+
+/// Trim non-positive-MDL prefixes/suffixes and weakly confirmed outer mismatch tails ONLY on
+/// ends abutting an abstained Horizon Bubble (`start > 0` on the left, `end < k` on the right),
+/// leaving fully anchored inter-anchor spans (`start == 0` / `end == k`) intact.
+fn trim_block_mdl_overhangs<X: Copy>(
+    raw_cols: &[(Option<X>, Option<usize>, f64, f64)],
+    start: usize,
+    end: usize,
+) -> (usize, usize) {
+    let k = raw_cols.len();
+    let mut trim_start = start;
+    let mut trim_end = end;
+
+    if start > 0 {
+        let mut pref_bits = 0.0;
+        for (off, col) in raw_cols[start..end].iter().enumerate() {
+            pref_bits += col.2;
+            if pref_bits <= 0.0 {
+                trim_start = start + off + 1;
+                pref_bits = 0.0;
+            }
+        }
+        if trim_start < trim_end {
+            let scan_start = trim_start;
+            let mut lead_bits = 0.0;
+            for (off, col) in raw_cols[scan_start..trim_end].iter().enumerate() {
+                let b = col.2;
+                if b < 0.0 && lead_bits + b < DP_BUBBLE_TIP_CONFIRM_BITS {
+                    trim_start = scan_start + off + 1;
+                    lead_bits = 0.0;
+                } else {
+                    lead_bits += b;
+                    if lead_bits >= DP_BUBBLE_TIP_CONFIRM_BITS {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    if end < k && trim_start < trim_end {
+        let mut suff_bits = 0.0;
+        for q in (trim_start..trim_end).rev() {
+            suff_bits += raw_cols[q].2;
+            if suff_bits <= 0.0 {
+                trim_end = q;
+                suff_bits = 0.0;
+            }
+        }
+        if trim_start < trim_end {
+            let scan_end = trim_end;
+            let mut tail_bits = 0.0;
+            for q in (trim_start..scan_end).rev() {
+                let b = raw_cols[q].2;
+                if b < 0.0 && tail_bits + b < DP_BUBBLE_TIP_CONFIRM_BITS {
+                    trim_end = q;
+                    tail_bits = 0.0;
+                } else {
+                    tail_bits += b;
+                    if tail_bits >= DP_BUBBLE_TIP_CONFIRM_BITS {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    (trim_start, trim_end)
+}
+
 fn filter_mea_pairs_with_max_bits<X: Copy>(
     raw_cols: &[(Option<X>, Option<usize>, f64, f64)],
     abstain: &mut Vec<bool>,
@@ -181,7 +252,6 @@ fn filter_mea_pairs_with_max_bits<X: Copy>(
         let (cx, cy, _, pp) = raw_cols[idx];
         if cx.is_some() && cy.is_some() && pp >= min_post_prob {
             let start = idx;
-            let mut block_bits = 0.0;
             while idx < k
                 && ((raw_cols[idx].0.is_some()
                     && raw_cols[idx].1.is_some()
@@ -196,13 +266,28 @@ fn filter_mea_pairs_with_max_bits<X: Copy>(
                         && raw_cols[idx + 1].1.is_some()
                         && raw_cols[idx + 1].3 >= min_post_prob))
             {
-                block_bits += raw_cols[idx].2;
                 idx += 1;
             }
-            if block_bits < min_block_bits {
+            let (trim_start, trim_end) = if min_block_bits > 0.0 {
+                trim_block_mdl_overhangs(raw_cols, start, idx)
+            } else {
+                (start, idx)
+            };
+            if trim_start > start {
+                abstain[start..trim_start].fill(true);
+            }
+            if trim_end < idx {
+                abstain[trim_end..idx].fill(true);
+            }
+            let kept_bits: f64 = if trim_start < trim_end {
+                raw_cols[trim_start..trim_end].iter().map(|c| c.2).sum()
+            } else {
+                0.0
+            };
+            if trim_start >= trim_end || kept_bits < min_block_bits {
                 abstain[start..idx].fill(true);
             } else {
-                max_kept_block_bits = max_kept_block_bits.max(block_bits);
+                max_kept_block_bits = max_kept_block_bits.max(kept_bits);
             }
         } else {
             abstain[idx] = true;

@@ -332,3 +332,49 @@ fn prefix_suffix_trimming_uses_local_bocpd_on_homopolymer_flank() {
         res.kept_pairs.len()
     );
 }
+
+#[test]
+fn filter_mea_trims_negative_mdl_prefix_and_suffix_overhangs() {
+    // Reproduce the S3B inversion-breakpoint overhang: an abstained bubble followed by a
+    // negative-scoring 14-bp overhang (`2= 3X 1= 1X 1= 1X 1= 1X 1= 2X`, net < 0 bits) riding on
+    // top of a strongly conserved +60-bit homologous flank, plus a mirrored negative trailing overhang.
+    let mut raw_cols: Vec<(Option<usize>, Option<usize>, f64, f64)> = Vec::new();
+    // 10 abstained bubble columns
+    for i in 0..10 {
+        raw_cols.push((Some(i), None, -0.8, 0.0));
+    }
+    // 14-bp negative-MDL leading overhang (e.g. `2= 3X 1= 1X 1= 1X 1= 1X 1= 2X`)
+    let overhang_bits = [
+        1.5, 1.5, -1.5, -1.5, -1.5, 1.5, -1.5, 1.5, -1.5, 1.5, -1.5, 1.5, -1.5, -1.5,
+    ];
+    for (k, &b) in overhang_bits.iter().enumerate() {
+        raw_cols.push((Some(10 + k), Some(10 + k), b, 0.30));
+    }
+    // 40-bp exact homologous core
+    for k in 0..40 {
+        raw_cols.push((Some(24 + k), Some(24 + k), 1.56, 0.99));
+    }
+    // 8-bp negative-MDL trailing overhang (`2X 1= 2X 1= 2X` -> net < 0 bits) followed by a bubble
+    let tail_bits = [-1.5, -1.5, 1.5, -1.5, -1.5, 1.5, -1.5, -1.5];
+    for (k, &b) in tail_bits.iter().enumerate() {
+        raw_cols.push((Some(64 + k), Some(64 + k), b, 0.30));
+    }
+    for i in 0..10 {
+        raw_cols.push((Some(72 + i), None, -0.8, 0.0));
+    }
+    let mut abstain = Vec::new();
+    let (kept, _bubbles, _max_bits) =
+        super::filter_mea_pairs_with_max_bits(&raw_cols, &mut abstain, 0.15, 10.0, -2.0);
+    assert_eq!(
+        kept.first().copied(),
+        Some((24, 24)),
+        "negative-MDL leading overhang must be trimmed cleanly to core start 24; got {:?}",
+        kept.first()
+    );
+    assert_eq!(
+        kept.last().copied(),
+        Some((63, 63)),
+        "negative-MDL trailing overhang must be trimmed cleanly to core end 63; got {:?}",
+        kept.last()
+    );
+}
