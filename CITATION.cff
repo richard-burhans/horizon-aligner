@@ -4,7 +4,7 @@ title: "Horizon: An information-theoretic genome alignment and pangenome graph s
 version: 0.1.0
 date-released: "2026-11-25"
 license: MIT
-repository-code: "https://github.com/richard-burhans/horizon"
+repository-code: "https://github.com/richard-burhans/horizon-aligner"
 authors:
   - family-names: "Burhans"
     given-names: "Richard"
